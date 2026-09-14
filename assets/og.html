@@ -1,17 +1,24 @@
 <!doctype html>
 <!--
-  Source of public/og.png — the card a link to nitra unfurls into.
+  Source of public/og.jpg — the card a link to nitra unfurls into.
 
   Rendered rather than drawn so the wordmark is set in the same typeface as the
   app, at the size it is actually shipped at:
 
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
       --headless --disable-gpu --allow-file-access-from-files \
-      --screenshot=public/og.png --window-size=1200,630 \
-      --default-background-color=00000000 assets/og.html
+      --screenshot=/tmp/og.png --window-size=1200,630 \
+      --hide-scrollbars assets/og.html
+    magick /tmp/og.png -quality 92 -strip public/og.jpg
 
   The fonts are read straight out of node_modules, so `bun install` has to have
   run first.
+
+  JPEG rather than PNG or WebP. Every service that unfurls a link reads JPEG and
+  PNG; WebP is undocumented on some and refused by others, so a card in it is
+  one that sometimes does not appear. PNG is the same picture at ten times the
+  size, and the strictest unfurler gives up above 300 KB. The chroma is left
+  unsubsampled because the one coloured thing on the card is a letterform.
 -->
 <html lang="en">
   <head>

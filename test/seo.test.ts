@@ -8,7 +8,7 @@
  * given, which is the static block inside `#root` and nothing else.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const SITE = 'https://nitra.libraz.net/';
@@ -38,7 +38,11 @@ describe('page metadata', () => {
   it('points every address at the same site', () => {
     expect(html).toContain(`<link rel="canonical" href="${SITE}" />`);
     expect(meta('og:url')).toBe(SITE);
-    expect(meta('og:image')).toBe(`${SITE}og.png`);
+    expect(meta('og:image')).toBe(`${SITE}og.jpg`);
+    // JPEG and PNG are the two formats every unfurler reads. WebP is refused
+    // or ignored by enough of them that a card in it is a card that sometimes
+    // does not appear at all.
+    expect(meta('og:image:type')).toBe('image/jpeg');
     expect(sitemap).toContain(`<loc>${SITE}</loc>`);
     expect(robots).toContain(`Sitemap: ${SITE}sitemap.xml`);
   });
@@ -62,6 +66,13 @@ describe('page metadata', () => {
     expect(data.isAccessibleForFree).toBe(true);
     expect(data.offers).toMatchObject({ price: '0' });
     expect(data.inLanguage).toEqual(['en', 'ja']);
+  });
+
+  it('keeps the card small enough for every unfurler to fetch', () => {
+    // The strictest of them stops at 300 KB and shows no card at all past it,
+    // which is a failure nobody sees until a link is already posted.
+    const card = statSync(new URL('../public/og.jpg', import.meta.url));
+    expect(card.size).toBeLessThan(300 * 1024);
   });
 
   it('declares both appearances rather than pinning one', () => {
