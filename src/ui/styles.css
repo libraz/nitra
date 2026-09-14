@@ -1124,6 +1124,58 @@ body::after {
   color: var(--ink-2);
 }
 
+/*
+ * ── what the face analysis found ──
+ *
+ * Four states in one shape, so that the panel does not change height when the
+ * analysis lands. The tint carries the state, as everywhere else here: the box
+ * is rounded, and an accent stripe down one side of a rounded box reads as a
+ * mistake rather than as emphasis.
+ */
+
+.facenote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--ink-3);
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.016);
+}
+.facenote b {
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.facenote[data-state="ok"] b {
+  color: var(--ink);
+}
+.facenote[data-state="busy"] b {
+  color: var(--ink-3);
+}
+.facenote[data-state="warn"] {
+  border-color: color-mix(in oklab, var(--alert) 28%, var(--line));
+  background: color-mix(in oklab, var(--alert) 10%, transparent);
+}
+.facenote[data-state="warn"] b {
+  color: var(--alert);
+}
+/*
+ * A slider whose stage has nothing to act on. Dimmed, not removed: the value is
+ * part of the edit and stays readable, while the handle stops inviting a drag
+ * that would change nothing.
+ */
+.sl[data-off="true"] {
+  opacity: 0.42;
+}
+.sl[data-off="true"] input[type="range"],
+.sl[data-off="true"] .sl-v {
+  cursor: not-allowed;
+}
+
 /* ── metadata row: never hidden behind a settings screen ── */
 
 .meta-row {

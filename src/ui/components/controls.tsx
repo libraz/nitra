@@ -20,6 +20,15 @@ interface SliderProps {
   spec: ParamSpec;
   value: number;
   onChange: (value: number) => void;
+  /**
+   * Off because nothing downstream would act on it.
+   *
+   * The value stays in the recipe and stays visible: it is a decision that has
+   * been made and will take effect on a photo this stage can reach. What is
+   * withheld is the ability to move it, because a control that moves and
+   * changes nothing reads as broken rather than as inapplicable.
+   */
+  disabled?: boolean;
 }
 
 /**
@@ -31,7 +40,7 @@ interface SliderProps {
  * all. While the box has focus its text is left exactly as typed, so a
  * half-entered `-0.` is not rewritten under the cursor.
  */
-export function Slider({ spec, value, onChange }: SliderProps) {
+export function Slider({ spec, value, onChange, disabled = false }: SliderProps) {
   const { t } = useI18n();
   const [active, setActive] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
@@ -45,7 +54,7 @@ export function Slider({ spec, value, onChange }: SliderProps) {
   const reset = useCallback(() => onChange(spec.neutral), [onChange, spec.neutral]);
 
   return (
-    <div className="sl" data-active={active} data-touched={touched}>
+    <div className="sl" data-active={active} data-touched={touched} data-off={disabled}>
       <div className="sl-h">
         <label htmlFor={`r_${spec.path}`}>{t(spec.labelKey)}</label>
         <input
@@ -54,6 +63,7 @@ export function Slider({ spec, value, onChange }: SliderProps) {
           inputMode="decimal"
           aria-label={`${t(spec.labelKey)} — ${spec.min} … ${spec.max}`}
           value={draft ?? format(value, spec.bipolar)}
+          disabled={disabled}
           onFocus={(event) => event.currentTarget.select()}
           onBlur={() => setDraft(null)}
           onChange={(event) => {
@@ -86,6 +96,7 @@ export function Slider({ spec, value, onChange }: SliderProps) {
           max={spec.max}
           step={0.01}
           value={value}
+          disabled={disabled}
           onChange={(event) => onChange(Number.parseFloat(event.target.value))}
           onDoubleClick={reset}
           onPointerDown={() => setActive(true)}

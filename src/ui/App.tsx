@@ -133,9 +133,11 @@ function Workspace() {
               strength={editor.strength}
               metadataMode={editor.recipe.output.metadata.mode}
               hasImage={editor.source !== null}
+              faceState={editor.faceState}
               onLook={editor.setLook}
               onStrength={editor.setStrength}
               onAuto={editor.runAuto}
+              onRetryFace={editor.retryFaceAnalysis}
               onMetadataMode={(mode) => editor.setMetadata({ mode })}
               onDetail={() => editor.setMode('detail')}
             />
@@ -143,7 +145,10 @@ function Workspace() {
             <DetailPanel
               recipe={editor.recipe}
               toneResponse={editor.toneResponse}
+              faceState={editor.faceState}
+              faceCount={editor.faceCount}
               onParam={editor.setParam}
+              onRetryFace={editor.retryFaceAnalysis}
               onSimple={() => editor.setMode('simple')}
             />
           ))}

@@ -12,7 +12,9 @@ import { LOOKS } from '../../core/recipe/presets';
 import type { MetadataParams } from '../../core/recipe/schema';
 import type { MessageKey } from '../../i18n';
 import { useI18n } from '../../i18n';
+import type { FaceState } from '../useEditor';
 import { BigSlider } from './controls';
+import { FaceStatus } from './FaceStatus';
 import { MetadataRow } from './MetadataRow';
 
 function LookThumb({ image }: { image: ImageData | null }) {
@@ -40,9 +42,11 @@ interface SimplePanelProps {
   strength: number;
   metadataMode: MetadataParams['mode'];
   hasImage: boolean;
+  faceState: FaceState;
   onLook: (key: string) => void;
   onStrength: (value: number) => void;
   onAuto: () => void;
+  onRetryFace: () => void;
   onMetadataMode: (mode: MetadataParams['mode']) => void;
   onDetail: () => void;
 }
@@ -53,9 +57,11 @@ export function SimplePanel({
   strength,
   metadataMode,
   hasImage,
+  faceState,
   onLook,
   onStrength,
   onAuto,
+  onRetryFace,
   onMetadataMode,
   onDetail,
 }: SimplePanelProps) {
@@ -71,6 +77,12 @@ export function SimplePanel({
             </svg>
             {t('simple.auto')}
           </button>
+
+          {/* Whether the finishes below will touch the skin at all, which is the
+              one thing about them that depends on the photograph rather than on
+              the choice. Said without a count, because this mode shows no
+              numbers. */}
+          <FaceStatus state={faceState} count={0} numberless onRetry={onRetryFace} />
 
           <div className="seclabel">{t('simple.looks')}</div>
           <div className="looks">

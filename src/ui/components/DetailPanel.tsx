@@ -17,7 +17,9 @@ import { useMemo, useState } from 'react';
 import { HUE_BANDS, type Recipe } from '../../core/recipe/schema';
 import { type MessageKey, useI18n } from '../../i18n';
 import { bandParams, GROUPS, groupTouched, type ParamSpec, readParam } from '../params';
+import type { FaceState } from '../useEditor';
 import { Slider } from './controls';
+import { FaceStatus } from './FaceStatus';
 import { ToneCurve } from './ToneCurve';
 
 /** Swatches for the band buttons, in the order {@link HUE_BANDS} declares. */
@@ -35,7 +37,10 @@ const BAND_SWATCH: Record<string, string> = {
 interface DetailPanelProps {
   recipe: Recipe;
   toneResponse: Uint8Array | null;
+  faceState: FaceState;
+  faceCount: number;
   onParam: (path: string, value: number) => void;
+  onRetryFace: () => void;
   onSimple: () => void;
 }
 
@@ -108,7 +113,15 @@ function BandMixer({
   );
 }
 
-export function DetailPanel({ recipe, toneResponse, onParam, onSimple }: DetailPanelProps) {
+export function DetailPanel({
+  recipe,
+  toneResponse,
+  faceState,
+  faceCount,
+  onParam,
+  onRetryFace,
+  onSimple,
+}: DetailPanelProps) {
   const { t } = useI18n();
   const [changedOnly, setChangedOnly] = useState(false);
   const [open, setOpen] = useState<Record<string, boolean>>(() =>
@@ -162,6 +175,10 @@ export function DetailPanel({ recipe, toneResponse, onParam, onSimple }: DetailP
           {groups.map((group) => {
             const isOpen = changedOnly || (open[group.id] ?? false);
             const touched = groupTouched(recipe, group);
+            // A group that needs a face is shown either way: the values are part
+            // of the edit and stay part of it, whether or not this photograph is
+            // one the stage can reach.
+            const inert = (group.requiresFace ?? false) && faceState !== 'found';
             const params = group.params.filter((param) => !changedOnly || isTouched(recipe, param));
             return (
               <section className="grp" key={group.id} data-open={isOpen} data-touched={touched}>
@@ -201,6 +218,9 @@ export function DetailPanel({ recipe, toneResponse, onParam, onSimple }: DetailP
                 </div>
                 {isOpen && (
                   <div className="grp-b">
+                    {group.requiresFace && group.id === 'skin' && (
+                      <FaceStatus state={faceState} count={faceCount} onRetry={onRetryFace} />
+                    )}
                     {group.special === 'curve' && !changedOnly && (
                       <ToneCurve response={toneResponse} />
                     )}
@@ -212,6 +232,7 @@ export function DetailPanel({ recipe, toneResponse, onParam, onSimple }: DetailP
                         key={param.path}
                         spec={param}
                         value={readParam(recipe, param.path)}
+                        disabled={inert}
                         onChange={(value) => onParam(param.path, value)}
                       />
                     ))}

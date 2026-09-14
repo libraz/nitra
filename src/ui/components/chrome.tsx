@@ -295,27 +295,74 @@ interface StatusBarProps {
  */
 export function StatusBar({ stats, scale, previewSize, workingSpace }: StatusBarProps) {
   const { t } = useI18n();
+  const retention = stats?.textureRetention ?? null;
+  // Skin texture is the one gauge that reads the other way up: the others count
+  // what has been destroyed and warn as they rise, this one is what survived
+  // and warns as it falls. It is also the only one that comes and goes. A
+  // landscape has no skin texture to have kept, and a gauge sitting at a full
+  // hundred per cent would be a reading of nothing at all — so on a photo with
+  // no face in it, it is not there.
   const gauges = [
-    { id: 'blow', label: t('gauges.blowout'), value: stats?.highlightClip ?? 0, limit: 0.02 },
-    { id: 'crush', label: t('gauges.crush'), value: stats?.shadowClip ?? 0, limit: 0.04 },
-    { id: 'chroma', label: t('gauges.chroma'), value: stats?.chromaClip ?? 0, limit: 0.01 },
+    ...(retention === null
+      ? []
+      : [
+          {
+            id: 'texture',
+            label: t('gauges.texture'),
+            value: retention,
+            limit: 0.5,
+            inverted: true,
+          },
+        ]),
+    {
+      id: 'blow',
+      label: t('gauges.blowout'),
+      value: stats ? stats.highlightClip : null,
+      limit: 0.02,
+      inverted: false,
+    },
+    {
+      id: 'crush',
+      label: t('gauges.crush'),
+      value: stats ? stats.shadowClip : null,
+      limit: 0.04,
+      inverted: false,
+    },
+    {
+      id: 'chroma',
+      label: t('gauges.chroma'),
+      value: stats ? stats.chromaClip : null,
+      limit: 0.01,
+      inverted: false,
+    },
   ];
 
   return (
     <footer className="foot">
       <div className="gauges">
         {gauges.map((gauge) => {
-          const state = stats === null ? 'idle' : gauge.value > gauge.limit ? 'warn' : 'ok';
-          const fill = Math.min(1, gauge.value / (gauge.limit * 2.4));
+          if (gauge.value === null) {
+            return (
+              <div className="g" key={gauge.id} data-state="idle">
+                <span className="gl">{gauge.label}</span>
+                <span className="gbar">
+                  <i style={{ width: '0%' }} />
+                </span>
+                <span className="gv mono">—</span>
+              </div>
+            );
+          }
+          const over = gauge.inverted ? gauge.value < gauge.limit : gauge.value > gauge.limit;
+          const fill = gauge.inverted
+            ? gauge.value
+            : Math.min(1, gauge.value / (gauge.limit * 2.4));
           return (
-            <div className="g" key={gauge.id} data-state={state}>
+            <div className="g" key={gauge.id} data-state={over ? 'warn' : 'ok'}>
               <span className="gl">{gauge.label}</span>
               <span className="gbar">
                 <i style={{ width: `${fill * 100}%` }} />
               </span>
-              <span className="gv mono">
-                {stats === null ? '—' : `${(gauge.value * 100).toFixed(1)}%`}
-              </span>
+              <span className="gv mono">{`${(gauge.value * 100).toFixed(1)}%`}</span>
             </div>
           );
         })}
