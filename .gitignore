@@ -9,6 +9,9 @@ backup/
 *.local
 tsconfig.tsbuildinfo
 
+# Face-analysis models and their runtime, fetched by scripts/fetch-models.ts
+public/models/
+
 # Agent configuration (local only)
 .claude/
 CLAUDE.md
