@@ -115,6 +115,8 @@ export const ja: Messages = {
   'looks.none': '素のまま',
   'looks.custom': 'カスタム',
 
+  'groups.skin': '肌',
+  'groups.parts': '目・唇・頬',
   'groups.tone': '階調',
   'groups.color': '色',
   'groups.hsl': '色別調整',
@@ -122,6 +124,20 @@ export const ja: Messages = {
   'groups.mono': 'モノクロ',
   'groups.detail': 'ディテール',
   'groups.effects': '効果',
+
+  'params.faceSmooth': 'スムージング',
+  'params.faceBlemish': '色ムラ均し',
+  'params.faceTexture': '質感',
+  'params.faceRadius': 'フィルタ半径',
+  'params.faceTone': '肌色の均一化',
+  'params.faceShine': 'テカリ除去',
+  'params.faceUndereye': 'クマの軽減',
+  'params.faceEyes': '白目の明るさ',
+  'params.faceTeeth': '歯のホワイトニング',
+  'params.faceLipAmount': 'リップ',
+  'params.faceLipHue': 'リップの色相',
+  'params.faceCheekAmount': 'チーク',
+  'params.faceCheekHue': 'チークの色相',
 
   'params.exposure': '露出',
   'params.contrast': 'コントラスト',
@@ -370,6 +386,7 @@ export const ja: Messages = {
 
   'curve.title': 'トーンカーブ',
 
+  'gauges.texture': '肌の質感残存率',
   'gauges.blowout': '白飛び',
   'gauges.crush': '黒つぶれ',
   'gauges.chroma': '彩度クリップ',
@@ -395,6 +412,9 @@ export const ja: Messages = {
   'toast.metadataOn': '書き出し画像から位置情報を含むメタデータを削除します',
   'toast.metadataOff': '元写真のメタデータを書き出し画像に書き込みます。位置情報も入ります',
   'toast.metadataCustom': 'パネルで指定したメタデータを書き出し画像に入れます',
+  'toast.faceFound': '顔を {count} 件検出しました。肌の調整が有効になります',
+  'toast.faceNone': '顔を検出しませんでした。肌の調整は無効のまま、他の調整はそのまま使えます',
+  'toast.faceFailed': '顔解析を実行できませんでした',
   'toast.fontLoaded': '{name} を読み込みました',
   'toast.fontFailed': 'このフォントファイルは読み込めませんでした',
   'toast.framingReset': '構図をリセットしました',
@@ -406,6 +426,22 @@ export const ja: Messages = {
   'auto.highlightClip': '白飛び {percent}%',
   'auto.shadowClip': '黒つぶれ {percent}%',
   'auto.balanced': '露出は適正です',
+  'auto.scene': '顔を検出しなかったため風景として処理',
+  'auto.faces': '顔を {count} 件検出',
+  'auto.backlit': '被写体が逆光',
+  'auto.spotlit': '被写体が背景より強く照らされています',
+  'auto.uneven': '肌のムラ {percent}%',
+  'auto.shine': '肌の {percent}% にテカリ',
+
+  'face.analysing': '顔を探しています…',
+  'face.found': '顔を {count} 件検出',
+  'face.foundPlain': '顔を検出しました。肌の調整が有効です',
+  'face.none': 'この写真に顔はありません',
+  'face.noneWhy': '肌と部位の調整には顔が必要です。それ以外はこれまでどおり使えます。',
+  'face.failed': '顔解析を利用できません',
+  'face.failedWhy':
+    'モデルを読み込めませんでした。どこにも送信していません。再読み込みでやり直せます。',
+  'face.retry': 'やり直す',
 
   'fatal.title': 'このブラウザでは nitra を実行できません',
   'fatal.body':

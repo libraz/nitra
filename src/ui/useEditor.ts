@@ -8,6 +8,7 @@
 
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type AutoNote, suggestGrade } from '../core/analysis/auto';
+import { analyzeFace, type FaceAnalysis } from '../core/face/analyze';
 import { aspectByKey, resolveAspect } from '../core/geometry/aspects';
 import { cropRatioForTiles, type ExportPlan, planExport } from '../core/geometry/tiles';
 import {
@@ -19,8 +20,16 @@ import {
 } from '../core/geometry/transform';
 import { decodeSourceFile, type SourceImage } from '../core/io/decode';
 import { exportImage } from '../core/io/export';
-import { applyStrength, LOOKS, lookByKey, REFERENCE_STRENGTH } from '../core/recipe/presets';
 import {
+  applyFaceStrength,
+  applyStrength,
+  isFaceStrengthExempt,
+  LOOKS,
+  lookByKey,
+  REFERENCE_STRENGTH,
+} from '../core/recipe/presets';
+import {
+  type FaceParams,
   type GeometryParams,
   type GlobalParams,
   type MetadataParams,
@@ -64,6 +73,16 @@ const STRENGTH_EXEMPT = new Set<string>([
   'global.skinHueProtect',
 ]);
 
+/**
+ * Where the face analysis has got to.
+ *
+ * `none` and `failed` are deliberately different states. One is a fact about
+ * the photograph and the other is a fact about this session, and the panel says
+ * which: a landscape needs no explanation, while models that would not load are
+ * something to retry.
+ */
+export type FaceState = 'idle' | 'analysing' | 'found' | 'none' | 'failed';
+
 export interface EditorToast {
   id: number;
   body: string;
@@ -83,6 +102,9 @@ export interface Editor {
   comparing: boolean;
   exporting: boolean;
   stats: RenderStats | null;
+  faceState: FaceState;
+  /** How many faces the analysis found. Zero until it has. */
+  faceCount: number;
   toneResponse: Uint8Array | null;
   thumbnails: ReadonlyMap<string, ImageData>;
   scale: 'proxy' | 'full';
@@ -119,6 +141,7 @@ export interface Editor {
   loadFont: (file: File) => void;
   openFiles: (files: FileList) => void;
   runAuto: () => void;
+  retryFaceAnalysis: () => void;
   runExport: () => void;
 }
 
@@ -139,7 +162,38 @@ function formatNote(note: AutoNote, t: Translate): string {
       return t('auto.whitePoint');
     case 'balanced':
       return t('auto.balanced');
+    case 'scene':
+      return t('auto.scene');
+    case 'faces':
+      return t('auto.faces', { count: note.count });
+    case 'backlit':
+      return t('auto.backlit');
+    case 'spotlit':
+      return t('auto.spotlit');
+    case 'uneven':
+      return t('auto.uneven', { percent: note.percent.toFixed(0) });
+    case 'shine':
+      return t('auto.shine', { percent: note.percent.toFixed(0) });
   }
+}
+
+/**
+ * The photo as the models want it.
+ *
+ * A view over the bytes the decoder already produced rather than a copy: the
+ * analysis resamples it anyway, and copying a twelve-megapixel photo to hand it
+ * over would be fifty megabytes for nothing.
+ */
+function asImageData(image: SourceImage): ImageData {
+  // Re-wrapped rather than copied. An ImageData insists on a plain ArrayBuffer
+  // and the decoded pixels are typed as either kind of buffer, so the view is
+  // rebuilt over the same bytes to say which one it is.
+  const pixels = new Uint8ClampedArray(
+    image.data.buffer as ArrayBuffer,
+    image.data.byteOffset,
+    image.data.byteLength,
+  );
+  return new ImageData(pixels, image.width, image.height, { colorSpace: image.space });
 }
 
 function newLayerId(): string {
@@ -159,6 +213,15 @@ export function useEditor(): Editor {
 
   /** The finish before the strength dial stretched it. */
   const baselineRef = useRef<Partial<GlobalParams>>({});
+  const baselineFaceRef = useRef<Partial<FaceParams>>({});
+
+  /**
+   * The last analysis, kept so a remount does not mean running the models again.
+   *
+   * The pipeline's copy went away with the GPU context; this one is the photo's
+   * geometry, which has not changed.
+   */
+  const analysisRef = useRef<FaceAnalysis | null>(null);
 
   const [source, setSource] = useState<SourceImage | null>(null);
   const sourceRef = useRef<SourceImage | null>(null);
@@ -172,6 +235,8 @@ export function useEditor(): Editor {
   const [comparing, setComparingState] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [stats, setStats] = useState<RenderStats | null>(null);
+  const [faceState, setFaceState] = useState<FaceState>('idle');
+  const [faceCount, setFaceCount] = useState(0);
   const [toneResponse, setToneResponse] = useState<Uint8Array | null>(null);
   const [thumbnails, setThumbnails] = useState<ReadonlyMap<string, ImageData>>(new Map());
   const [scale, setScale] = useState<'proxy' | 'full'>('proxy');
@@ -227,6 +292,7 @@ export function useEditor(): Editor {
     // user to reopen the file.
     if (sourceRef.current) {
       pipeline.setSource(sourceRef.current);
+      pipeline.setFaceAnalysis(analysisRef.current);
       scheduler.markDirty();
     }
 
@@ -268,12 +334,20 @@ export function useEditor(): Editor {
       const next = writeParam(recipeRef.current, path, value);
       // Keep the strength dial meaningful after a manual edit by recording the
       // value as it would be at the reference strength.
+      const factor = Math.max(0.02, strength / REFERENCE_STRENGTH);
       if (path.startsWith('global.') && !path.startsWith('global.grain')) {
-        const factor = Math.max(0.02, strength / REFERENCE_STRENGTH);
         const key = path.slice('global.'.length);
         if (!key.includes('.')) {
           Object.assign(baselineRef.current, {
             [key]: STRENGTH_EXEMPT.has(path) ? value : value / factor,
+          });
+        }
+      }
+      if (path.startsWith('face.')) {
+        const key = path.slice('face.'.length);
+        if (!key.includes('.')) {
+          Object.assign(baselineFaceRef.current, {
+            [key]: isFaceStrengthExempt(key) ? value : value / factor,
           });
         }
       }
@@ -478,11 +552,24 @@ export function useEditor(): Editor {
     [notify, t, updateText],
   );
 
-  const applyGlobals = useCallback(
-    (base: Partial<GlobalParams>, nextStrength: number) => {
-      const scaled = applyStrength(base, nextStrength);
+  /**
+   * Put a finish on, at a strength.
+   *
+   * Both halves of it, because a finish is one thing: what it does to the light
+   * and what it does to the skin are written together and are turned down
+   * together. The face half is applied whether or not there is a face — the
+   * renderer is what decides there is nothing to apply it to, and keeping the
+   * values in the recipe is what lets the same edit open correctly on a photo
+   * where there is.
+   */
+  const applyLook = useCallback(
+    (base: Partial<GlobalParams>, face: Partial<FaceParams>, nextStrength: number) => {
       const fresh = neutralRecipe();
-      commit({ ...recipeRef.current, global: { ...fresh.global, ...scaled } });
+      commit({
+        ...recipeRef.current,
+        global: { ...fresh.global, ...applyStrength(base, nextStrength) },
+        face: { ...fresh.face, ...applyFaceStrength(face, nextStrength) },
+      });
     },
     [commit],
   );
@@ -492,20 +579,67 @@ export function useEditor(): Editor {
       const entry = lookByKey(key);
       if (!entry) return;
       baselineRef.current = { ...entry.params };
+      baselineFaceRef.current = { ...entry.face };
       setLookState(key);
-      applyGlobals(entry.params, strength);
+      applyLook(entry.params, baselineFaceRef.current, strength);
       notify(t('toast.lookApplied', { name: t(`looks.${key}` as MessageKey) }));
     },
-    [applyGlobals, notify, strength, t],
+    [applyLook, notify, strength, t],
   );
 
   const setStrength = useCallback(
     (value: number) => {
       setStrengthState(value);
-      applyGlobals(baselineRef.current, value);
+      applyLook(baselineRef.current, baselineFaceRef.current, value);
     },
-    [applyGlobals],
+    [applyLook],
   );
+
+  /**
+   * Run the models over a photo, without making anyone wait for them.
+   *
+   * The photo is on screen and editable before this starts and stays that way
+   * while it runs: the analysis only decides whether the skin controls have
+   * anything to act on, and every other adjustment is unaffected by it. When it
+   * lands, the recipe is already whatever it was, so anything the user set in
+   * the meantime takes effect at that point rather than being overwritten.
+   */
+  const runFaceAnalysis = useCallback(
+    (image: SourceImage) => {
+      setFaceState('analysing');
+      setFaceCount(0);
+      analysisRef.current = null;
+      void (async () => {
+        try {
+          const analysis = await analyzeFace(asImageData(image));
+          // The models take a moment to load the first time, which is long
+          // enough to open a second photo. This one is no longer the subject.
+          if (sourceRef.current !== image) return;
+          analysisRef.current = analysis;
+          pipelineRef.current?.setFaceAnalysis(analysis);
+          setFaceCount(analysis.faces.length);
+          setFaceState(analysis.faces.length > 0 ? 'found' : 'none');
+          schedulerRef.current?.markDirty();
+          notify(
+            analysis.faces.length > 0
+              ? t('toast.faceFound', { count: analysis.faces.length })
+              : t('toast.faceNone'),
+          );
+        } catch (err) {
+          if (sourceRef.current !== image) return;
+          setFaceState('failed');
+          const detail = err instanceof Error ? ` — ${err.message}` : '';
+          notify(`${t('toast.faceFailed')}${detail}`, 'alert');
+        }
+      })();
+    },
+    [notify, t],
+  );
+
+  const retryFaceAnalysis = useCallback(() => {
+    const image = sourceRef.current;
+    if (image) runFaceAnalysis(image);
+  }, [runFaceAnalysis]);
 
   const openFiles = useCallback(
     (files: FileList) => {
@@ -532,6 +666,7 @@ export function useEditor(): Editor {
           recipeRef.current = next;
           setRecipe(next);
           schedulerRef.current?.markDirty();
+          runFaceAnalysis(image);
           notify(
             t(image.orientation === 1 ? 'toast.loaded' : 'toast.loadedRotated', {
               name: image.fileName,
@@ -545,7 +680,7 @@ export function useEditor(): Editor {
         }
       })();
     },
-    [notify, t],
+    [notify, runFaceAnalysis, t],
   );
 
   const runAuto = useCallback(() => {
@@ -557,17 +692,21 @@ export function useEditor(): Editor {
     const probe = neutralRecipe();
     probe.geometry = recipeRef.current.geometry;
     probe.output = recipeRef.current.output;
-    const suggestion = suggestGrade(pipeline.measure(probe));
+    // Null whenever there is no face to measure, which is what makes the
+    // suggestion treat the frame as the subject rather than guess at one.
+    const suggestion = suggestGrade(pipeline.measure(probe), pipeline.measureFace(probe));
     const base = { ...baselineRef.current, ...suggestion.params };
+    const face = { ...baselineFaceRef.current, ...suggestion.face };
     baselineRef.current = base;
+    baselineFaceRef.current = face;
     setLookState('custom');
-    applyGlobals(base, strength);
+    applyLook(base, face, strength);
     notify(
       t('toast.autoApplied', {
         notes: suggestion.notes.map((note) => formatNote(note, t)).join(' / '),
       }),
     );
-  }, [applyGlobals, notify, strength, t]);
+  }, [applyLook, notify, strength, t]);
 
   const runExport = useCallback(() => {
     const pipeline = pipelineRef.current;
@@ -634,20 +773,24 @@ export function useEditor(): Editor {
   // moving: each one is a full evaluation of the graph at thumbnail size.
   useEffect(() => {
     if (!source) return;
+    // While the analysis is still running the swatches would be built without a
+    // mask and rebuilt the moment it lands. Waiting for it costs nothing on
+    // screen and halves the work.
+    if (faceState === 'analysing') return;
     const timer = setTimeout(() => {
       const pipeline = pipelineRef.current;
       if (!pipeline) return;
       const next = new Map<string, ImageData>();
       const base = neutralRecipe();
       for (const entry of LOOKS) {
-        const scaled = applyStrength(entry.params, strength);
         next.set(
           entry.key,
           pipeline.renderThumbnail(
             {
               ...base,
               geometry: framing,
-              global: { ...base.global, ...scaled },
+              global: { ...base.global, ...applyStrength(entry.params, strength) },
+              face: { ...base.face, ...applyFaceStrength(entry.face ?? {}, strength) },
               output: recipeRef.current.output,
             },
             THUMBNAIL_EDGE,
@@ -659,7 +802,10 @@ export function useEditor(): Editor {
       schedulerRef.current?.markDirty();
     }, 280);
     return () => clearTimeout(timer);
-  }, [source, strength, framing]);
+    // The analysis landing changes what a finish looks like, so the swatches
+    // are rebuilt when it does. Showing a face untouched under a finish that
+    // does touch it would make the picker answer the wrong question.
+  }, [source, strength, framing, faceState]);
 
   useEffect(
     () => () => {
@@ -693,6 +839,8 @@ export function useEditor(): Editor {
       comparing,
       exporting,
       stats,
+      faceState,
+      faceCount,
       toneResponse,
       thumbnails,
       scale,
@@ -726,6 +874,7 @@ export function useEditor(): Editor {
       loadFont,
       openFiles,
       runAuto,
+      retryFaceAnalysis,
       runExport,
     }),
     [
@@ -739,6 +888,8 @@ export function useEditor(): Editor {
       comparing,
       exporting,
       stats,
+      faceState,
+      faceCount,
       toneResponse,
       thumbnails,
       scale,
@@ -771,6 +922,7 @@ export function useEditor(): Editor {
       loadFont,
       openFiles,
       runAuto,
+      retryFaceAnalysis,
       runExport,
     ],
   );

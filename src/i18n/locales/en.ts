@@ -118,6 +118,8 @@ export const en = {
   'looks.none': 'Unedited',
   'looks.custom': 'Custom',
 
+  'groups.skin': 'Skin',
+  'groups.parts': 'Eyes, lips and cheeks',
   'groups.tone': 'Tone',
   'groups.color': 'Colour',
   'groups.hsl': 'Colour mixer',
@@ -125,6 +127,20 @@ export const en = {
   'groups.mono': 'Monochrome',
   'groups.detail': 'Detail',
   'groups.effects': 'Effects',
+
+  'params.faceSmooth': 'Smoothing',
+  'params.faceBlemish': 'Even out',
+  'params.faceTexture': 'Texture',
+  'params.faceRadius': 'Filter radius',
+  'params.faceTone': 'Even skin colour',
+  'params.faceShine': 'Reduce shine',
+  'params.faceUndereye': 'Under-eye shadow',
+  'params.faceEyes': 'Brighten eye whites',
+  'params.faceTeeth': 'Whiten teeth',
+  'params.faceLipAmount': 'Lip colour',
+  'params.faceLipHue': 'Lip hue',
+  'params.faceCheekAmount': 'Cheek colour',
+  'params.faceCheekHue': 'Cheek hue',
 
   'params.exposure': 'Exposure',
   'params.contrast': 'Contrast',
@@ -373,6 +389,7 @@ export const en = {
 
   'curve.title': 'Tone curve',
 
+  'gauges.texture': 'Skin texture kept',
   'gauges.blowout': 'Clipped highlights',
   'gauges.crush': 'Blocked shadows',
   'gauges.chroma': 'Clipped chroma',
@@ -399,6 +416,9 @@ export const en = {
   'toast.metadataOff':
     'The photo’s own metadata will be written into the export, location included',
   'toast.metadataCustom': 'The export will carry the metadata written in the panel',
+  'toast.faceFound': 'Found {count} face(s) — the skin controls are live',
+  'toast.faceNone': 'No face found — the skin controls stay off and the rest is unaffected',
+  'toast.faceFailed': 'Face analysis could not run',
   'toast.fontLoaded': 'Loaded {name}',
   'toast.fontFailed': 'Could not read that font file',
   'toast.framingReset': 'Framing reset',
@@ -410,6 +430,22 @@ export const en = {
   'auto.highlightClip': 'highlights clipped {percent}%',
   'auto.shadowClip': 'shadows blocked {percent}%',
   'auto.balanced': 'exposure already balanced',
+  'auto.scene': 'no face found, treated as a scene',
+  'auto.faces': '{count} face(s) found',
+  'auto.backlit': 'subject backlit',
+  'auto.spotlit': 'subject lit harder than the scene',
+  'auto.uneven': 'skin uneven {percent}%',
+  'auto.shine': 'shine on {percent}% of the skin',
+
+  'face.analysing': 'Looking for a face…',
+  'face.found': '{count} face(s) found',
+  'face.foundPlain': 'Face found — the skin adjustments are on',
+  'face.none': 'No face in this photo',
+  'face.noneWhy':
+    'The skin and part adjustments need one. Everything else works as it always does.',
+  'face.failed': 'Face analysis is unavailable',
+  'face.failedWhy': 'The models could not be loaded. Nothing was sent anywhere; reload to retry.',
+  'face.retry': 'Try again',
 
   'fatal.title': 'nitra cannot run in this browser',
   'fatal.body':

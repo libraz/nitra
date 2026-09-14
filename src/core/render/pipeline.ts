@@ -14,6 +14,8 @@
  */
 
 import type { Mat3 } from '../color/matrix';
+import type { FaceAnalysis } from '../face/analyze';
+import type { FaceMaskRegion } from '../face/raster';
 import { planExport } from '../geometry/tiles';
 import {
   croppedSize,
@@ -25,11 +27,20 @@ import {
 import { Dag, type DagNode } from '../graph/dag';
 import type { SourceImage } from '../io/decode';
 import { buildCurveLut } from '../recipe/curve';
-import { HUE_BANDS, isIdentityCurve, type Recipe } from '../recipe/schema';
+import {
+  type FaceParams,
+  HUE_BANDS,
+  isIdentityCurve,
+  isPartsNeutral,
+  isSkinNeutral,
+  type Recipe,
+} from '../recipe/schema';
 import { rasterizeText, textSignature } from '../text/raster';
 import {
   createGlContext,
   createLutTexture,
+  createMaskTexture,
+  createSegmentationTexture,
   createSourceTexture,
   createTextTexture,
   type GlContext,
@@ -37,6 +48,20 @@ import {
   Program,
   type RenderTarget,
 } from './gl';
+import {
+  BOX_BLUR_FRAGMENT,
+  FACE_COEFF_FRAGMENT,
+  FACE_DEVIATION_FRAGMENT,
+  FACE_MASK_APPLY_FRAGMENT,
+  FACE_MASK_COEFF_FRAGMENT,
+  FACE_MASK_DEVIATION_FRAGMENT,
+  FACE_MASK_RAW_FRAGMENT,
+  FACE_MEAN_FRAGMENT,
+  FACE_PARTS_FRAGMENT,
+  FACE_PROBE_FRAGMENT,
+  FACE_SKIN_FRAGMENT,
+  FACE_TEXTURE_FRAGMENT,
+} from './shaders/face';
 import {
   BLUR_FRAGMENT,
   COPY_FRAGMENT,
@@ -53,6 +78,63 @@ const LOW_FREQUENCY_WIDTH = 256;
 
 /** Width the guardrail measurement is taken at. */
 const MEASURE_WIDTH = 256;
+
+/**
+ * Longest edge the guided filter behind the skin stage is computed at.
+ *
+ * Over the working area around the faces, not over the frame, and read out of
+ * the source rather than out of the framed render. Both of those matter.
+ *
+ * Over the faces, because the filter has to resolve them: spread across a large
+ * photograph at any affordable size, a face that is a twentieth of the frame
+ * gets a couple of dozen texels, and coefficients that coarse magnified back up
+ * are the blotches they were supposed to remove.
+ *
+ * Out of the source, because that is what makes the result independent of the
+ * render scale. Reading the framed image instead would compute the filter from
+ * a 1024-pixel proxy while previewing and from twelve megapixels while
+ * exporting, and a preview that smooths differently from the file is a preview
+ * that lies.
+ */
+const FACE_FILTER_EDGE = 512;
+
+/**
+ * How much variance the guided filter treats as texture rather than as an edge.
+ *
+ * The filter keeps a fraction `var / (var + this)` of what it is given, so this
+ * is not a free parameter: it has to sit above the variance of skin and below
+ * the variance of a feature, and those are measurable. Over a window the width
+ * the radius asks for, skin lightness in Oklab varies by a few hundredths and
+ * the eyes, brows and lips by a few times more, with the two distributions
+ * meeting around six per cent. Squared, because it is compared against a
+ * variance, that is the number below; it leaves typical skin about a seventh of
+ * its detail and a feature edge about two thirds of its own.
+ *
+ * The danger of getting it wrong is one-sided and quiet. Too high and the face
+ * flattens, which is obvious and what the texture guardrail measures. Too low
+ * and the filter calls the whole face an edge and returns the photograph nearly
+ * unchanged: the slider moves, the render changes, and nothing looks smoothed.
+ */
+const SKIN_EPSILON = 4e-3;
+
+/** The same threshold for the mask refinement, where the signal is coverage. */
+const MASK_EPSILON = 1e-3;
+
+/** Feather on the skin mask, as a fraction of the face width. */
+const MASK_FEATHER = 0.01;
+
+/** Radius the mask is refined over, as a fraction of the face width. */
+const MASK_REFINE_RADIUS = 0.02;
+
+/**
+ * The widest box any blur here may use, in texels.
+ *
+ * The shader's loop is bounded by a constant so it compiles everywhere, and
+ * this is that constant. A radius is clamped to it rather than silently
+ * truncated: the alternative is a filter that quietly stops widening on a photo
+ * whose face is large in the frame.
+ */
+const MAX_BLUR_RADIUS = 64;
 
 export type RenderScale = 'proxy' | 'full';
 
@@ -86,6 +168,32 @@ interface FrameSpec {
   key: string;
 }
 
+/**
+ * What the face analysis left on the GPU.
+ *
+ * All of it is in the source image's own frame, so a crop or a rotation does
+ * not invalidate any of it: the stages sample these through the same matrix
+ * that frames the photo. Which is also why the refined mask is built once per
+ * photo rather than per variant — nothing about it depends on the framing or on
+ * a slider.
+ */
+interface FaceTextures {
+  /** The refined, feathered skin mask. Coverage in red. */
+  mask: RenderTarget;
+  /** Face outline, feature exclusions, lips, mouth interior. */
+  polyA: WebGLTexture;
+  /** Eye openings, under-eye bands, cheeks. */
+  polyB: WebGLTexture;
+  /** The widest face's width, in source-image-width units. */
+  faceWidth: number;
+  faceCount: number;
+  /** The part of the photo the masks cover, in normalised image coordinates. */
+  region: FaceMaskRegion;
+  /** Pixel size of the working area, which the filter is sized against. */
+  regionPixels: [number, number];
+  key: string;
+}
+
 interface PassContext {
   gl: WebGL2RenderingContext;
   glctx: GlContext;
@@ -97,6 +205,7 @@ interface PassContext {
   geometryKey: string;
   curve: WebGLTexture | null;
   curveKey: string;
+  face: FaceTextures | null;
 }
 
 interface Programs {
@@ -105,6 +214,18 @@ interface Programs {
   blur: Program;
   copy: Program;
   finish: Program;
+  boxBlur: Program;
+  faceMean: Program;
+  faceDeviation: Program;
+  faceCoeff: Program;
+  faceMaskRaw: Program;
+  faceMaskDeviation: Program;
+  faceMaskCoeff: Program;
+  faceMaskApply: Program;
+  skin: Program;
+  parts: Program;
+  faceTexture: Program;
+  faceProbe: Program;
 }
 
 /** Measured after the fact rather than predicted from the slider positions. */
@@ -118,6 +239,36 @@ export interface RenderStats {
   /** Luminance histogram of the result, 64 buckets. */
   histogram: Uint32Array;
   meanLuma: number;
+  /**
+   * How much of the skin's own texture survived, as a fraction.
+   *
+   * Null when there is no face to measure, or when the face stages are doing
+   * nothing — an absent reading and a reading of 1.0 are different statements,
+   * and showing the second for the first would put a gauge on a landscape.
+   */
+  textureRetention: number | null;
+}
+
+/**
+ * What the skin looks like, for the automatic starting values.
+ *
+ * Measured off the skin mask rather than off the frame. Every one of these is a
+ * question the frame's histogram cannot answer: how bright the person is, how
+ * bright everything else is, how uneven their skin is, how much of it is
+ * reflecting the light back.
+ */
+export interface FaceStats {
+  faceCount: number;
+  /** Fraction of the frame the skin mask covers. */
+  coverage: number;
+  /** Mean Oklab lightness inside the mask. */
+  skinLightness: number;
+  /** Mean Oklab lightness of everything outside it. */
+  surroundLightness: number;
+  /** How much slow variation the skin carries, 0 to 1. */
+  unevenness: number;
+  /** How much of the skin is reflecting the light source, 0 to 1. */
+  specular: number;
 }
 
 function fitLongEdge(width: number, height: number, longEdge: number): [number, number] {
@@ -210,6 +361,112 @@ function gradeUniforms(recipe: Recipe, aspect: number, curveKey: string): GradeU
   };
 }
 
+/**
+ * The working area as the shaders take it.
+ *
+ * A rectangle in normalised image coordinates. Without a face there is no
+ * working area, and the whole frame stands in — the stages are switched off in
+ * that case, so what it maps to does not matter, only that it is well formed.
+ */
+function rectOf(region: FaceMaskRegion): [number, number, number, number] {
+  return [region.x, region.y, region.width, region.height];
+}
+
+function regionOf(ctx: PassContext): [number, number, number, number] {
+  return rectOf(ctx.face?.region ?? { x: 0, y: 0, width: 1, height: 1 });
+}
+
+/** Size the guided filter behind the skin stage is evaluated at. */
+function faceFilterSize(ctx: PassContext): [number, number] {
+  if (!ctx.face) return [1, 1];
+  const [width, height] = ctx.face.regionPixels;
+  return fitLongEdge(width, height, FACE_FILTER_EDGE);
+}
+
+/**
+ * The filter radius, in texels of the working area.
+ *
+ * Two conversions, and each one is there for a reason: the recipe holds a
+ * fraction of the face, and the face is a fraction of the working area. What
+ * comes out is a radius that means the same retouch on the next photograph,
+ * at the next resolution, with the face at the next size — which is the whole
+ * point of holding the parameter as a fraction in the first place.
+ */
+function skinRadius(face: FaceParams, ctx: PassContext): number {
+  if (!ctx.face) return 1;
+  const [width] = faceFilterSize(ctx);
+  const inRegion = ctx.face.faceWidth / Math.max(ctx.face.region.width, 1e-4);
+  return clampRadius(face.radius * inRegion * width, 1);
+}
+
+function clampRadius(value: number, least: number): number {
+  return Math.max(least, Math.min(MAX_BLUR_RADIUS, Math.round(value)));
+}
+
+/**
+ * Everything the skin shader reads, in one object.
+ *
+ * Same contract as the grade uniforms: the cache key is this serialised, so a
+ * parameter cannot reach the shader without reaching the signature. The failure
+ * that would cause is a slider that moves and changes nothing until something
+ * unrelated invalidates the cache, which reads as a broken control rather than
+ * a stale one.
+ */
+interface SkinUniforms {
+  smooth: number;
+  blemish: number;
+  texture: number;
+  shine: number;
+  tone: number;
+  radius: number;
+  size: [number, number];
+  face: string;
+  geometry: string;
+}
+
+function skinUniforms(recipe: Recipe, ctx: PassContext): SkinUniforms {
+  const f = recipe.face;
+  return {
+    smooth: f.smooth,
+    blemish: f.blemish,
+    texture: f.texture,
+    shine: f.shine,
+    tone: f.tone,
+    radius: skinRadius(f, ctx),
+    size: faceFilterSize(ctx),
+    face: ctx.face?.key ?? 'none',
+    geometry: ctx.geometryKey,
+  };
+}
+
+/** Everything the parts shader reads, on the same contract. */
+interface PartsUniforms {
+  undereye: number;
+  eyes: number;
+  teeth: number;
+  lip: number;
+  lipHue: number;
+  cheek: number;
+  cheekHue: number;
+  face: string;
+  geometry: string;
+}
+
+function partsUniforms(recipe: Recipe, ctx: PassContext): PartsUniforms {
+  const f = recipe.face;
+  return {
+    undereye: f.undereye,
+    eyes: f.eyes,
+    teeth: f.teeth,
+    lip: f.lip.amount,
+    lipHue: f.lip.hue,
+    cheek: f.cheek.amount,
+    cheekHue: f.cheek.hue,
+    face: ctx.face?.key ?? 'none',
+    geometry: ctx.geometryKey,
+  };
+}
+
 export class Pipeline {
   private readonly glctx: GlContext & { wideGamut: boolean };
   private readonly gl: WebGL2RenderingContext;
@@ -223,6 +480,8 @@ export class Pipeline {
   private textKey = 'none';
   private readonly byteTargets = new Map<string, RenderTarget>();
   private ramp: WebGLTexture | null = null;
+  private face: FaceTextures | null = null;
+  private faceSegment: WebGLTexture | null = null;
 
   /**
    * @param measureViewport The box the image is allowed to occupy, in CSS pixels. It has
@@ -242,6 +501,18 @@ export class Pipeline {
       blur: Program.create(this.gl, BLUR_FRAGMENT),
       copy: Program.create(this.gl, COPY_FRAGMENT),
       finish: Program.create(this.gl, FINISH_FRAGMENT),
+      boxBlur: Program.create(this.gl, BOX_BLUR_FRAGMENT),
+      faceMean: Program.create(this.gl, FACE_MEAN_FRAGMENT),
+      faceDeviation: Program.create(this.gl, FACE_DEVIATION_FRAGMENT),
+      faceCoeff: Program.create(this.gl, FACE_COEFF_FRAGMENT),
+      faceMaskRaw: Program.create(this.gl, FACE_MASK_RAW_FRAGMENT),
+      faceMaskDeviation: Program.create(this.gl, FACE_MASK_DEVIATION_FRAGMENT),
+      faceMaskCoeff: Program.create(this.gl, FACE_MASK_COEFF_FRAGMENT),
+      faceMaskApply: Program.create(this.gl, FACE_MASK_APPLY_FRAGMENT),
+      skin: Program.create(this.gl, FACE_SKIN_FRAGMENT),
+      parts: Program.create(this.gl, FACE_PARTS_FRAGMENT),
+      faceTexture: Program.create(this.gl, FACE_TEXTURE_FRAGMENT),
+      faceProbe: Program.create(this.gl, FACE_PROBE_FRAGMENT),
     };
     this.dag = new Dag(buildNodes(), (target) => this.glctx.pool.release(target));
   }
@@ -256,9 +527,16 @@ export class Pipeline {
     return this.source !== null;
   }
 
+  /** True once the analysis has run and there is a face to work inside. */
+  get hasFace(): boolean {
+    return this.face !== null && this.face.faceCount > 0;
+  }
+
   setSource(image: SourceImage): void {
     this.dag.invalidate();
     if (this.source) this.gl.deleteTexture(this.source.texture);
+    // The masks describe the photo that is going away.
+    this.setFaceAnalysis(null);
     this.generation += 1;
     this.source = {
       texture: createSourceTexture(this.gl, image.width, image.height, image.data),
@@ -267,6 +545,178 @@ export class Pipeline {
       fromSrgb: image.space === 'srgb',
       generation: this.generation,
     };
+  }
+
+  /**
+   * Take delivery of the face analysis, and refine its mask.
+   *
+   * The refinement happens here rather than in the effect graph because nothing
+   * about it depends on the framing or on a slider: it is a property of the
+   * photo. Running it once on arrival is also what keeps it out of the drag
+   * loop, where nine passes over a mask would be felt.
+   *
+   * Passing null is how a photo with no face in it, a failed analysis and a
+   * replaced source are all expressed. The face stages then have no mask and
+   * switch themselves off, which is a different thing from having a mask that
+   * is empty: an empty mask still costs a pass over every pixel.
+   */
+  setFaceAnalysis(analysis: FaceAnalysis | null): void {
+    if (this.face) {
+      this.glctx.pool.release(this.face.mask);
+      this.gl.deleteTexture(this.face.polyA);
+      this.gl.deleteTexture(this.face.polyB);
+    }
+    if (this.faceSegment) this.gl.deleteTexture(this.faceSegment);
+    this.face = null;
+    this.faceSegment = null;
+    // Every cached result downstream of the mask was rendered without one.
+    this.dag.invalidate();
+
+    if (!analysis || analysis.faces.length === 0) return;
+    const source = this.source;
+    if (!source) return;
+    // An analysis of a different photo would put a mask over the wrong face.
+    if (analysis.sourceWidth !== source.width || analysis.sourceHeight !== source.height) return;
+
+    const [maskWidth, maskHeight] = [analysis.masks[0].width, analysis.masks[0].height];
+    const regionPixels: [number, number] = [
+      Math.max(1, Math.round(analysis.region.width * source.width)),
+      Math.max(1, Math.round(analysis.region.height * source.height)),
+    ];
+    const polyA = createMaskTexture(
+      this.gl,
+      analysis.masks[0].width,
+      analysis.masks[0].height,
+      analysis.masks[0].data,
+    );
+    const polyB = createMaskTexture(
+      this.gl,
+      analysis.masks[1].width,
+      analysis.masks[1].height,
+      analysis.masks[1].data,
+    );
+    this.faceSegment = createSegmentationTexture(
+      this.gl,
+      analysis.segmentation.width,
+      analysis.segmentation.height,
+      analysis.segmentation.data,
+    );
+
+    this.face = {
+      mask: this.refineMask(polyA, this.faceSegment, analysis, maskWidth, maskHeight),
+      polyA,
+      polyB,
+      faceWidth: analysis.faceWidth,
+      faceCount: analysis.faces.length,
+      region: analysis.region,
+      regionPixels,
+      key: `${analysis.revision}`,
+    };
+  }
+
+  /**
+   * Snap the mask's edges onto the photo, then feather it.
+   *
+   * The segmentation arrives 256 pixels across and magnifying it leaves a halo
+   * a whole face wide; the outlines are exact but know nothing about hair. A
+   * guided filter against the photo's own lightness resolves both at once —
+   * it moves the boundary onto the structure that is actually there.
+   *
+   * The feather is last and is a fraction of the face width, so it is the same
+   * softness on the next photo. It is also the single thing most likely to be
+   * noticed: too hard and there is a seam along the jaw, too soft and the
+   * effect reaches the background.
+   */
+  private refineMask(
+    polyA: WebGLTexture,
+    segment: WebGLTexture,
+    analysis: FaceAnalysis,
+    width: number,
+    height: number,
+  ): RenderTarget {
+    const source = this.requireSource();
+    const pool = this.glctx.pool;
+    const region = analysis.region;
+    // The radii are fractions of the face, and the working area holds the face
+    // at a known fraction of itself, so they land on the same number of texels
+    // whatever size the photograph is.
+    const perWidth = width / Math.max(region.width, 1e-4);
+    const radius = clampRadius(analysis.faceWidth * MASK_REFINE_RADIUS * perWidth, 1);
+    const box = rectOf(region);
+
+    const raw = pool.acquire(width, height);
+    this.programs.faceMaskRaw
+      .bind()
+      .vec4('uRegion', ...box)
+      .texture('uPoly', polyA)
+      .texture('uSegment', segment)
+      .texture('uImage', source.texture)
+      .float('uSegmentWeight', analysis.segmentationWeight);
+    this.glctx.draw(raw, width, height);
+
+    const means = this.boxBlur(raw, radius, false);
+    const deviation = pool.acquire(width, height);
+    this.programs.faceMaskDeviation
+      .bind()
+      .texture('uSource', raw.texture)
+      .texture('uMean', means.texture);
+    this.glctx.draw(deviation, width, height);
+    pool.release(raw);
+
+    const spread = this.boxBlur(deviation, radius, true);
+    const coeff = pool.acquire(width, height);
+    this.programs.faceMaskCoeff
+      .bind()
+      .texture('uMean', means.texture)
+      .texture('uDeviation', spread.texture)
+      .float('uEpsilon', MASK_EPSILON);
+    this.glctx.draw(coeff, width, height);
+    pool.release(spread);
+    pool.release(means);
+
+    const smoothed = this.boxBlur(coeff, radius, true);
+    const applied = pool.acquire(width, height);
+    this.programs.faceMaskApply
+      .bind()
+      .vec4('uRegion', ...box)
+      .texture('uCoeff', smoothed.texture)
+      .texture('uImage', source.texture);
+    this.glctx.draw(applied, width, height);
+    pool.release(smoothed);
+
+    const feather = clampRadius(analysis.faceWidth * MASK_FEATHER * perWidth, 1);
+    const mask = this.boxBlur(applied, feather, true);
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+    return mask;
+  }
+
+  /**
+   * Box blur a target in both directions.
+   *
+   * @param consume Release the input once it has been read, which is what the
+   * intermediate steps of a filter chain want: nothing else will ask for it.
+   */
+  private boxBlur(input: RenderTarget, radius: number, consume: boolean): RenderTarget {
+    const pool = this.glctx.pool;
+    const { width, height } = input;
+    const horizontal = pool.acquire(width, height);
+    this.programs.boxBlur
+      .bind()
+      .texture('uSource', input.texture)
+      .vec2('uStep', 1 / width, 0)
+      .int('uRadius', radius);
+    this.glctx.draw(horizontal, width, height);
+    if (consume) pool.release(input);
+
+    const vertical = pool.acquire(width, height);
+    this.programs.boxBlur
+      .bind()
+      .texture('uSource', horizontal.texture)
+      .vec2('uStep', 0, 1 / height)
+      .int('uRadius', radius);
+    this.glctx.draw(vertical, width, height);
+    pool.release(horizontal);
+    return vertical;
   }
 
   /** Size of the source, before any framing. */
@@ -408,7 +858,166 @@ export class Pipeline {
     this.gl.readPixels(0, 0, width, height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
 
-    return summarise(pixels);
+    return {
+      ...summarise(pixels),
+      textureRetention: this.measureTextureRetention(recipe),
+    };
+  }
+
+  /**
+   * How much of the skin's texture the face stages left behind.
+   *
+   * Measured against the photo as it arrived, inside the skin mask. Nothing is
+   * forbidden by it: a number saying the pores are gone is enough for somebody
+   * to pull the slider back, and the design's whole position on overcorrection
+   * is to show it rather than to prevent it.
+   *
+   * It is measured over the face rather than over the frame, and that is what
+   * makes the number mean anything. The other guardrails read a 256-pixel
+   * render because clipping and saturation are properties of the whole picture;
+   * skin texture is not. A face a fifteenth of the width of the frame is
+   * fifteen pixels wide in that render, and fifteen pixels of face have no pores
+   * in them to have kept or lost — the reading came back near one whatever the
+   * slider did. Over the working area, at the resolution the filter itself runs
+   * at, the pores are present and the difference is the thing being asked about.
+   *
+   * A consequence worth knowing: the reading does not depend on the framing.
+   * Cropping cannot change how much texture was left on the skin, so it does not
+   * move the number — which also stops the gauge twitching while a crop is being
+   * dragged.
+   *
+   * Returns null when there is nothing to say — no face, or a face the stages
+   * are not touching. An absent reading and a reading of one are different
+   * claims.
+   */
+  private measureTextureRetention(recipe: Recipe): number | null {
+    const face = this.face;
+    if (!face || isSkinNeutral(recipe.face)) return null;
+
+    const [width, height] = fitLongEdge(...face.regionPixels, FACE_FILTER_EDGE);
+    const spec: FrameSpec = {
+      width,
+      height,
+      // Straight from the working area to the source, with no framing in it:
+      // the output coordinate of this render is the working area itself.
+      matrix: [face.region.width, 0, face.region.x, 0, face.region.height, face.region.y, 0, 0, 1],
+      key: `faceRegion:${face.key}`,
+    };
+    const ctx = this.context(recipe, spec);
+    const variant = variantKey(spec);
+    const before = this.dag.evaluate(ctx, recipe, 'ingest', variant);
+    const after = this.dag.evaluate(ctx, recipe, 'parts', variant);
+    const target = this.acquireByteTarget(width, height);
+    this.programs.faceTexture
+      .bind()
+      .vec4('uRegion', ...rectOf(face.region))
+      .texture('uBefore', before.texture)
+      .texture('uAfter', after.texture)
+      .texture('uMask', face.mask.texture)
+      .mat3('uGeometry', ctx.geometry)
+      .vec2('uStep', 1 / width, 1 / height);
+    this.glctx.draw(target, width, height);
+
+    const pixels = new Uint8Array(width * height * 4);
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
+    this.gl.readPixels(0, 0, width, height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+
+    let kept = 0;
+    let weight = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      kept += pixels[i] as number;
+      weight += pixels[i + 1] as number;
+    }
+    // Too little textured skin in the frame to say anything about it.
+    if (weight < 255) return null;
+    return kept / weight;
+  }
+
+  /**
+   * Measure the skin, for the automatic starting values.
+   *
+   * This is the half of the automatic suggestion that the frame's histogram
+   * cannot provide. Whether a photo is dark and whether the person in it is
+   * dark are different questions, and only the second one is answered by
+   * looking at the skin.
+   *
+   * Runs off a recipe as given, so the caller decides whether it is probing the
+   * untouched photo or the edited one. Like every other readback, it is not
+   * reachable from a slider.
+   */
+  measureFace(recipe: Recipe): FaceStats | null {
+    const face = this.face;
+    if (!face || face.faceCount === 0) return null;
+    const source = this.requireSource();
+    const [cropW, cropH] = croppedSize(source.width, source.height, recipe.geometry);
+    const [width, height] = fitWidth(cropW, cropH, MEASURE_WIDTH);
+    const spec: FrameSpec = {
+      width,
+      height,
+      matrix: outputToSource(source.width, source.height, recipe.geometry),
+      key: geometrySignature(recipe.geometry),
+    };
+    const ctx = this.context(recipe, spec);
+    const variant = variantKey(spec);
+    const image = this.dag.evaluate(ctx, recipe, 'ingest', variant);
+    // Asked for by name, because under a neutral recipe the stages that would
+    // otherwise pull these in are switched off.
+    const mean = this.dag.evaluate(ctx, recipe, 'faceMeanV', variant);
+    const wide = this.dag.evaluate(ctx, recipe, 'faceWideMean', variant);
+
+    const sum = (surround: boolean): [number, number, number, number] => {
+      const target = this.acquireByteTarget(width, height);
+      this.programs.faceProbe
+        .bind()
+        .vec4('uRegion', ...rectOf(face.region))
+        .texture('uSource', image.texture)
+        .texture('uMask', face.mask.texture)
+        .texture('uMean', mean.texture)
+        .texture('uWideMean', wide.texture)
+        .mat3('uGeometry', ctx.geometry)
+        .int('uSurround', surround ? 1 : 0);
+      this.glctx.draw(target, width, height);
+      const pixels = new Uint8Array(width * height * 4);
+      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
+      this.gl.readPixels(0, 0, width, height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
+      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+      let lightness = 0;
+      let uneven = 0;
+      let specular = 0;
+      let covered = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        lightness += pixels[i] as number;
+        uneven += pixels[i + 1] as number;
+        specular += pixels[i + 2] as number;
+        covered += pixels[i + 3] as number;
+      }
+      return [lightness, uneven, specular, covered];
+    };
+
+    const [skinL, uneven, specular, covered] = sum(false);
+    const [surroundL, , , outside] = sum(true);
+    const count = width * height * 255;
+    // A mask that covers next to nothing is a detection that found something
+    // the segmentation disagreed with, and averaging over it is meaningless.
+    if (covered < count * 0.002) return null;
+
+    // Every channel came out of the shader already multiplied by the weight in
+    // the fourth, so dividing one by the other is the weighted mean and there is
+    // no scale left to take out: the byte range cancels. All four go through the
+    // same expression so that a stray factor has nowhere to hide — one of them
+    // normalised twice reads as a plausible number rather than as a wrong one,
+    // and it was the two lightnesses, which then never reached the margins the
+    // automatic suggestion compares them against.
+    const perWeight = (total: number, weight: number) => (weight > 0 ? total / weight : 0);
+    return {
+      faceCount: face.faceCount,
+      coverage: covered / count,
+      skinLightness: perWeight(skinL, covered),
+      surroundLightness: perWeight(surroundL, outside),
+      unevenness: perWeight(uneven, covered),
+      specular: perWeight(specular, covered),
+    };
   }
 
   /**
@@ -461,6 +1070,7 @@ export class Pipeline {
 
   dispose(): void {
     this.dag.invalidate();
+    this.setFaceAnalysis(null);
     if (this.ramp) this.gl.deleteTexture(this.ramp);
     if (this.source) this.gl.deleteTexture(this.source.texture);
     if (this.curveTexture) this.gl.deleteTexture(this.curveTexture);
@@ -524,6 +1134,7 @@ export class Pipeline {
       geometryKey: spec.key,
       curve: this.curveTexture,
       curveKey: this.curveKey,
+      face: this.face,
     };
   }
 
@@ -735,9 +1346,182 @@ function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     },
   };
 
+  /**
+   * The guided filter behind the skin stage, as a chain of small passes.
+   *
+   * Means, deviations from them, coefficients, averaged again: that is the
+   * filter, and each step is separable so the cost is linear in the radius
+   * rather than square.
+   *
+   * `faceWideMean` averages the same lightness and chroma over a window several
+   * times wider, and it is the means that are averaged rather than the
+   * coefficients. That distinction is the whole of it: three things downstream —
+   * the blotchiness the skin stage evens out, the surrounding skin that shine is
+   * pulled towards, and the lightness an under-eye shadow is lifted to — all
+   * want a local average of the picture, and the filter's `b` is not one. It is
+   * a local average multiplied by one minus the filter's `a`, so it falls away
+   * at every edge the filter is protecting, and anything reading it as a
+   * lightness is reading the filter's own decisions back as if they were skin.
+   */
+  const faceMean: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'faceMean',
+    // No graph input: it reads the source photograph, over the working area
+    // around the faces. That is what keeps the filter's result the same at every
+    // render scale, since nothing about it comes from the framed render.
+    inputs: [],
+    signature: (_recipe, ctx) =>
+      `faceMean:${ctx.source.generation}:${faceFilterSize(ctx).join('x')}:${ctx.face?.key ?? 'none'}`,
+    evaluate: (ctx) => {
+      const [width, height] = faceFilterSize(ctx);
+      const target = ctx.glctx.pool.acquire(width, height);
+      ctx.programs.faceMean
+        .bind()
+        .texture('uSource', ctx.source.texture)
+        .int('uFromSrgb', ctx.source.fromSrgb ? 1 : 0)
+        .vec4('uRegion', ...regionOf(ctx));
+      ctx.glctx.draw(target, width, height);
+      return target;
+    },
+  };
+
+  /** The source again, against the means, as the squared deviation. */
+  const faceDeviation: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'faceDeviation',
+    inputs: ['faceMeanV'],
+    signature: (_recipe, ctx) =>
+      `faceDeviation:${ctx.source.generation}:${faceFilterSize(ctx).join('x')}:${ctx.face?.key ?? 'none'}`,
+    evaluate: (ctx, [mean]) => {
+      const src = mean as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceDeviation
+        .bind()
+        .texture('uSource', ctx.source.texture)
+        .texture('uMean', src.texture)
+        .int('uFromSrgb', ctx.source.fromSrgb ? 1 : 0)
+        .vec4('uRegion', ...regionOf(ctx));
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  const box = (
+    id: string,
+    input: string,
+    axis: 'x' | 'y',
+    radiusOf: (recipe: Recipe, ctx: PassContext) => number,
+  ): DagNode<PassContext, RenderTarget, Recipe> => ({
+    id,
+    inputs: [input],
+    signature: (recipe, ctx) => `${id}:${radiusOf(recipe, ctx)}`,
+    evaluate: (ctx, [source], recipe) => {
+      const src = source as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.boxBlur
+        .bind()
+        .texture('uSource', src.texture)
+        .vec2('uStep', axis === 'x' ? 1 / src.width : 0, axis === 'y' ? 1 / src.height : 0)
+        .int('uRadius', radiusOf(recipe, ctx));
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  });
+
+  const radius = (recipe: Recipe, ctx: PassContext) => skinRadius(recipe.face, ctx);
+  // Three times the filter's own window. Narrower and the reference is not
+  // slower than what it is being compared against, which would leave nothing in
+  // the difference; much wider and the shading of the face starts arriving in
+  // it, and evening that out is what flattens a face into a mask.
+  const wideRadius = (recipe: Recipe, ctx: PassContext) =>
+    clampRadius(skinRadius(recipe.face, ctx) * 3, 2);
+
+  const faceCoeffRaw: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'faceCoeffRaw',
+    inputs: ['faceMeanV', 'faceDeviationV'],
+    signature: () => `faceCoeffRaw:${SKIN_EPSILON}`,
+    evaluate: (ctx, [mean, variance]) => {
+      const src = mean as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceCoeff
+        .bind()
+        .texture('uMean', src.texture)
+        .texture('uVariance', (variance as RenderTarget).texture)
+        .float('uEpsilon', SKIN_EPSILON);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  /**
+   * Skin: the smoothing, the colour evening and the shine.
+   *
+   * Before the grade, because smoothing is about the surface the light fell on
+   * and grading is about the light. The other way round, the stage would be
+   * smoothing the gradients the grade had just built.
+   */
+  const skin: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'skin',
+    inputs: ['ingest', 'faceCoeff', 'faceMeanV', 'faceWideMean'],
+    active: (recipe, ctx) => ctx.face !== null && !isSkinNeutral(recipe.face),
+    signature: (recipe, ctx) => `skin:${JSON.stringify(skinUniforms(recipe, ctx))}`,
+    evaluate: (ctx, [source, coeff, mean, wide], recipe) => {
+      const src = source as RenderTarget;
+      const face = ctx.face as FaceTextures;
+      const uniforms = skinUniforms(recipe, ctx);
+      const target = ctx.glctx.pool.acquire(ctx.width, ctx.height);
+      ctx.programs.skin
+        .bind()
+        .vec4('uRegion', ...regionOf(ctx))
+        .texture('uSource', src.texture)
+        .texture('uCoeff', (coeff as RenderTarget).texture)
+        .texture('uMean', (mean as RenderTarget).texture)
+        .texture('uWideMean', (wide as RenderTarget).texture)
+        .texture('uMask', face.mask.texture)
+        .mat3('uGeometry', ctx.geometry)
+        .float('uSmooth', uniforms.smooth)
+        .float('uBlemish', uniforms.blemish)
+        .float('uTexture', uniforms.texture)
+        .float('uShine', uniforms.shine)
+        .float('uTone', uniforms.tone);
+      ctx.glctx.draw(target, ctx.width, ctx.height);
+      return target;
+    },
+  };
+
+  /** Parts: the eyes, the teeth, the lips, the cheeks, the shadow under an eye. */
+  const parts: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'parts',
+    inputs: ['skin', 'faceWideMean'],
+    active: (recipe, ctx) => ctx.face !== null && !isPartsNeutral(recipe.face),
+    signature: (recipe, ctx) => `parts:${JSON.stringify(partsUniforms(recipe, ctx))}`,
+    evaluate: (ctx, [source, wide], recipe) => {
+      const src = source as RenderTarget;
+      const face = ctx.face as FaceTextures;
+      const uniforms = partsUniforms(recipe, ctx);
+      const target = ctx.glctx.pool.acquire(ctx.width, ctx.height);
+      ctx.programs.parts
+        .bind()
+        .vec4('uRegion', ...regionOf(ctx))
+        .texture('uSource', src.texture)
+        .texture('uPolyA', face.polyA)
+        .texture('uPolyB', face.polyB)
+        .texture('uMask', face.mask.texture)
+        .texture('uWideMean', (wide as RenderTarget).texture)
+        .mat3('uGeometry', ctx.geometry)
+        .float('uUndereye', uniforms.undereye)
+        .float('uEyes', uniforms.eyes)
+        .float('uTeeth', uniforms.teeth)
+        .float('uLip', uniforms.lip)
+        .float('uLipHue', uniforms.lipHue)
+        .float('uCheek', uniforms.cheek)
+        .float('uCheekHue', uniforms.cheekHue);
+      ctx.glctx.draw(target, ctx.width, ctx.height);
+      return target;
+    },
+  };
+
   const grade: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'grade',
-    inputs: ['ingest'],
+    inputs: ['parts'],
     signature: (recipe, ctx) =>
       `grade:${JSON.stringify(gradeUniforms(recipe, ctx.width / ctx.height, ctx.curveKey))}`,
     evaluate: (ctx, [input], recipe) => {
@@ -803,7 +1587,26 @@ function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     },
   };
 
-  return [ingest, grade, lowSmall, lowH, low];
+  return [
+    ingest,
+    faceMean,
+    box('faceMeanH', 'faceMean', 'x', radius),
+    box('faceMeanV', 'faceMeanH', 'y', radius),
+    faceDeviation,
+    box('faceDeviationH', 'faceDeviation', 'x', radius),
+    box('faceDeviationV', 'faceDeviationH', 'y', radius),
+    faceCoeffRaw,
+    box('faceCoeffH', 'faceCoeffRaw', 'x', radius),
+    box('faceCoeff', 'faceCoeffH', 'y', radius),
+    box('faceWideMeanH', 'faceMeanV', 'x', wideRadius),
+    box('faceWideMean', 'faceWideMeanH', 'y', wideRadius),
+    skin,
+    parts,
+    grade,
+    lowSmall,
+    lowH,
+    low,
+  ];
 }
 
 function lowSize(ctx: PassContext): [number, number] {
@@ -811,7 +1614,7 @@ function lowSize(ctx: PassContext): [number, number] {
 }
 
 /** Turn a small readback into the numbers the guardrails display. */
-function summarise(pixels: Uint8Array): RenderStats {
+function summarise(pixels: Uint8Array): Omit<RenderStats, 'textureRetention'> {
   const count = pixels.length / 4;
   const histogram = new Uint32Array(64);
   let highlight = 0;

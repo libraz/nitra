@@ -192,6 +192,75 @@ const globalSchema = z.object({
 });
 
 /**
+ * The face stages: what happens inside a skin mask, and to the parts.
+ *
+ * Every radius is a fraction of the width of the face it is applied to, never
+ * of the image and never in pixels. A face fills a tenth of a group photo and
+ * most of a portrait, and an amount keyed to the image would mean two different
+ * things; keyed to the face it means the same one, which is what lets a finish
+ * carry these values at all.
+ *
+ * Nothing here does anything without an analysis to act on. The parameters are
+ * still read and still carried, so a recipe written on a photo with a face in
+ * it survives being opened next to one without: the stage is skipped, not
+ * approximated.
+ */
+const faceSchema = z
+  .object({
+    /**
+     * How much the skin is smoothed. The master amount.
+     *
+     * It drives both halves of what smoothing is: fine texture comes off and
+     * slow unevenness is pushed down. The two trims below move each of those on
+     * its own, and with all three at zero the stage returns the photo exactly.
+     */
+    smooth: num('face.smooth', 0, 1, 0),
+    /** Extra weight on the slow variation in tone that reads as uneven skin. */
+    blemish: num('face.blemish', 0, 1, 0),
+    /**
+     * Trim on how much fine texture survives the smoothing.
+     *
+     * Zero is whatever `smooth` implies, which is what makes the default do
+     * nothing. The negative side takes the pores out sooner, which is how
+     * plastic skin happens; the positive side puts texture back, which is the
+     * repair for having gone too far without having to undo the rest.
+     */
+    texture: num('face.texture', -1, 1, 0),
+    /** Radius of the edge-preserving filter, as a fraction of the face width. */
+    radius: num('face.radius', 0.01, 0.08, 0.03),
+    /** Pulls back specular highlights on the forehead, nose and cheeks. */
+    shine: num('face.shine', 0, 1, 0),
+    /** Evens out the colour of the skin towards its own local average. */
+    tone: num('face.tone', 0, 1, 0),
+    /** Lifts the shadow under the eyes. */
+    undereye: num('face.undereye', 0, 1, 0),
+    /** Brightens the white of the eye without touching the iris. */
+    eyes: num('face.eyes', 0, 1, 0),
+    /** Takes the yellow out of teeth, when the mouth is open. */
+    teeth: num('face.teeth', 0, 1, 0),
+    /**
+     * Colour on the lips.
+     *
+     * The hue is an absolute angle, like the split-toning hues: a colour is
+     * chosen by the colour it is. The amount around it is relative as usual.
+     */
+    lip: z
+      .object({
+        amount: num('face.lip.amount', 0, 1, 0),
+        hue: num('face.lip.hue', 0, 360, 10),
+      })
+      .prefault({}),
+    /** Colour on the cheeks, over a soft-edged disc keyed to the face width. */
+    cheek: z
+      .object({
+        amount: num('face.cheek.amount', 0, 1, 0),
+        hue: num('face.cheek.hue', 0, 360, 18),
+      })
+      .prefault({}),
+  })
+  .prefault({});
+
+/**
  * Framing: flips, rotation, straightening and the crop rectangle.
  *
  * The crop is normalised against the frame that rotation and straightening
@@ -364,6 +433,7 @@ export const recipeSchema = z.object({
     })
     .optional(),
   geometry: geometrySchema,
+  face: faceSchema,
   global: globalSchema.prefault({}),
   text: z.array(textLayerSchema).default([]),
   tiles: tilesSchema,
@@ -371,6 +441,7 @@ export const recipeSchema = z.object({
 });
 
 export type Recipe = z.infer<typeof recipeSchema>;
+export type FaceParams = Recipe['face'];
 export type GlobalParams = Recipe['global'];
 export type GeometryParams = Recipe['geometry'];
 export type TileParams = Recipe['tiles'];
@@ -386,6 +457,43 @@ export function neutralRecipe(): Recipe {
 /** A text layer with every field at its default, ready to be given content. */
 export function neutralTextLayer(id: string): TextLayer {
   return textLayerSchema.parse({ id });
+}
+
+/**
+ * True when nothing in the skin stage would change a pixel.
+ *
+ * The renderer asks this before building anything: the guided filter, the whole
+ * moment chain behind it and the mask refinement hang off a stage that answers
+ * true here, and none of it runs. A photo with no face in it, or a recipe that
+ * only grades, therefore costs exactly what it did before these stages existed.
+ *
+ * `radius` is not consulted: it says how wide the filter is, not whether any of
+ * it is used, so on its own it changes nothing.
+ */
+export function isSkinNeutral(face: FaceParams): boolean {
+  return (
+    face.smooth < 1e-4 &&
+    face.blemish < 1e-4 &&
+    Math.abs(face.texture) < 1e-4 &&
+    face.shine < 1e-4 &&
+    face.tone < 1e-4
+  );
+}
+
+/** True when none of the per-part adjustments would change a pixel. */
+export function isPartsNeutral(face: FaceParams): boolean {
+  return (
+    face.undereye < 1e-4 &&
+    face.eyes < 1e-4 &&
+    face.teeth < 1e-4 &&
+    face.lip.amount < 1e-4 &&
+    face.cheek.amount < 1e-4
+  );
+}
+
+/** True when the whole face block is at its no-effect values. */
+export function isFaceNeutral(face: FaceParams): boolean {
+  return isSkinNeutral(face) && isPartsNeutral(face);
 }
 
 /** True when the curve is the identity and the shader can skip the lookup. */

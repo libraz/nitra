@@ -104,6 +104,11 @@ export class Program {
     return this;
   }
 
+  vec4(name: string, x: number, y: number, z: number, w: number): this {
+    this.gl.uniform4f(this.location(name), x, y, z, w);
+    return this;
+  }
+
   /** Set a `vec3[]` uniform from a flat triplet list. */
   vec3Array(name: string, values: Float32Array): this {
     this.gl.uniform3fv(this.location(name), values);
@@ -354,6 +359,78 @@ export function createTextTexture(
   );
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return texture;
+}
+
+/**
+ * Upload a region-coverage bitmap.
+ *
+ * The channels hold coverage, not colour, so the texture is a plain RGBA8 with
+ * no transfer function: putting one on would bend the soft edge of every mask
+ * and the feather would stop being the width it was rasterised at.
+ */
+export function createMaskTexture(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+  data: Uint8ClampedArray,
+): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) throw new GlError('could not create mask texture');
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
+  gl.texSubImage2D(
+    gl.TEXTURE_2D,
+    0,
+    0,
+    0,
+    width,
+    height,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+  );
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return texture;
+}
+
+/**
+ * Upload the two segmentation classes the skin mask is built from.
+ *
+ * Two channels rather than four because that is what is used, and this is the
+ * one texture in the chain whose size is set by a model rather than by the
+ * photo. It is magnified a long way — 256 pixels across a whole frame — so it
+ * is filtered rather than sampled, and its edges are put back afterwards by
+ * refining it against the photo itself.
+ */
+export function createSegmentationTexture(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+  data: Uint8ClampedArray,
+): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) throw new GlError('could not create segmentation texture');
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RG8, width, height);
+  gl.texSubImage2D(
+    gl.TEXTURE_2D,
+    0,
+    0,
+    0,
+    width,
+    height,
+    gl.RG,
+    gl.UNSIGNED_BYTE,
+    new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+  );
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   return texture;

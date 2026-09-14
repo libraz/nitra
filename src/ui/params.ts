@@ -27,6 +27,14 @@ export interface ParamGroup {
   /** Extra control drawn above the group's sliders. */
   special?: 'curve' | 'bands';
   defaultOpen?: boolean;
+  /**
+   * True when the group does nothing without a face in the photo.
+   *
+   * The panel says so rather than leaving the sliders live and inert. A control
+   * that moves and changes nothing reads as a broken control, and the reason it
+   * is not moving anything is something the app knows and can simply state.
+   */
+  requiresFace?: boolean;
 }
 
 export function spec(path: string, labelKey: MessageKey): ParamSpec {
@@ -42,6 +50,37 @@ export function spec(path: string, labelKey: MessageKey): ParamSpec {
 }
 
 export const GROUPS: readonly ParamGroup[] = [
+  // Skin and the parts come first because they run first: the order the panel
+  // reads in is the order the picture is built in, which is the only ordering
+  // that keeps explaining itself as stages are added.
+  {
+    id: 'skin',
+    nameKey: 'groups.skin',
+    requiresFace: true,
+    defaultOpen: true,
+    params: [
+      spec('face.smooth', 'params.faceSmooth'),
+      spec('face.blemish', 'params.faceBlemish'),
+      spec('face.texture', 'params.faceTexture'),
+      spec('face.radius', 'params.faceRadius'),
+      spec('face.tone', 'params.faceTone'),
+      spec('face.shine', 'params.faceShine'),
+    ],
+  },
+  {
+    id: 'parts',
+    nameKey: 'groups.parts',
+    requiresFace: true,
+    params: [
+      spec('face.undereye', 'params.faceUndereye'),
+      spec('face.eyes', 'params.faceEyes'),
+      spec('face.teeth', 'params.faceTeeth'),
+      spec('face.lip.amount', 'params.faceLipAmount'),
+      spec('face.lip.hue', 'params.faceLipHue'),
+      spec('face.cheek.amount', 'params.faceCheekAmount'),
+      spec('face.cheek.hue', 'params.faceCheekHue'),
+    ],
+  },
   {
     id: 'tone',
     nameKey: 'groups.tone',

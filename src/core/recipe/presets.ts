@@ -6,11 +6,20 @@
  * under each thumbnail is looked up from the message catalogue by `key`.
  */
 
-import type { GlobalParams } from './schema';
+import type { FaceParams, GlobalParams } from './schema';
 
 export interface Look {
   key: string;
   params: Partial<GlobalParams>;
+  /**
+   * What the finish does to a face, when there is one.
+   *
+   * Carried separately because it is separately applicable: the same finish has
+   * to be a complete answer on a photograph of a person and on a photograph of
+   * a street, and on the street the block is simply never reached. A finish
+   * with no entry here is one that has nothing to say about skin.
+   */
+  face?: Partial<FaceParams>;
 }
 
 /** Strength the finishes below are written at; the dial stretches around it. */
@@ -29,6 +38,7 @@ export const LOOKS: readonly Look[] = [
       clarity: 0.08,
       grain: { amount: 0.06, size: 1 },
     },
+    face: { smooth: 0.28, shine: 0.25, tone: 0.15, undereye: 0.2 },
   },
   {
     key: 'clear',
@@ -44,6 +54,15 @@ export const LOOKS: readonly Look[] = [
       sharpen: 0.2,
       grain: { amount: 0.03, size: 1 },
     },
+    face: {
+      smooth: 0.34,
+      blemish: 0.15,
+      shine: 0.35,
+      tone: 0.2,
+      undereye: 0.28,
+      eyes: 0.2,
+      teeth: 0.2,
+    },
   },
   {
     key: 'soft',
@@ -58,6 +77,7 @@ export const LOOKS: readonly Look[] = [
       clarity: -0.08,
       grain: { amount: 0.12, size: 1.6 },
     },
+    face: { smooth: 0.5, blemish: 0.22, shine: 0.3, tone: 0.3, undereye: 0.3 },
   },
   {
     key: 'backlit',
@@ -72,6 +92,7 @@ export const LOOKS: readonly Look[] = [
       clarity: 0.06,
       grain: { amount: 0.07, size: 1 },
     },
+    face: { smooth: 0.22, shine: 0.15, tone: 0.12, undereye: 0.35 },
   },
   {
     key: 'warm',
@@ -86,6 +107,13 @@ export const LOOKS: readonly Look[] = [
       skinHueProtect: 0.8,
       clarity: 0.06,
       grain: { amount: 0.08, size: 1.2 },
+    },
+    face: {
+      smooth: 0.3,
+      shine: 0.25,
+      tone: 0.18,
+      undereye: 0.22,
+      cheek: { amount: 0.18, hue: 18 },
     },
   },
   {
@@ -109,6 +137,7 @@ export const LOOKS: readonly Look[] = [
       },
       grain: { amount: 0.05, size: 1 },
     },
+    face: { smooth: 0.3, shine: 0.3, tone: 0.2, undereye: 0.2 },
   },
   {
     key: 'vivid',
@@ -124,6 +153,14 @@ export const LOOKS: readonly Look[] = [
       clarity: 0.24,
       sharpen: 0.3,
       grain: { amount: 0.02, size: 1 },
+    },
+    face: {
+      smooth: 0.2,
+      shine: 0.3,
+      eyes: 0.25,
+      teeth: 0.25,
+      lip: { amount: 0.2, hue: 6 },
+      cheek: { amount: 0.2, hue: 14 },
     },
   },
   {
@@ -147,6 +184,7 @@ export const LOOKS: readonly Look[] = [
       },
       grain: { amount: 0.3, size: 1.4 },
     },
+    face: { smooth: 0.16, texture: 0.1, shine: 0.12 },
   },
   {
     key: 'retro',
@@ -169,6 +207,7 @@ export const LOOKS: readonly Look[] = [
       vignette: { amount: 0.3, midpoint: 0.5, feather: 0.7, roundness: 0.4 },
       grain: { amount: 0.34, size: 1.8 },
     },
+    face: { smooth: 0.14, shine: 0.1 },
   },
   {
     key: 'dreamy',
@@ -185,6 +224,7 @@ export const LOOKS: readonly Look[] = [
       fade: 0.18,
       grain: { amount: 0.1, size: 1.5 },
     },
+    face: { smooth: 0.55, blemish: 0.3, texture: -0.15, shine: 0.35, tone: 0.35 },
   },
   {
     key: 'mono',
@@ -199,6 +239,7 @@ export const LOOKS: readonly Look[] = [
       mono: { amount: 1, red: 0.26, green: 0.62, blue: 0.12 },
       grain: { amount: 0.26, size: 1.3 },
     },
+    face: { smooth: 0.24, shine: 0.2, undereye: 0.2 },
   },
   { key: 'none', params: {} },
 ];
@@ -261,7 +302,10 @@ function scaleGroup(key: string, value: object, factor: number): object {
 }
 
 function clampUnit(value: number): number {
-  return Math.max(-1, Math.min(1, value));
+  const clamped = Math.max(-1, Math.min(1, value));
+  // Scaling a negative amount to nothing leaves a negative zero, which renders
+  // identically and reads as a value in a shared recipe. Zero is what it is.
+  return clamped === 0 ? 0 : clamped;
 }
 
 /** Scale a finish around the strength it was written at. */
@@ -282,6 +326,65 @@ export function applyStrength(
     }
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
       Object.assign(out, { [key]: scaleGroup(key, value, factor) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Parameters the strength dial leaves alone in the face block.
+ *
+ * Only the radius. How wide the filter is describes what the smoothing is, the
+ * way a grain size or a split-toning hue does; everything else in the block is
+ * an amount, including the texture trim — turning a finish down has to take
+ * back what it did to the skin's texture as well as how much it smoothed.
+ */
+const FACE_EXEMPT = new Set<string>(['radius']);
+
+/**
+ * Whether one face parameter is left alone by the strength dial.
+ *
+ * Exported so the editor can keep the dial meaningful after a manual edit
+ * without keeping its own copy of this list. Two copies of a rule like this
+ * drift, and the drift shows up as a slider that jumps when the dial is next
+ * touched.
+ */
+export function isFaceStrengthExempt(key: string): boolean {
+  return FACE_EXEMPT.has(key);
+}
+
+/** And which fields of the grouped face parameters are amounts. */
+const FACE_AMOUNTS: Record<string, readonly string[]> = {
+  lip: ['amount'],
+  cheek: ['amount'],
+};
+
+/** Scale a finish's face block around the strength it was written at. */
+export function applyFaceStrength(
+  base: Partial<FaceParams>,
+  strength: number,
+): Partial<FaceParams> {
+  const factor = Math.max(0, strength) / REFERENCE_STRENGTH;
+  const out: Partial<FaceParams> = {};
+  for (const [key, value] of Object.entries(base) as [keyof FaceParams, unknown][]) {
+    if (isFaceStrengthExempt(key)) {
+      Object.assign(out, { [key]: value });
+      continue;
+    }
+    if (typeof value === 'number') {
+      Object.assign(out, { [key]: clampUnit(value * factor) });
+      continue;
+    }
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      const amounts = FACE_AMOUNTS[key] ?? [];
+      const group: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+      for (const field of amounts) {
+        const amount = group[field];
+        if (typeof amount === 'number') {
+          group[field] = Math.max(0, Math.min(1, amount * factor));
+        }
+      }
+      Object.assign(out, { [key]: group });
     }
   }
   return out;
