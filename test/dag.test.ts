@@ -128,6 +128,128 @@ describe('resource handover', () => {
   });
 });
 
+/**
+ * A stage that is switched off has to cost nothing, not cost a copy.
+ *
+ * This is what lets an expensive analysis chain hang off one stage: with the
+ * stage inactive, none of what feeds it is evaluated at all. A photo with no
+ * face in it therefore costs what it did before those stages existed.
+ */
+describe('a stage with nothing to do', () => {
+  interface Switchable {
+    on: boolean;
+    b: number;
+  }
+
+  type Node = DagNode<null, string, Switchable>;
+
+  function branching(runs: string[]): Node[] {
+    const make = (id: string, inputs: string[], active?: Node['active']): Node => ({
+      id,
+      inputs,
+      ...(active ? { active } : {}),
+      signature: () => id,
+      evaluate: (_ctx, values) => {
+        runs.push(id);
+        return values.length > 0 ? `${id}(${values.join(',')})` : id;
+      },
+    });
+    return [
+      make('source', []),
+      make('analysis', ['source']),
+      make('expensive', ['analysis']),
+      make('stage', ['source', 'expensive'], (params) => params.on),
+      {
+        id: 'after',
+        inputs: ['stage'],
+        signature: (params) => `after:${params.b}`,
+        evaluate: (_ctx, [input], params) => {
+          runs.push('after');
+          return `${input}>after(${params.b})`;
+        },
+      },
+    ];
+  }
+
+  it('passes its first input straight through', () => {
+    const dag = new Dag(branching([]), () => {});
+    expect(dag.evaluate(null, { on: false, b: 1 }, 'after', 'full')).toBe('source>after(1)');
+  });
+
+  it('does not evaluate the branch feeding its other inputs', () => {
+    const runs: string[] = [];
+    const dag = new Dag(branching(runs), () => {});
+    dag.evaluate(null, { on: false, b: 1 }, 'after', 'full');
+    expect(runs).toEqual(['source', 'after']);
+  });
+
+  it('runs the whole chain once it has something to do', () => {
+    const runs: string[] = [];
+    const dag = new Dag(branching(runs), () => {});
+    dag.evaluate(null, { on: true, b: 1 }, 'after', 'full');
+    expect(runs).toEqual(['source', 'analysis', 'expensive', 'stage', 'after']);
+    expect(dag.evaluate(null, { on: true, b: 1 }, 'after', 'full')).toBe(
+      'stage(source,expensive(analysis(source)))>after(1)',
+    );
+  });
+
+  it('does not hand the same result back twice', () => {
+    // The pass-through is not cached under the inactive node's own id: the value
+    // stays owned by the input that produced it, and a double release would put
+    // a live texture back in the pool.
+    const released: string[] = [];
+    const dag = new Dag(branching([]), (value) => released.push(value));
+    dag.evaluate(null, { on: false, b: 1 }, 'after', 'full');
+    dag.invalidate();
+    expect(released).toEqual(['source', 'source>after(1)']);
+  });
+
+  it('releases what it produced when it stops doing anything', () => {
+    const released: string[] = [];
+    const dag = new Dag(branching([]), (value) => released.push(value));
+    dag.evaluate(null, { on: true, b: 1 }, 'after', 'full');
+    released.length = 0;
+    dag.evaluate(null, { on: false, b: 1 }, 'after', 'full');
+    expect(released).toContain('stage(source,expensive(analysis(source)))');
+  });
+
+  it('starts the chain again when it is switched back on', () => {
+    const runs: string[] = [];
+    const dag = new Dag(branching(runs), () => {});
+    dag.evaluate(null, { on: true, b: 1 }, 'after', 'full');
+    dag.evaluate(null, { on: false, b: 1 }, 'after', 'full');
+    runs.length = 0;
+    dag.evaluate(null, { on: true, b: 1 }, 'after', 'full');
+    expect(runs).toEqual(['stage', 'after']);
+  });
+
+  it('can still be asked for a node inside the skipped branch by name', () => {
+    // Which is how the skin measurement reaches the filter coefficients under a
+    // neutral recipe: it asks for them, rather than for something that would
+    // have pulled them in.
+    const runs: string[] = [];
+    const dag = new Dag(branching(runs), () => {});
+    expect(dag.evaluate(null, { on: false, b: 1 }, 'expensive', 'full')).toBe(
+      'expensive(analysis(source))',
+    );
+    expect(runs).toEqual(['source', 'analysis', 'expensive']);
+  });
+
+  it('refuses a node that is switched off with nothing to pass through', () => {
+    const orphan: Node = {
+      id: 'only',
+      inputs: [],
+      active: () => false,
+      signature: () => 'only',
+      evaluate: () => 'only',
+    };
+    const dag = new Dag([orphan], () => {});
+    expect(() => dag.evaluate(null, { on: false, b: 1 }, 'only', 'full')).toThrow(
+      /nothing to pass through/,
+    );
+  });
+});
+
 describe('structure', () => {
   it('rejects a cycle when the graph is built', () => {
     const node = (id: string, inputs: string[]): Node => ({

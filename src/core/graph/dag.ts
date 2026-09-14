@@ -20,6 +20,19 @@ export interface DagNode<Ctx, Value, Params> {
    */
   signature(params: Params, ctx: Ctx): string;
   evaluate(ctx: Ctx, inputs: readonly Value[], params: Params): Value;
+  /**
+   * Whether this node does anything under the current parameters.
+   *
+   * A node that answers false passes its first input straight through, and the
+   * rest of its inputs are not evaluated at all. This is what makes a stage
+   * whose parameters are all at their no-effect values cost nothing rather than
+   * cost a copy: a whole analysis chain can hang off a node that is switched
+   * off, and none of it runs.
+   *
+   * The pass-through is not cached under this node's own id, so the value stays
+   * owned by the input that produced it and is released once.
+   */
+  active?(params: Params, ctx: Ctx): boolean;
 }
 
 interface CacheEntry<Value> {
@@ -53,33 +66,52 @@ export class Dag<Ctx, Value, Params> {
    * resolution, so the proxy and the full-size render do not evict each other.
    */
   evaluate(ctx: Ctx, params: Params, outputId: string, variant: string): Value {
-    const needed = this.ancestorsOf(outputId);
+    const needed = this.ancestorsOf(outputId, ctx, params);
     const keys = new Map<string, string>();
+    const values = new Map<string, Value>();
 
     for (const id of this.order) {
       if (!needed.has(id)) continue;
       const node = this.nodes.get(id) as DagNode<Ctx, Value, Params>;
+      const slot = `${variant}::${id}`;
+
+      if (node.active && !node.active(params, ctx)) {
+        const via = node.inputs[0];
+        if (via === undefined) throw new Error(`node ${id} has nothing to pass through`);
+        // Anything this node produced while it was doing something is memory
+        // nobody will ask for again.
+        const stale = this.cache.get(slot);
+        if (stale) {
+          this.release(stale.value);
+          this.cache.delete(slot);
+        }
+        values.set(id, values.get(via) as Value);
+        keys.set(id, keys.get(via) ?? '');
+        continue;
+      }
+
       const inputKeys = node.inputs.map((input) => keys.get(input) ?? '');
       const key = `${node.signature(params, ctx)}<-${inputKeys.join(',')}`;
       keys.set(id, key);
 
-      const slot = `${variant}::${id}`;
       const cached = this.cache.get(slot);
-      if (cached && cached.key === key) continue;
+      if (cached && cached.key === key) {
+        values.set(id, cached.value);
+        continue;
+      }
 
       const inputs = node.inputs.map((input) => {
-        const entry = this.cache.get(`${variant}::${input}`);
-        if (!entry) throw new Error(`node ${id} ran before its input ${input}`);
-        return entry.value;
+        if (!values.has(input)) throw new Error(`node ${id} ran before its input ${input}`);
+        return values.get(input) as Value;
       });
       const value = node.evaluate(ctx, inputs, params);
       if (cached) this.release(cached.value);
       this.cache.set(slot, { key, value });
+      values.set(id, value);
     }
 
-    const result = this.cache.get(`${variant}::${outputId}`);
-    if (!result) throw new Error(`node ${outputId} produced no result`);
-    return result.value;
+    if (!values.has(outputId)) throw new Error(`node ${outputId} produced no result`);
+    return values.get(outputId) as Value;
   }
 
   /** Drop every cached result, e.g. when the source image is replaced. */
@@ -91,7 +123,13 @@ export class Dag<Ctx, Value, Params> {
     }
   }
 
-  private ancestorsOf(outputId: string): Set<string> {
+  /**
+   * The nodes that have to run for `outputId`, given what is switched on.
+   *
+   * A node that is not active needs only the input it passes through, so the
+   * branch feeding the rest of its arguments drops out of the plan entirely.
+   */
+  private ancestorsOf(outputId: string, ctx: Ctx, params: Params): Set<string> {
     const needed = new Set<string>();
     const stack = [outputId];
     while (stack.length > 0) {
@@ -100,7 +138,8 @@ export class Dag<Ctx, Value, Params> {
       const node = this.nodes.get(id);
       if (!node) throw new Error(`unknown node: ${id}`);
       needed.add(id);
-      stack.push(...node.inputs);
+      const bypassed = node.active !== undefined && !node.active(params, ctx);
+      stack.push(...(bypassed ? node.inputs.slice(0, 1) : node.inputs));
     }
     return needed;
   }
