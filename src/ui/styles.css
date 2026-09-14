@@ -1,0 +1,2264 @@
+/*
+ * nitra — photo editing as a precision instrument.
+ *
+ * Every surface is neutral grey. In a photo editor, colour around the image
+ * biases the judgement being made about colour inside it, so grey is a working
+ * requirement rather than a style. The one accent is the amber of a darkroom
+ * safelight. Numbers are monospaced and tabular so they can be read at a glance.
+ */
+
+:root {
+  --bg: #0b0b0b;
+  --chrome: #131313;
+  --panel: #171717;
+  --raise: #1e1e1e;
+  --line: #262626;
+  --line-2: #333333;
+
+  --ink: #ededec;
+  --ink-2: #9b9b99;
+  --ink-3: #676764;
+
+  --amber: #d9a05c;
+  --amber-dim: #8a6535;
+  --alert: #cf6a45;
+
+  --rail: 52px;
+  --panelw: 344px;
+  --top: 48px;
+  --foot: 38px;
+
+  --line-3: #454545;
+  --tip: #2a2a2a;
+  --tip-ink: #ededec;
+  --scroll: #2e2e2e;
+  --scroll-hi: #3c3c3c;
+  --stage-1: #141414;
+  --stage-2: #0b0b0b;
+  --well: #101010;
+  --tick: #4a4a4a;
+  --thumb: #e6e6e4;
+  --knob: #d4d4d2;
+  --toast-bg: #232323;
+  --toast-ink: #9b9b99;
+  --toast-alert: #e4b7a4;
+  --edge: rgba(255, 255, 255, 0.055);
+  --drop: rgba(0, 0, 0, 0.85);
+  --grain: 0.035;
+
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  color-scheme: dark;
+}
+
+/*
+ * Light appearance.
+ *
+ * The area immediately around the photo stays a neutral mid grey in both: a
+ * colour judgement is made against what is next to it, and a white surround
+ * makes every photo look darker and warmer than it is. What changes is the
+ * chrome further out.
+ */
+:root[data-theme="light"] {
+  --bg: #e9e8e5;
+  --chrome: #f3f2ef;
+  --panel: #faf9f6;
+  --raise: #e7e6e2;
+  --line: #dcdad5;
+  --line-2: #c7c5bf;
+  --line-3: #a9a7a1;
+
+  --ink: #1c1c1b;
+  --ink-2: #5c5b57;
+  --ink-3: #8a8883;
+
+  --amber: #9a6522;
+  --amber-dim: #c6a173;
+  --alert: #a8441f;
+
+  --tip: #2d2c2a;
+  --tip-ink: #f4f3f1;
+  --scroll: #cbc9c4;
+  --scroll-hi: #b4b2ac;
+  --stage-1: #cfcecb;
+  --stage-2: #b6b5b1;
+  --well: #d5d4d0;
+  --tick: #a9a7a1;
+  --thumb: #3c3b39;
+  --knob: #ffffff;
+  --toast-bg: #ffffff;
+  --toast-ink: #46453f;
+  --toast-alert: #8a3315;
+  --edge: rgba(0, 0, 0, 0.1);
+  --drop: rgba(0, 0, 0, 0.3);
+  --grain: 0.018;
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family:
+    "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.mono,
+output {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 9px;
+  border: 2px solid var(--panel);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-hi);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Fine grain over the chrome only. The photo never gets it. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  opacity: var(--grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ============================================================  shell  */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr) var(--panelw);
+  grid-template-rows: var(--top) minmax(0, 1fr) var(--foot);
+  grid-template-areas:
+    "top  top   top"
+    "rail stage panel"
+    "foot foot  foot";
+  height: 100%;
+}
+
+/* ── top bar ── */
+
+.topbar {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 14px 0 16px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  letter-spacing: -0.02em;
+}
+.brand .mark {
+  font-weight: 600;
+  font-size: 16px;
+}
+.brand .mark::first-letter {
+  color: var(--amber);
+}
+.doc {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink-2);
+  min-width: 0;
+}
+.doc .fn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 26ch;
+}
+.doc .dim {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* Two states, but still equal width. */
+.modes {
+  display: flex;
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 2px;
+}
+.modes .glide {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  background: var(--raise);
+  border-radius: 6px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  transition: transform 0.32s var(--ease);
+}
+.modes[data-mode="detail"] .glide {
+  transform: translateX(100%);
+}
+.modes button {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 0;
+  min-width: 78px;
+  padding: 5px 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  transition: color 0.2s;
+}
+.modes button[aria-selected="true"] {
+  color: var(--ink);
+}
+
+.tbtn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  border-radius: 7px;
+  border: 1px solid var(--line-2);
+  font-size: 12px;
+  color: var(--ink-2);
+  transition:
+    border-color 0.18s,
+    color 0.18s,
+    background 0.18s;
+  white-space: nowrap;
+}
+.tbtn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-3);
+  background: var(--raise);
+}
+.tbtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tbtn.primary {
+  border-color: color-mix(in oklab, var(--amber) 40%, var(--line-2));
+  background: color-mix(in oklab, var(--amber) 11%, transparent);
+  color: var(--amber);
+}
+.tbtn.primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--amber) 18%, transparent);
+}
+
+/* A button that reads as a link: an aside, next to the thing that matters. */
+.linkb {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  border-bottom: 1px solid transparent;
+  transition:
+    color 0.16s,
+    border-color 0.16s;
+}
+.linkb:hover {
+  color: var(--ink-2);
+  border-color: var(--line-3);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── icon menu ──
+ *
+ * One button, one list. The list is drawn rather than handed to the platform so
+ * a row can show a typeface in itself, which is the whole reason the font picker
+ * uses the same component as the language switch.
+ */
+
+.menu {
+  position: relative;
+  display: flex;
+}
+.menu-t {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  border: 1px solid transparent;
+  transition:
+    color 0.16s,
+    background 0.16s,
+    border-color 0.16s;
+}
+.menu-t:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--raise);
+}
+.menu-t[aria-expanded="true"] {
+  color: var(--ink);
+  background: var(--raise);
+  border-color: var(--line-2);
+}
+.menu-t:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.menu-t svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.menu-tag {
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  color: var(--ink-3);
+}
+
+/*
+ * The list is a popover, so its position is measured and written in by the
+ * component. Everything here undoes the centring a popover is given by default
+ * and puts the panel's own surface back.
+ */
+.menu-l {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  overflow-y: auto;
+  /* Tall enough for a long list, short enough to stay inside the window. */
+  max-height: min(56vh, 440px);
+  min-width: 168px;
+  padding: 5px;
+  background: var(--chrome);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  box-shadow: 0 14px 34px var(--drop);
+  gap: 1px;
+}
+.menu-l:popover-open {
+  display: grid;
+  animation: menu-in 0.13s var(--ease);
+}
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu-l:popover-open {
+    animation: none;
+  }
+}
+
+/* A heading is a label on the rows below it, not a row of its own. */
+.menu-g {
+  padding: 9px 10px 4px;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.menu-g:first-child {
+  padding-top: 4px;
+}
+.menu-l button {
+  display: grid;
+  /* Mark, name, and a figure at the end for the lists that carry one. */
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px 7px 6px;
+  border-radius: 7px;
+  text-align: left;
+  color: var(--ink-2);
+  transition:
+    background 0.13s,
+    color 0.13s;
+}
+.menu-l button:hover,
+.menu-l button:focus-visible {
+  background: var(--raise);
+  color: var(--ink);
+  outline: none;
+}
+.menu-c {
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--amber);
+  opacity: 0;
+}
+.menu-l button[aria-checked="true"] {
+  color: var(--ink);
+}
+.menu-l button[aria-checked="true"] .menu-c {
+  opacity: 1;
+}
+.menu-n {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu-h {
+  grid-column: 2;
+  font-size: 10px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-f {
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line);
+}
+.menu-a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--ink-2);
+  transition:
+    background 0.13s,
+    color 0.13s;
+}
+.menu-a:hover {
+  background: var(--raise);
+  color: var(--ink);
+}
+.menu-a svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── left rail ── */
+
+.rail {
+  grid-area: rail;
+  background: var(--chrome);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 0;
+  gap: 3px;
+}
+.tool {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--ink-3);
+  position: relative;
+  transition:
+    color 0.16s,
+    background 0.16s;
+}
+.tool:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--raise);
+}
+.tool:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.tool[aria-pressed="true"] {
+  color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 12%, transparent);
+}
+.tool svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.rail .gap {
+  height: 12px;
+}
+.tool::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-3px);
+  background: var(--tip);
+  color: var(--tip-ink);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 40;
+  opacity: 0;
+  transition:
+    opacity 0.16s,
+    transform 0.16s;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.tool:hover::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* ============================================================  stage  */
+
+.stage {
+  grid-area: stage;
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(120% 90% at 50% 0%, var(--stage-1) 0%, var(--stage-2) 70%);
+  overflow: hidden;
+  padding: 34px;
+}
+
+/* The measured box. It fills the stage so that its size never depends on the
+   image inside it, which is what lets the canvas be sized from it. */
+.viewport {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+
+.frame {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  overflow: hidden;
+  box-shadow:
+    0 20px 60px -18px var(--drop),
+    0 0 0 1px var(--edge);
+}
+.frame canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  touch-action: none;
+}
+/* The attribute has to be honoured explicitly: a `display` declaration outranks
+   the `hidden` attribute's own user-agent rule. */
+.frame canvas[hidden] {
+  display: none;
+}
+.frame.empty {
+  box-shadow: none;
+}
+
+.dropzone {
+  width: min(440px, 70vw);
+  padding: 46px 34px;
+  border: 1px dashed var(--line-2);
+  border-radius: 12px;
+  text-align: center;
+  color: var(--ink-3);
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+}
+.dropzone.over {
+  border-color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 7%, transparent);
+  color: var(--ink-2);
+}
+.dropzone b {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+.dropzone span {
+  font-size: 11.5px;
+  line-height: 1.8;
+}
+
+.origtag {
+  position: absolute;
+  inset: 12px auto auto 12px;
+  padding: 3px 9px;
+  background: rgba(10, 10, 10, 0.82);
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  color: var(--amber);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.hint {
+  position: absolute;
+  left: 18px;
+  bottom: 14px;
+  display: flex;
+  gap: 16px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+.hint kbd {
+  font-family: "IBM Plex Mono", monospace;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-right: 5px;
+  color: var(--ink-2);
+  font-size: 10px;
+}
+
+/* ============================================================  panel  */
+
+.panel {
+  grid-area: panel;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.pane-scroll {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── simple mode ── */
+
+.simple-body {
+  padding: 26px 22px 30px;
+}
+.seclabel {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 12px;
+}
+
+.auto {
+  width: 100%;
+  padding: 13px;
+  margin-bottom: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--amber) 42%, var(--line-2));
+  background: color-mix(in oklab, var(--amber) 12%, transparent);
+  color: var(--amber);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    background 0.18s,
+    transform 0.12s;
+}
+.auto:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--amber) 20%, transparent);
+}
+.auto:active:not(:disabled) {
+  transform: scale(0.985);
+}
+.auto:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.auto svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Finishes are chosen from the user's own photo, not from their names. */
+.looks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 9px;
+  margin-bottom: 34px;
+}
+.look {
+  display: grid;
+  gap: 6px;
+}
+.look .thumb {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--well);
+  box-shadow: 0 0 0 1px var(--line-2);
+  transition:
+    box-shadow 0.2s,
+    transform 0.2s var(--ease);
+  display: grid;
+  place-items: center;
+}
+.look .thumb canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.look:hover .thumb {
+  transform: translateY(-2px);
+}
+.look[aria-pressed="true"] .thumb {
+  box-shadow:
+    0 0 0 2px var(--amber),
+    0 7px 18px -7px rgba(0, 0, 0, 0.85);
+}
+.look .ln {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  text-align: center;
+}
+.look[aria-pressed="true"] .ln {
+  color: var(--amber);
+}
+
+/* Simple mode shows no numbers. That constraint is what keeps it from
+   collapsing into a shorter version of the detail panel. */
+.big {
+  margin-bottom: 26px;
+}
+.big > b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  margin-bottom: 11px;
+}
+.big .ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--ink-3);
+  margin-top: 6px;
+  letter-spacing: 0.06em;
+}
+.big input[type="range"]::-webkit-slider-thumb {
+  width: 15px;
+  height: 15px;
+}
+
+.tomore {
+  margin-top: 30px;
+  width: 100%;
+  padding: 10px;
+  border: 1px dashed var(--line-2);
+  border-radius: 9px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  transition:
+    color 0.18s,
+    border-color 0.18s;
+}
+.tomore:hover {
+  color: var(--ink-2);
+  border-color: var(--line-3);
+}
+
+/* ── detail mode ── */
+
+.groups {
+  padding: 6px 0 40px;
+}
+.grp {
+  border-bottom: 1px solid var(--line);
+}
+.grp-h {
+  display: flex;
+  align-items: center;
+}
+.grp-b-t {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 13px 12px 13px 18px;
+  transition: background 0.16s;
+}
+.grp-b-t:hover {
+  background: rgba(255, 255, 255, 0.022);
+}
+.grp-r {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  margin-right: 10px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--ink-3);
+  position: relative;
+  transition:
+    color 0.16s,
+    background 0.16s;
+}
+.grp-r:hover {
+  color: var(--ink);
+  background: var(--raise);
+}
+.grp-r svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.grp-h .chev {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  margin-left: 1px;
+  border-right: 1.4px solid var(--ink-3);
+  border-bottom: 1.4px solid var(--ink-3);
+  transform: rotate(-45deg);
+  transition: transform 0.26s var(--ease);
+}
+.grp[data-open="true"] .grp-h .chev {
+  transform: rotate(45deg);
+}
+.grp-h .gn {
+  font-size: 12.5px;
+  font-weight: 500;
+  flex: 1;
+  text-align: left;
+}
+.grp-h .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--amber);
+  opacity: 0;
+  transition: opacity 0.2s;
+  box-shadow: 0 0 6px color-mix(in oklab, var(--amber) 60%, transparent);
+}
+.grp[data-touched="true"] .grp-h .dot {
+  opacity: 1;
+}
+.grp-b {
+  display: grid;
+  gap: 15px;
+  padding: 4px 20px 22px;
+}
+
+/* ── slider ── */
+
+.sl {
+  position: relative;
+}
+.sl-h {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+.sl-h label {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+/* The number is typeable, so it is an input wearing a readout's clothes. */
+.sl-v {
+  width: 5.2em;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 11px;
+  text-align: right;
+  color: var(--ink-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  transition:
+    color 0.16s,
+    border-color 0.16s,
+    background 0.16s;
+}
+.sl-v:hover {
+  border-color: var(--line-2);
+}
+.sl-v:focus {
+  outline: none;
+  color: var(--amber);
+  background: var(--bg);
+  border-color: var(--amber-dim);
+}
+.sl[data-touched="true"] .sl-v {
+  color: var(--ink-2);
+}
+.sl[data-active="true"] .sl-h label {
+  color: var(--ink);
+}
+.sl[data-active="true"] .sl-v {
+  color: var(--amber);
+}
+
+.sl-t {
+  position: relative;
+  height: 16px;
+  display: flex;
+  align-items: center;
+}
+.sl-t::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--line-2);
+  border-radius: 2px;
+}
+.sl-f {
+  position: absolute;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--amber);
+  transition: opacity 0.16s;
+}
+.sl-tick {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1px;
+  height: 7px;
+  margin-top: -3.5px;
+  background: var(--tick);
+}
+.sl input[type="range"] {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  height: 16px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.sl input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--thumb);
+  border: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  transition:
+    transform 0.14s var(--ease),
+    background 0.14s;
+}
+.sl input[type="range"]:hover::-webkit-slider-thumb {
+  transform: scale(1.18);
+}
+.sl input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(1.34);
+  background: var(--amber);
+}
+.sl input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--amber) 34%, transparent);
+}
+.sl input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--thumb);
+}
+
+/* ── segmented control: three or more options are always equal width ── */
+
+.seg-w {
+  display: grid;
+  gap: 7px;
+}
+.seg-l {
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+.seg {
+  display: flex;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 2px;
+}
+.seg button {
+  flex: 1 1 0;
+  padding: 5px 0;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--ink-3);
+  transition:
+    color 0.18s,
+    background 0.18s;
+}
+.seg button[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--raise);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.mini {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  line-height: 1.7;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.016);
+}
+.mini b {
+  color: var(--amber);
+  font-weight: 500;
+}
+
+/*
+ * A note about something that will not come out as asked. The tint carries it
+ * rather than a stripe down one side: the box is rounded, and a straight edge
+ * against a rounded corner reads as a mistake.
+ */
+.mini.alert {
+  border-color: color-mix(in oklab, var(--alert) 28%, var(--line));
+  background: color-mix(in oklab, var(--alert) 10%, transparent);
+  color: var(--ink-2);
+}
+
+/* ── metadata row: never hidden behind a settings screen ── */
+
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 13px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--amber) 24%, var(--line));
+  background: color-mix(in oklab, var(--amber) 6%, transparent);
+}
+.meta-row.off {
+  border-color: color-mix(in oklab, var(--alert) 34%, var(--line));
+  background: color-mix(in oklab, var(--alert) 8%, transparent);
+}
+.meta-row .mi {
+  flex: none;
+  color: var(--amber);
+  display: grid;
+  place-items: center;
+}
+.meta-row.off .mi {
+  color: var(--alert);
+}
+.meta-row .mi svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.meta-row .mt {
+  flex: 1;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.meta-row .mt b {
+  display: block;
+  color: var(--ink);
+  font-weight: 500;
+  font-size: 11.5px;
+}
+
+.sw {
+  flex: none;
+  width: 34px;
+  height: 19px;
+  border-radius: 19px;
+  background: var(--line-2);
+  position: relative;
+  transition: background 0.2s var(--ease);
+}
+.sw::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--knob);
+  transition:
+    transform 0.22s var(--ease),
+    background 0.2s;
+}
+.sw[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--amber) 62%, transparent);
+}
+.sw[aria-pressed="true"]::after {
+  transform: translateX(15px);
+  background: #fff;
+}
+
+/* ── tone curve ── */
+
+.curve {
+  width: 100%;
+  aspect-ratio: 1;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background:
+    linear-gradient(var(--line) 1px, transparent 1px) 0 0 / 100% 25%,
+    linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 25% 100%,
+    var(--well);
+}
+.curve-plot {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ============================================================  footer  */
+
+.foot {
+  grid-area: foot;
+  background: var(--chrome);
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: 11px;
+}
+.gauges {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+.g {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 15px;
+  height: 100%;
+  border-right: 1px solid var(--line);
+}
+.g:first-child {
+  padding-left: 2px;
+}
+.g .gl {
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.g .gv {
+  color: var(--ink-2);
+  min-width: 42px;
+  text-align: right;
+}
+.g .gbar {
+  width: 46px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--line-2);
+  overflow: hidden;
+}
+.g .gbar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--ink-3);
+  transition:
+    width 0.22s var(--ease),
+    background 0.22s;
+}
+.g[data-state="ok"] .gbar i {
+  background: var(--amber-dim);
+}
+.g[data-state="warn"] .gbar i {
+  background: var(--alert);
+}
+.g[data-state="warn"] .gv {
+  color: var(--alert);
+}
+
+.foot .rt {
+  display: flex;
+  gap: 18px;
+  color: var(--ink-3);
+}
+.foot .rt b {
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+/* ── toast ── */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 60px;
+  transform: translateX(-50%) translateY(10px);
+  background: var(--toast-bg);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  padding: 9px 16px;
+  font-size: 12px;
+  color: var(--toast-ink);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 200;
+  transition:
+    opacity 0.24s,
+    transform 0.24s var(--ease);
+  max-width: min(560px, 80vw);
+  text-align: center;
+}
+.toast[data-on="true"] {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.toast[data-tone="alert"] {
+  border-color: color-mix(in oklab, var(--alert) 44%, var(--line-2));
+  color: var(--toast-alert);
+}
+
+/* ============================================================  overlays  */
+
+/* The plate shrinks to the canvas, so anything absolutely positioned inside it
+   is positioned against the photo rather than against the space around it. */
+.plate {
+  position: relative;
+  display: block;
+  line-height: 0;
+}
+
+/* ── crop rectangle ── */
+
+.cropov {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  cursor: crosshair;
+}
+.cropov-rect {
+  position: absolute;
+  cursor: move;
+  box-shadow:
+    0 0 0 1px var(--amber),
+    0 0 0 9999px color-mix(in oklab, var(--stage-2) 68%, transparent);
+}
+.cropov-thirds {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 33.3%,
+      #fff 33.3%,
+      #fff calc(33.3% + 1px),
+      transparent calc(33.3% + 1px)
+    ),
+    linear-gradient(
+      90deg,
+      transparent 66.6%,
+      #fff 66.6%,
+      #fff calc(66.6% + 1px),
+      transparent calc(66.6% + 1px)
+    ),
+    linear-gradient(
+      transparent 33.3%,
+      #fff 33.3%,
+      #fff calc(33.3% + 1px),
+      transparent calc(33.3% + 1px)
+    ),
+    linear-gradient(
+      transparent 66.6%,
+      #fff 66.6%,
+      #fff calc(66.6% + 1px),
+      transparent calc(66.6% + 1px)
+    );
+  mix-blend-mode: overlay;
+}
+.cropov-h {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  background: var(--amber);
+  border-radius: 3px;
+  border: 2px solid var(--stage-2);
+}
+.h-nw {
+  left: -9px;
+  top: -9px;
+  cursor: nwse-resize;
+}
+.h-ne {
+  right: -9px;
+  top: -9px;
+  cursor: nesw-resize;
+}
+.h-se {
+  right: -9px;
+  bottom: -9px;
+  cursor: nwse-resize;
+}
+.h-sw {
+  left: -9px;
+  bottom: -9px;
+  cursor: nesw-resize;
+}
+.h-n {
+  left: 50%;
+  top: -9px;
+  margin-left: -9px;
+  cursor: ns-resize;
+}
+.h-s {
+  left: 50%;
+  bottom: -9px;
+  margin-left: -9px;
+  cursor: ns-resize;
+}
+.h-w {
+  left: -9px;
+  top: 50%;
+  margin-top: -9px;
+  cursor: ew-resize;
+}
+.h-e {
+  right: -9px;
+  top: 50%;
+  margin-top: -9px;
+  cursor: ew-resize;
+}
+
+/* ── text handles ── */
+
+.textov {
+  position: absolute;
+  inset: 0;
+}
+.textov-handle {
+  position: absolute;
+  min-width: 28px;
+  min-height: 22px;
+  padding: 0;
+  border: 1px dashed transparent;
+  border-radius: 3px;
+  cursor: move;
+  touch-action: none;
+}
+.textov-handle:hover {
+  border-color: color-mix(in oklab, var(--amber) 70%, transparent);
+}
+.textov-handle[aria-pressed="true"] {
+  border-color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 10%, transparent);
+}
+
+/* ── tile grid ── */
+
+.tileov {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.tileov-cell {
+  position: absolute;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--amber) 75%, transparent);
+  display: grid;
+  place-items: center;
+}
+.tileov-cell span {
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: rgba(10, 10, 10, 0.7);
+  color: var(--amber);
+}
+
+/* ============================================================  tool panels  */
+
+.tool-body {
+  padding: 20px 20px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.rail .gap {
+  margin-top: auto;
+}
+
+.iconrow {
+  display: flex;
+  gap: 6px;
+}
+.ibtn {
+  flex: 1;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background: var(--raise);
+  color: var(--ink-2);
+  position: relative;
+  transition:
+    color 0.16s,
+    border-color 0.16s;
+}
+.ibtn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-3);
+}
+.ibtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ibtn[aria-pressed="true"] {
+  color: var(--amber);
+  border-color: color-mix(in oklab, var(--amber) 50%, var(--line-2));
+}
+.iconrow .ibtn svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── dropdown ── */
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.choice-l {
+  font-size: 11px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+.choice-m {
+  display: block;
+}
+.choice-m .menu-t {
+  width: 100%;
+  height: 36px;
+  gap: 9px;
+  justify-content: flex-start;
+  padding: 0 11px;
+  background: var(--raise);
+  border-color: var(--line-2);
+  border-radius: 7px;
+}
+.choice-m .menu-t:hover:not(:disabled) {
+  border-color: var(--line-3);
+}
+.choice-c {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.choice-hint {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.choice-x {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.4px solid var(--ink-3);
+  border-bottom: 1.4px solid var(--ink-3);
+  transform: translateY(-2px) rotate(45deg);
+}
+
+/*
+ * The figure that comes with a choice sits at the end of its row rather than
+ * under it. A column of sizes can be compared down the list, which is the
+ * comparison being made — and thirty destinations on one line each is a list
+ * that can be scanned instead of scrolled.
+ */
+.choice-m .menu-h {
+  grid-column: 3;
+  justify-self: end;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+}
+
+/* ── stepper ── */
+
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.stepper-l {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.stepper-b {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--raise);
+}
+.stepper-b button {
+  width: 30px;
+  height: 30px;
+  color: var(--ink-2);
+  font-size: 15px;
+  line-height: 1;
+}
+.stepper-b button:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--line);
+}
+.stepper-b button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.stepper-v {
+  min-width: 26px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+/* ── colour ── */
+
+.colorf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.colorf-l {
+  flex: 1;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.colorf-b {
+  width: 30px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--line-2);
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+}
+.colorf-b input {
+  position: absolute;
+  inset: -6px;
+  width: calc(100% + 12px);
+  height: calc(100% + 12px);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+}
+.colorf-v {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  min-width: 58px;
+  text-align: right;
+}
+
+/* ── text field ── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field-l {
+  font-size: 11px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+.field textarea {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--raise);
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  padding: 9px 10px;
+  resize: vertical;
+  user-select: text;
+}
+.field textarea:focus {
+  outline: none;
+  border-color: var(--amber-dim);
+}
+
+/* ── layer list ── */
+
+.layers {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.layer {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--ink-2);
+}
+.layer:hover {
+  background: var(--raise);
+}
+.layer[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--amber) 12%, transparent);
+  color: var(--ink);
+}
+.layer-n {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.layer-c {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── readouts ── */
+
+.readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: var(--raise);
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.tool-body .readout b {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.note {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 12px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in oklab, var(--amber) 34%, var(--line-2));
+  background: color-mix(in oklab, var(--amber) 7%, transparent);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+.tool-body .note b {
+  font-size: 12px;
+  color: var(--amber);
+}
+
+/* ── grid preview ── */
+
+.gridprev {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  max-height: 220px;
+  justify-self: center;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.gridprev span {
+  display: grid;
+  place-items: center;
+  background: var(--raise);
+  color: var(--ink-2);
+  font-size: 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+}
+
+/* ── hue bands ── */
+
+.bands {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+.band {
+  height: 26px;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  position: relative;
+  opacity: 0.55;
+  transition:
+    opacity 0.16s,
+    border-color 0.16s;
+}
+.band:hover {
+  opacity: 0.85;
+}
+.band[aria-pressed="true"] {
+  opacity: 1;
+  border-color: var(--ink);
+}
+.band[data-touched="true"]::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+.bandname {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+  margin-top: -4px;
+}
+
+/* ── variants ── */
+
+.auto.primary {
+  border-color: color-mix(in oklab, var(--amber) 55%, var(--line-2));
+  color: var(--amber);
+}
+.tomore.danger {
+  color: var(--alert);
+}
+
+@media (max-width: 1080px) {
+  :root {
+    --panelw: 300px;
+  }
+}
+
+/* ============================================================  pro panel  */
+
+/*
+ * Detail-mode header.
+ *
+ * It sits outside the scroller, so the count of what has been changed and the
+ * way to put it all back stay reachable from the bottom of a long panel.
+ */
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome);
+}
+.pane-count {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-count[data-on="true"] {
+  color: var(--amber);
+}
+
+.chip {
+  height: 24px;
+  padding: 0 9px;
+  display: grid;
+  grid-auto-flow: column;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid var(--line-2);
+  font-size: 11px;
+  color: var(--ink-2);
+  position: relative;
+  transition:
+    color 0.16s,
+    background 0.16s,
+    border-color 0.16s;
+}
+.chip:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--raise);
+}
+.chip:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.chip[aria-pressed="true"] {
+  color: var(--bg);
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.pane-head .chip svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mini.pad {
+  padding: 18px 20px;
+}
+.tomore.wide {
+  margin: 22px 20px 0;
+  width: auto;
+}
+
+/* ============================================================  fields  */
+
+.tf {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 8px;
+}
+.tf-l {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.tf input {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--well);
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  padding: 7px 9px;
+  min-width: 0;
+  transition: border-color 0.16s;
+}
+.tf input::placeholder {
+  color: var(--ink-3);
+}
+.tf input:focus {
+  outline: none;
+  border-color: var(--amber-dim);
+}
+.tf-u {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+.nf input {
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/*
+ * A named switch.
+ *
+ * The sentence under the name is where the consequence goes — a location switch
+ * with no explanation is one that gets flipped to see what happens.
+ */
+.swrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.swrow-t {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+.swrow .swrow-t b {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.swrow[data-on="true"] .swrow-t b {
+  color: var(--ink);
+}
+
+.block {
+  display: grid;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  transition: border-color 0.2s;
+}
+.block[data-on="true"] {
+  border-color: var(--line-2);
+}
+
+.summary {
+  display: grid;
+  gap: 1px;
+  padding: 4px 0;
+}
+
+/*
+ * A warning is a full border and a tint, never a stripe down one side: a
+ * straight edge against a rounded corner reads as a rendering fault.
+ */
+.warn {
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  background: color-mix(in oklab, var(--amber) 10%, var(--bg));
+  border: 1px solid color-mix(in oklab, var(--amber) 28%, var(--line));
+}
+
+/* ============================================================  font picker  */
+
+.fontf {
+  display: grid;
+  gap: 6px;
+}
+.fontf-l {
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.fontf-m {
+  display: block;
+}
+.fontf-m .menu-t {
+  width: 100%;
+  height: 38px;
+  justify-content: space-between;
+  padding: 0 11px;
+  background: var(--well);
+  border-color: var(--line-2);
+  border-radius: 8px;
+}
+.fontf-c {
+  font-size: 15px;
+  line-height: 1.2;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fontf-x {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-right: 1.4px solid var(--ink-3);
+  border-bottom: 1.4px solid var(--ink-3);
+  transform: translateY(-2px) rotate(45deg);
+}
+.fontf-s {
+  display: block;
+  font-size: 17px;
+  line-height: 1.35;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================  guide  */
+
+/*
+ * The guide.
+ *
+ * A fixed body height, not one that follows the step: the four steps are not
+ * the same length, and a dialog that resizes under the button being aimed at
+ * reads as a layout fault. A translation longer than the tallest of them
+ * scrolls rather than moving the footer.
+ *
+ * The scrim is a literal black rather than the token the rest of the app would
+ * use, because `::backdrop` only started inheriting custom properties recently,
+ * and a backdrop that silently comes out transparent puts the whole editor
+ * behind a dialog that is trying to be the only thing on screen.
+ */
+
+.guide {
+  position: relative;
+  margin: auto;
+  width: min(520px, calc(100vw - 32px));
+  padding: 0;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line-2);
+  border-radius: 13px;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.55);
+  animation: guide-in 0.19s var(--ease);
+}
+.guide::backdrop {
+  background: rgba(0, 0, 0, 0.78);
+}
+:root[data-theme="light"] .guide::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/*
+ * The dialog is drawn in the top layer, which is above the grain the rest of
+ * the chrome is sitting under. Without this it would be the one surface in the
+ * app that is perfectly clean.
+ */
+.guide::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: var(--grain);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@keyframes guide-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+}
+
+.guide-b {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  height: 292px;
+  overflow-y: auto;
+  padding: 24px 28px 20px;
+  animation: guide-step 0.22s var(--ease);
+}
+
+@keyframes guide-step {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide,
+  .guide-b {
+    animation: none;
+  }
+}
+
+.guide-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.guide-n {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+}
+
+.guide h2 {
+  margin-top: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.guide-i {
+  flex: none;
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.guide-p {
+  margin-top: 13px;
+  color: var(--ink-2);
+  line-height: 1.85;
+}
+
+.guide-note {
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.8;
+  color: var(--ink-3);
+}
+
+/* Pinned to the bottom of the fixed body rather than trailing the last line. */
+.guide-repo {
+  margin-top: auto;
+  padding-top: 16px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  text-decoration: none;
+  border-bottom: 1px solid var(--line-2);
+  transition:
+    color 0.16s,
+    border-color 0.16s;
+}
+.guide-repo:hover {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+}
+
+.guide-f {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px 14px 24px;
+  border-top: 1px solid var(--line);
+}
+
+.guide-dots {
+  display: flex;
+}
+.guide-dots button {
+  position: relative;
+  width: 19px;
+  height: 19px;
+}
+.guide-dots button::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  background: var(--line-3);
+  transition: background 0.16s;
+}
+.guide-dots button:hover::after {
+  background: var(--ink-3);
+}
+.guide-dots button[aria-current="true"]::after {
+  background: var(--amber);
+}

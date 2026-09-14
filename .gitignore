@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+backup/
+.DS_Store
+*.log
+
+.vite/
+*.local
+tsconfig.tsbuildinfo
+
+# Agent configuration (local only)
+.claude/
+CLAUDE.md
+.codex/
+AGENTS.md
+.serena/

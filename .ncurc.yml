@@ -1,0 +1,7 @@
+# Packages `ncu -u` must not raise, and why. Drop an entry once its blocker is
+# gone so the next run picks the package up again.
+#
+# A reject only stops ncu from rewriting the range; it does not stop semver
+# resolution. Anything held back below a published minor is pinned exactly in
+# package.json.
+reject: []

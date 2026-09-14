@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0b0b" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#e9e8e5" />
+
+    <title>nitra — photo retouching in the browser, nothing uploaded</title>
+    <meta
+      name="description"
+      content="Retouch photos in the browser: colour, crop, text and grain, with location and camera data removed on export. Nothing is uploaded. Free and open source."
+    />
+    <link rel="canonical" href="https://nitra.libraz.net/" />
+
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="nitra" />
+    <meta property="og:url" content="https://nitra.libraz.net/" />
+    <meta property="og:title" content="nitra — photo retouching in the browser, nothing uploaded" />
+    <meta
+      property="og:description"
+      content="Phone-camera retouching, applied after the shot. Reading, editing and exporting all happen on the device, and location and camera data are removed on the way out."
+    />
+    <meta property="og:image" content="https://nitra.libraz.net/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="nitra" />
+    <meta property="og:locale" content="en" />
+    <meta property="og:locale:alternate" content="ja" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "nitra",
+        "url": "https://nitra.libraz.net/",
+        "description": "Phone-camera retouching, applied after the shot. Reading, editing and exporting all happen in the browser, and location and camera data are removed on export.",
+        "applicationCategory": "MultimediaApplication",
+        "applicationSubCategory": "Photo editor",
+        "operatingSystem": "Any",
+        "browserRequirements": "Requires WebGL2 with half-float render targets",
+        "isAccessibleForFree": true,
+        "inLanguage": ["en", "ja"],
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "image": "https://nitra.libraz.net/og.png",
+        "screenshot": "https://nitra.libraz.net/og.png",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "author": { "@type": "Person", "name": "libraz", "url": "https://github.com/libraz" },
+        "sameAs": ["https://github.com/libraz/nitra"],
+        "featureList": [
+          "Opens JPEG, PNG, WebP, AVIF and HEIC",
+          "Exposure, contrast, white balance, colour mixer and tone curve",
+          "Split toning, monochrome, fade, vignette, glow, sharpening and film grain",
+          "Crop, straighten and rotate, locked to the shape a destination publishes",
+          "Text in any typeface on the machine",
+          "Splits a picture across a profile grid in upload order",
+          "Removes location and camera data on export"
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <!--
+      What sits inside #root until React mounts.
+
+      The app has no server and no second page, so this is the only HTML a
+      crawler that does not run scripts ever sees, and it is also the first
+      paint. React replaces it on mount; the styles are inline so it is never
+      shown unstyled while the stylesheet is still loading.
+    -->
+    <style>
+      .boot {
+        height: 100%;
+        overflow: auto;
+        padding: 9vh 8vw;
+        background: #0b0b0b;
+        color: #9b9b99;
+        font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+        font-size: 14px;
+        line-height: 1.8;
+      }
+      .boot > * {
+        max-width: 60ch;
+      }
+      .boot h1 {
+        font-size: 28px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        color: #ededec;
+      }
+      .boot h1::first-letter {
+        color: #d9a05c;
+      }
+      .boot h2 {
+        margin-top: 2.4em;
+        font-size: 15px;
+        font-weight: 600;
+        color: #ededec;
+      }
+      .boot p,
+      .boot ul {
+        margin-top: 1em;
+      }
+      .boot li {
+        margin-left: 1.2em;
+      }
+      @media (prefers-color-scheme: light) {
+        .boot {
+          background: #e9e8e5;
+          color: #5c5b57;
+        }
+        .boot h1,
+        .boot h2 {
+          color: #1c1c1b;
+        }
+        .boot h1::first-letter {
+          color: #9a6522;
+        }
+      }
+    </style>
+
+    <div id="root">
+      <div class="boot">
+        <h1>nitra</h1>
+        <p>
+          Phone-camera retouching, applied after the shot. The photo never leaves the device.
+        </p>
+        <p>
+          A phone applies its beauty processing while the shutter is open. nitra applies the same
+          kind of processing afterwards, to any photo you already have — the one taken in the wrong
+          mode, or the one somebody else took of you. There is no upload, no account and no server.
+        </p>
+        <ul>
+          <li>Opens JPEG, PNG, WebP, AVIF and HEIC.</li>
+          <li>
+            Exposure, contrast, white balance, a colour mixer, a tone curve, vignette, glow and film
+            grain.
+          </li>
+          <li>Crops, straightens and rotates, locked to the shape a destination publishes.</li>
+          <li>Sets text in any typeface on the machine.</li>
+          <li>Splits one picture across a profile grid, in the order the tiles have to go up.</li>
+          <li>Removes location, capture time and camera data on export.</li>
+        </ul>
+        <p>
+          Free and open source, under AGPL-3.0. Needs JavaScript and a browser with WebGL2: a
+          current Chrome, Edge, Safari or Firefox.
+        </p>
+
+        <section lang="ja">
+          <h2>ブラウザだけで完結する写真の仕上げ</h2>
+          <p>
+            スマートフォンの美顔カメラは、シャッターが開いている間に加工を掛けます。nitra
+            は同じ種類の加工を後から、手元にある任意の写真に掛けます。モードを切り替え忘れた一枚も、他人に撮ってもらった一枚も対象です。
+          </p>
+          <ul>
+            <li>JPEG・PNG・WebP・AVIF・HEIC を開きます。</li>
+            <li>露出、コントラスト、ホワイトバランス、カラーミキサー、トーンカーブ、周辺減光、グロー、フィルムグレイン。</li>
+            <li>投稿先が実際に公開する形に合わせて、切り抜き・水平出し・回転。</li>
+            <li>この端末にあるどの書体でも文字を入れられます。</li>
+            <li>一枚の写真をプロフィールのグリッドに分割し、投稿すべき順番をファイル名に書き込みます。</li>
+            <li>書き出しのたびに位置情報・撮影日時・カメラ情報を削除します。</li>
+          </ul>
+          <p>
+            画像はアップロードされません。読み込みも編集も書き出しもこの端末の中で終わります。AGPL-3.0
+            のオープンソースで、無料で使えます。
+          </p>
+        </section>
+      </div>
+    </div>
+
+    <noscript>
+      <p style="padding: 0 8vw; color: #9b9b99">
+        The editor itself needs JavaScript. / エディタの利用には JavaScript が必要です。
+      </p>
+    </noscript>
+
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

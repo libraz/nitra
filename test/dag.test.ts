@@ -1,0 +1,161 @@
+/**
+ * The graph's whole reason to exist is that it does not re-run work whose inputs
+ * did not change, so the tests count evaluations rather than inspect results.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { Dag, type DagNode } from '../src/core/graph/dag';
+
+interface Params {
+  a: number;
+  b: number;
+}
+
+type Node = DagNode<null, string, Params>;
+
+function chain(runs: string[]): Node[] {
+  const source: Node = {
+    id: 'source',
+    inputs: [],
+    signature: () => 'source',
+    evaluate: () => {
+      runs.push('source');
+      return 'source';
+    },
+  };
+  const heavy: Node = {
+    id: 'heavy',
+    inputs: ['source'],
+    signature: (params) => `heavy:${params.a}`,
+    evaluate: (_ctx, [input], params) => {
+      runs.push('heavy');
+      return `${input}>heavy(${params.a})`;
+    },
+  };
+  const light: Node = {
+    id: 'light',
+    inputs: ['heavy'],
+    signature: (params) => `light:${params.b}`,
+    evaluate: (_ctx, [input], params) => {
+      runs.push('light');
+      return `${input}>light(${params.b})`;
+    },
+  };
+  return [source, heavy, light];
+}
+
+describe('differential re-evaluation', () => {
+  it('runs every node the first time', () => {
+    const runs: string[] = [];
+    const dag = new Dag(chain(runs), () => {});
+    expect(dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full')).toBe('source>heavy(1)>light(1)');
+    expect(runs).toEqual(['source', 'heavy', 'light']);
+  });
+
+  it('re-runs nothing when the parameters are unchanged', () => {
+    const runs: string[] = [];
+    const dag = new Dag(chain(runs), () => {});
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full');
+    runs.length = 0;
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full');
+    expect(runs).toEqual([]);
+  });
+
+  it('holds the expensive stage while a downstream parameter moves', () => {
+    // This is what makes a slider feel attached to the image: dragging the cheap
+    // control must not re-run the stage above it.
+    const runs: string[] = [];
+    const dag = new Dag(chain(runs), () => {});
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full');
+    runs.length = 0;
+    dag.evaluate(null, { a: 1, b: 2 }, 'light', 'full');
+    expect(runs).toEqual(['light']);
+  });
+
+  it('re-runs everything downstream of a changed stage', () => {
+    const runs: string[] = [];
+    const dag = new Dag(chain(runs), () => {});
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full');
+    runs.length = 0;
+    dag.evaluate(null, { a: 2, b: 1 }, 'light', 'full');
+    expect(runs).toEqual(['heavy', 'light']);
+  });
+
+  it('keeps resolutions apart so the proxy and the full render do not evict each other', () => {
+    const runs: string[] = [];
+    const dag = new Dag(chain(runs), () => {});
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'proxy');
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full');
+    runs.length = 0;
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'proxy');
+    expect(runs).toEqual([]);
+  });
+
+  it('skips nodes the requested output does not depend on', () => {
+    const runs: string[] = [];
+    const dag = new Dag(chain(runs), () => {});
+    dag.evaluate(null, { a: 1, b: 1 }, 'heavy', 'full');
+    expect(runs).toEqual(['source', 'heavy']);
+  });
+});
+
+describe('resource handover', () => {
+  it('hands a superseded result back exactly once', () => {
+    const released: string[] = [];
+    const runs: string[] = [];
+    const dag = new Dag(chain(runs), (value) => released.push(value));
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full');
+    expect(released).toEqual([]);
+    dag.evaluate(null, { a: 2, b: 1 }, 'light', 'full');
+    expect(released).toEqual(['source>heavy(1)', 'source>heavy(1)>light(1)']);
+  });
+
+  it('releases everything when the source is replaced', () => {
+    const released: string[] = [];
+    const dag = new Dag(chain([]), (value) => released.push(value));
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full');
+    dag.invalidate();
+    expect(released).toHaveLength(3);
+  });
+
+  it('releases only the named resolution', () => {
+    const released: string[] = [];
+    const dag = new Dag(chain([]), (value) => released.push(value));
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'proxy');
+    dag.evaluate(null, { a: 1, b: 1 }, 'light', 'full');
+    dag.invalidate('proxy');
+    expect(released).toHaveLength(3);
+  });
+});
+
+describe('structure', () => {
+  it('rejects a cycle when the graph is built', () => {
+    const node = (id: string, inputs: string[]): Node => ({
+      id,
+      inputs,
+      signature: () => id,
+      evaluate: () => id,
+    });
+    expect(() => new Dag([node('a', ['b']), node('b', ['a'])], () => {})).toThrow(/cycle/);
+  });
+
+  it('rejects a duplicate node id', () => {
+    const node = (id: string): Node => ({
+      id,
+      inputs: [],
+      signature: () => id,
+      evaluate: () => id,
+    });
+    expect(() => new Dag([node('a'), node('a')], () => {})).toThrow(/duplicate/);
+  });
+
+  it('rejects an input that does not exist', () => {
+    const orphan: Node = {
+      id: 'a',
+      inputs: ['missing'],
+      signature: () => 'a',
+      evaluate: () => 'a',
+    };
+    expect(() => new Dag([orphan], () => {})).toThrow(/unknown node/);
+  });
+});

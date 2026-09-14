@@ -1,0 +1,777 @@
+/**
+ * Editor state.
+ *
+ * The recipe is the only description of the edit; the canvas is a view of it.
+ * Nothing here holds a modified copy of the image, which is what makes every
+ * step reversible and the history unbounded.
+ */
+
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type AutoNote, suggestGrade } from '../core/analysis/auto';
+import { aspectByKey, resolveAspect } from '../core/geometry/aspects';
+import { cropRatioForTiles, type ExportPlan, planExport } from '../core/geometry/tiles';
+import {
+  clampCrop,
+  fitCropToAspect,
+  flipFieldFor,
+  frameSize,
+  geometrySignature,
+} from '../core/geometry/transform';
+import { decodeSourceFile, type SourceImage } from '../core/io/decode';
+import { exportImage } from '../core/io/export';
+import { applyStrength, LOOKS, lookByKey, REFERENCE_STRENGTH } from '../core/recipe/presets';
+import {
+  type GeometryParams,
+  type GlobalParams,
+  type MetadataParams,
+  neutralRecipe,
+  neutralTextLayer,
+  type Recipe,
+  type TextLayer,
+} from '../core/recipe/schema';
+import { Pipeline, type RenderStats } from '../core/render/pipeline';
+import { RenderScheduler } from '../core/render/scheduler';
+import { fontsReady, loadFontFile } from '../core/text/fonts';
+import { type MessageKey, type Translate, useI18n } from '../i18n';
+import { writeParam } from './params';
+
+/** Longest edge of a finish thumbnail. */
+const THUMBNAIL_EDGE = 220;
+
+/** The panels the tool rail switches between. */
+export type Tool = 'adjust' | 'crop' | 'text' | 'tiles' | 'metadata' | 'export';
+
+/** A change to the metadata block, one group at a time. */
+export interface MetadataPatch {
+  mode?: MetadataParams['mode'];
+  gps?: Partial<MetadataParams['gps']>;
+  capture?: Partial<MetadataParams['capture']>;
+  credit?: Partial<MetadataParams['credit']>;
+  software?: boolean;
+}
+
+export type CropRect = GeometryParams['crop'];
+
+/** Parameters the strength dial leaves alone, mirrored for manual edits. */
+const STRENGTH_EXEMPT = new Set<string>([
+  'global.exposure',
+  'global.highlights',
+  'global.shadows',
+  'global.whites',
+  'global.blacks',
+  'global.temperature',
+  'global.tint',
+  'global.skinHueProtect',
+]);
+
+export interface EditorToast {
+  id: number;
+  body: string;
+  tone: 'normal' | 'alert';
+}
+
+export interface Editor {
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+  viewportRef: RefObject<HTMLDivElement | null>;
+  recipe: Recipe;
+  source: SourceImage | null;
+  fatal: string | null;
+  tool: Tool;
+  mode: 'simple' | 'detail';
+  look: string;
+  strength: number;
+  comparing: boolean;
+  exporting: boolean;
+  stats: RenderStats | null;
+  toneResponse: Uint8Array | null;
+  thumbnails: ReadonlyMap<string, ImageData>;
+  scale: 'proxy' | 'full';
+  previewSize: string | null;
+  workingSpace: string;
+  toast: EditorToast | null;
+  /** What the current recipe would produce, recomputed as the framing changes. */
+  plan: ExportPlan | null;
+  /** Shape of the straightened frame the crop is dragged inside. */
+  frameAspect: number;
+  selectedText: string | null;
+  /** Bumped when a supplied typeface finishes loading. */
+  fontRevision: number;
+  setTool: (tool: Tool) => void;
+  setMode: (mode: 'simple' | 'detail') => void;
+  setComparing: (on: boolean) => void;
+  setParam: (path: string, value: number) => void;
+  setOutput: (patch: Partial<Recipe['output']>) => void;
+  setMetadata: (patch: MetadataPatch) => void;
+  setLook: (key: string) => void;
+  setStrength: (value: number) => void;
+  setGeometry: (patch: Partial<GeometryParams>) => void;
+  setCrop: (crop: CropRect) => void;
+  setAspect: (key: string) => void;
+  rotate: (quarterTurns: number) => void;
+  flip: (axis: 'h' | 'v') => void;
+  resetFraming: () => void;
+  setTiles: (patch: Partial<Recipe['tiles']>) => void;
+  matchCropToTiles: (tileRatio: number) => void;
+  addText: () => void;
+  updateText: (id: string, patch: Partial<TextLayer>) => void;
+  removeText: (id: string) => void;
+  selectText: (id: string | null) => void;
+  loadFont: (file: File) => void;
+  openFiles: (files: FileList) => void;
+  runAuto: () => void;
+  runExport: () => void;
+}
+
+/** Render one measurement note in the active language. */
+function formatNote(note: AutoNote, t: Translate): string {
+  switch (note.kind) {
+    case 'exposure':
+      return t('auto.exposure', {
+        stops: `${note.stops >= 0 ? '+' : ''}${note.stops.toFixed(1)}`,
+      });
+    case 'highlightClip':
+      return t('auto.highlightClip', { percent: note.percent.toFixed(1) });
+    case 'shadowClip':
+      return t('auto.shadowClip', { percent: note.percent.toFixed(1) });
+    case 'blackPoint':
+      return t('auto.blackPoint');
+    case 'whitePoint':
+      return t('auto.whitePoint');
+    case 'balanced':
+      return t('auto.balanced');
+  }
+}
+
+function newLayerId(): string {
+  return `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+export function useEditor(): Editor {
+  const { t } = useI18n();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const pipelineRef = useRef<Pipeline | null>(null);
+  const schedulerRef = useRef<RenderScheduler | null>(null);
+
+  const [recipe, setRecipe] = useState<Recipe>(() => neutralRecipe());
+  const recipeRef = useRef(recipe);
+  recipeRef.current = recipe;
+
+  /** The finish before the strength dial stretched it. */
+  const baselineRef = useRef<Partial<GlobalParams>>({});
+
+  const [source, setSource] = useState<SourceImage | null>(null);
+  const sourceRef = useRef<SourceImage | null>(null);
+  sourceRef.current = source;
+
+  const [fatal, setFatal] = useState<string | null>(null);
+  const [tool, setToolState] = useState<Tool>('adjust');
+  const [mode, setMode] = useState<'simple' | 'detail'>('simple');
+  const [look, setLookState] = useState<string>('none');
+  const [strength, setStrengthState] = useState(REFERENCE_STRENGTH);
+  const [comparing, setComparingState] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [stats, setStats] = useState<RenderStats | null>(null);
+  const [toneResponse, setToneResponse] = useState<Uint8Array | null>(null);
+  const [thumbnails, setThumbnails] = useState<ReadonlyMap<string, ImageData>>(new Map());
+  const [scale, setScale] = useState<'proxy' | 'full'>('proxy');
+  const [previewSize, setPreviewSize] = useState<string | null>(null);
+  const [workingSpace, setWorkingSpace] = useState('linear P3 / f16');
+  const [selectedText, setSelectedText] = useState<string | null>(null);
+  const selectedTextRef = useRef<string | null>(null);
+  selectedTextRef.current = selectedText;
+  const [fontRevision, setFontRevision] = useState(0);
+  const [toast, setToast] = useState<EditorToast | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const notify = useCallback((body: string, tone: 'normal' | 'alert' = 'normal') => {
+    setToast({ id: Date.now(), body, tone });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3600);
+  }, []);
+
+  // The pipeline owns GPU resources, so it is created once against the canvas
+  // and torn down with it rather than rebuilt on every render.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let pipeline: Pipeline;
+    try {
+      pipeline = new Pipeline(canvas, () => {
+        const box = viewportRef.current?.getBoundingClientRect();
+        return { width: box?.width ?? 0, height: box?.height ?? 0 };
+      });
+    } catch (err) {
+      setFatal(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    pipelineRef.current = pipeline;
+    setWorkingSpace(pipeline.wideGamut ? 'linear P3 / f16' : 'linear sRGB / f16');
+
+    const scheduler = new RenderScheduler(pipeline, {
+      recipe: () => recipeRef.current,
+      stats: (next) => {
+        setStats(next);
+        setToneResponse(pipeline.toneResponse(recipeRef.current));
+      },
+      scaleChanged: (next) => {
+        setScale(next);
+        const [width, height] = pipeline.resolutionFor(recipeRef.current, next);
+        setPreviewSize(`${width}×${height}`);
+      },
+    });
+    schedulerRef.current = scheduler;
+
+    // A remount arrives with the source already decoded; the GPU copy went away
+    // with the previous context, so it is uploaded again rather than asking the
+    // user to reopen the file.
+    if (sourceRef.current) {
+      pipeline.setSource(sourceRef.current);
+      scheduler.markDirty();
+    }
+
+    const onResize = () => scheduler.refresh();
+    window.addEventListener('resize', onResize);
+    // Type drawn before its face has loaded is type drawn in the fallback, and
+    // the fallback is what would end up in the export.
+    void fontsReady().then(() => scheduler.refresh());
+
+    return () => {
+      window.removeEventListener('resize', onResize);
+      scheduler.dispose();
+      pipeline.dispose();
+      schedulerRef.current = null;
+      pipelineRef.current = null;
+    };
+  }, []);
+
+  const commit = useCallback((next: Recipe) => {
+    recipeRef.current = next;
+    setRecipe(next);
+    if (sourceRef.current) schedulerRef.current?.markDirty();
+  }, []);
+
+  // The crop is placed over the parts of the photo it is about to throw away, so
+  // the whole frame has to stay on screen for as long as the tool is open.
+  const setTool = useCallback((next: Tool) => {
+    setToolState(next);
+    schedulerRef.current?.setFullFrame(next === 'crop');
+  }, []);
+
+  const setComparing = useCallback((on: boolean) => {
+    setComparingState(on);
+    schedulerRef.current?.setShowOriginal(on);
+  }, []);
+
+  const setParam = useCallback(
+    (path: string, value: number) => {
+      const next = writeParam(recipeRef.current, path, value);
+      // Keep the strength dial meaningful after a manual edit by recording the
+      // value as it would be at the reference strength.
+      if (path.startsWith('global.') && !path.startsWith('global.grain')) {
+        const factor = Math.max(0.02, strength / REFERENCE_STRENGTH);
+        const key = path.slice('global.'.length);
+        if (!key.includes('.')) {
+          Object.assign(baselineRef.current, {
+            [key]: STRENGTH_EXEMPT.has(path) ? value : value / factor,
+          });
+        }
+      }
+      setLookState('custom');
+      commit(next);
+    },
+    [commit, strength],
+  );
+
+  const setOutput = useCallback(
+    (patch: Partial<Recipe['output']>) => {
+      commit({ ...recipeRef.current, output: { ...recipeRef.current.output, ...patch } });
+    },
+    [commit],
+  );
+
+  /**
+   * Change one group of the metadata block.
+   *
+   * Merged group by group rather than replaced, so switching a block off leaves
+   * the values in it: turning the location back on should not mean typing the
+   * coordinates again.
+   */
+  const setMetadata = useCallback(
+    (patch: MetadataPatch) => {
+      const current = recipeRef.current;
+      const metadata = current.output.metadata;
+      const next: MetadataParams = {
+        mode: patch.mode ?? metadata.mode,
+        gps: { ...metadata.gps, ...patch.gps },
+        capture: { ...metadata.capture, ...patch.capture },
+        credit: { ...metadata.credit, ...patch.credit },
+        software: patch.software ?? metadata.software,
+      };
+      commit({ ...current, output: { ...current.output, metadata: next } });
+
+      if (patch.mode && patch.mode !== metadata.mode) {
+        if (patch.mode === 'strip') notify(t('toast.metadataOn'));
+        else if (patch.mode === 'keep') notify(t('toast.metadataOff'), 'alert');
+        else notify(t('toast.metadataCustom'), 'alert');
+      }
+    },
+    [commit, notify, t],
+  );
+
+  /**
+   * Apply a framing change and put the crop back where it belongs.
+   *
+   * A rotation swaps the frame's shape, so a crop locked to 4:5 stops being 4:5
+   * the instant the photo turns. Refitting here rather than in the panel means
+   * every route into a framing change — a button, a slider, a drag — ends with a
+   * rectangle that still honours the lock and still fits inside the frame.
+   */
+  const setGeometry = useCallback(
+    (patch: Partial<GeometryParams>) => {
+      const current = recipeRef.current;
+      const image = sourceRef.current;
+      const geometry: GeometryParams = { ...current.geometry, ...patch };
+      let crop = clampCrop(patch.crop ?? geometry.crop);
+
+      if (image) {
+        const [w, h] = frameSize(image.width, image.height, geometry);
+        const ratio = resolveAspect(geometry.aspect, w / h);
+        if (ratio !== null) crop = fitCropToAspect(crop, ratio, w / h);
+      }
+
+      commit({ ...current, geometry: { ...geometry, crop } });
+    },
+    [commit],
+  );
+
+  const setCrop = useCallback((crop: CropRect) => setGeometry({ crop }), [setGeometry]);
+
+  const setAspect = useCallback(
+    (key: string) => {
+      const preset = aspectByKey(key);
+      setGeometry({ aspect: key });
+      // A service preset carries the size that service publishes at, so picking
+      // one sets both halves of the decision rather than leaving the size to be
+      // discovered in the export panel later.
+      if (preset && preset.longEdge > 0) {
+        const current = recipeRef.current;
+        recipeRef.current = {
+          ...current,
+          output: { ...current.output, longEdge: preset.longEdge },
+        };
+        setRecipe(recipeRef.current);
+      }
+      if (preset) notify(t('toast.aspectApplied', { name: t(`aspect.${key}` as MessageKey) }));
+    },
+    [notify, setGeometry, t],
+  );
+
+  const rotate = useCallback(
+    (quarterTurns: number) => {
+      const current = recipeRef.current.geometry.quarterTurns;
+      setGeometry({ quarterTurns: (((current + quarterTurns) % 4) + 4) % 4 });
+    },
+    [setGeometry],
+  );
+
+  const flip = useCallback(
+    (axis: 'h' | 'v') => {
+      const geometry = recipeRef.current.geometry;
+      const field = flipFieldFor(geometry.quarterTurns, axis);
+      setGeometry({ [field]: !geometry[field] });
+    },
+    [setGeometry],
+  );
+
+  const resetFraming = useCallback(() => {
+    const fresh = neutralRecipe();
+    commit({ ...recipeRef.current, geometry: fresh.geometry });
+    notify(t('toast.framingReset'));
+  }, [commit, notify, t]);
+
+  const setTiles = useCallback(
+    (patch: Partial<Recipe['tiles']>) => {
+      const current = recipeRef.current;
+      commit({ ...current, tiles: { ...current.tiles, ...patch } });
+    },
+    [commit],
+  );
+
+  /**
+   * Shape the crop so every tile of the current grid comes out at `tileRatio`.
+   *
+   * The shape of a tile is the caller's to choose because it is a property of
+   * where the grid is going, not of the photo: a profile grid that previews
+   * posts at 3:4 needs 3:4 tiles, and the same picture cut into squares for a
+   * square grid is a different crop of the same photo.
+   */
+  const matchCropToTiles = useCallback(
+    (tileRatio: number) => {
+      const image = sourceRef.current;
+      if (!image) return;
+      const current = recipeRef.current;
+      const [w, h] = frameSize(image.width, image.height, current.geometry);
+      const crop = fitCropToAspect(
+        current.geometry.crop,
+        cropRatioForTiles(tileRatio, current.tiles.cols, current.tiles.rows),
+        w / h,
+      );
+      commit({ ...current, geometry: { ...current.geometry, aspect: 'free', crop } });
+    },
+    [commit],
+  );
+
+  const addText = useCallback(() => {
+    const current = recipeRef.current;
+    const layer = neutralTextLayer(newLayerId());
+    layer.content = t('text.newContent');
+    setSelectedText(layer.id);
+    commit({ ...current, text: [...current.text, layer] });
+  }, [commit, t]);
+
+  const updateText = useCallback(
+    (id: string, patch: Partial<TextLayer>) => {
+      const current = recipeRef.current;
+      commit({
+        ...current,
+        text: current.text.map((layer) => (layer.id === id ? { ...layer, ...patch } : layer)),
+      });
+    },
+    [commit],
+  );
+
+  const removeText = useCallback(
+    (id: string) => {
+      const current = recipeRef.current;
+      setSelectedText((selected) => (selected === id ? null : selected));
+      commit({ ...current, text: current.text.filter((layer) => layer.id !== id) });
+    },
+    [commit],
+  );
+
+  const selectText = useCallback((id: string | null) => setSelectedText(id), []);
+
+  /**
+   * Register a typeface from the user's own machine and set it on the caption.
+   *
+   * The face is picked up straight away because that is the point of loading it,
+   * and the revision counter is what makes the picker and the coverage check
+   * notice: the catalogue lives outside React, so nothing else would tell them.
+   */
+  const loadFont = useCallback(
+    (file: File) => {
+      void (async () => {
+        try {
+          const font = await loadFontFile(file);
+          setFontRevision((n) => n + 1);
+          const id = selectedTextRef.current ?? recipeRef.current.text.at(-1)?.id;
+          if (id) updateText(id, { font: font.key });
+          schedulerRef.current?.refresh();
+          notify(t('toast.fontLoaded', { name: font.label }));
+        } catch (err) {
+          const detail = err instanceof Error ? ` — ${err.message}` : '';
+          notify(`${t('toast.fontFailed')}${detail}`, 'alert');
+        }
+      })();
+    },
+    [notify, t, updateText],
+  );
+
+  const applyGlobals = useCallback(
+    (base: Partial<GlobalParams>, nextStrength: number) => {
+      const scaled = applyStrength(base, nextStrength);
+      const fresh = neutralRecipe();
+      commit({ ...recipeRef.current, global: { ...fresh.global, ...scaled } });
+    },
+    [commit],
+  );
+
+  const setLook = useCallback(
+    (key: string) => {
+      const entry = lookByKey(key);
+      if (!entry) return;
+      baselineRef.current = { ...entry.params };
+      setLookState(key);
+      applyGlobals(entry.params, strength);
+      notify(t('toast.lookApplied', { name: t(`looks.${key}` as MessageKey) }));
+    },
+    [applyGlobals, notify, strength, t],
+  );
+
+  const setStrength = useCallback(
+    (value: number) => {
+      setStrengthState(value);
+      applyGlobals(baselineRef.current, value);
+    },
+    [applyGlobals],
+  );
+
+  const openFiles = useCallback(
+    (files: FileList) => {
+      const file = files[0];
+      if (!file) return;
+      void (async () => {
+        try {
+          const image = await decodeSourceFile(file, file.name);
+          const pipeline = pipelineRef.current;
+          if (!pipeline) return;
+          pipeline.setSource(image);
+          sourceRef.current = image;
+          setSource(image);
+          setStats(null);
+          setThumbnails(new Map());
+          // The framing belongs to the photo it was drawn on, so a new photo
+          // arrives unframed rather than inheriting a crop placed on another.
+          const fresh = neutralRecipe();
+          const next: Recipe = {
+            ...recipeRef.current,
+            geometry: fresh.geometry,
+            source: { w: image.width, h: image.height, space: image.space },
+          };
+          recipeRef.current = next;
+          setRecipe(next);
+          schedulerRef.current?.markDirty();
+          notify(
+            t(image.orientation === 1 ? 'toast.loaded' : 'toast.loadedRotated', {
+              name: image.fileName,
+              width: image.width,
+              height: image.height,
+            }),
+          );
+        } catch (err) {
+          const detail = err instanceof Error ? ` — ${err.message}` : '';
+          notify(`${t('toast.loadFailed')}${detail}`, 'alert');
+        }
+      })();
+    },
+    [notify, t],
+  );
+
+  const runAuto = useCallback(() => {
+    const pipeline = pipelineRef.current;
+    if (!pipeline || !sourceRef.current) return;
+    // Measured against a neutral recipe: measuring the graded result would fold
+    // the previous suggestion back into the next one. The framing is kept,
+    // because the exposure of a photo is the exposure of the part being kept.
+    const probe = neutralRecipe();
+    probe.geometry = recipeRef.current.geometry;
+    probe.output = recipeRef.current.output;
+    const suggestion = suggestGrade(pipeline.measure(probe));
+    const base = { ...baselineRef.current, ...suggestion.params };
+    baselineRef.current = base;
+    setLookState('custom');
+    applyGlobals(base, strength);
+    notify(
+      t('toast.autoApplied', {
+        notes: suggestion.notes.map((note) => formatNote(note, t)).join(' / '),
+      }),
+    );
+  }, [applyGlobals, notify, strength, t]);
+
+  const runExport = useCallback(() => {
+    const pipeline = pipelineRef.current;
+    const image = sourceRef.current;
+    if (!pipeline || !image) return;
+    setExporting(true);
+    void (async () => {
+      try {
+        const current = recipeRef.current;
+        const plan = planExport(image.width, image.height, current);
+        const pixels = pipeline.readFullResolution(current);
+        const result = await exportImage(pixels, current, image.fileName, plan.tiles, image.exif);
+        const download = result.archive ?? (result.files[0] as { name: string; blob: Blob });
+        const url = URL.createObjectURL(download.blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = download.name;
+        anchor.click();
+        // Revoking in the same task can cut the download off before the browser
+        // has taken the blob; one turn of the loop is enough.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+
+        const clean = result.metadata === 'removed';
+        if (result.files.length > 1) {
+          notify(
+            t(clean ? 'toast.exportedTiles' : 'toast.exportedTilesWritten', {
+              count: result.files.length,
+              width: result.width,
+              height: result.height,
+              mime: result.mime,
+            }),
+            clean ? 'normal' : 'alert',
+          );
+        } else {
+          notify(
+            t(clean ? 'toast.exported' : 'toast.exportedWritten', {
+              width: result.width,
+              height: result.height,
+              mime: result.mime,
+            }),
+            clean ? 'normal' : 'alert',
+          );
+        }
+      } catch (err) {
+        const detail = err instanceof Error ? ` — ${err.message}` : '';
+        notify(`${t('toast.exportFailed')}${detail}`, 'alert');
+      } finally {
+        setExporting(false);
+      }
+    })();
+  }, [notify, t]);
+
+  // The framing object is replaced on every edit, so the thumbnails would rebuild
+  // after any slider settled. Holding the last one whose signature actually
+  // changed gives an identity that moves only when the framing does.
+  const geometryKey = geometrySignature(recipe.geometry);
+  const stableGeometry = useRef(recipe.geometry);
+  if (geometrySignature(stableGeometry.current) !== geometryKey) {
+    stableGeometry.current = recipe.geometry;
+  }
+  const framing = stableGeometry.current;
+
+  // Thumbnails follow the strength dial and the framing, but only once they stop
+  // moving: each one is a full evaluation of the graph at thumbnail size.
+  useEffect(() => {
+    if (!source) return;
+    const timer = setTimeout(() => {
+      const pipeline = pipelineRef.current;
+      if (!pipeline) return;
+      const next = new Map<string, ImageData>();
+      const base = neutralRecipe();
+      for (const entry of LOOKS) {
+        const scaled = applyStrength(entry.params, strength);
+        next.set(
+          entry.key,
+          pipeline.renderThumbnail(
+            {
+              ...base,
+              geometry: framing,
+              global: { ...base.global, ...scaled },
+              output: recipeRef.current.output,
+            },
+            THUMBNAIL_EDGE,
+          ),
+        );
+      }
+      setThumbnails(next);
+      // The thumbnail passes left the graph cache holding their results.
+      schedulerRef.current?.markDirty();
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [source, strength, framing]);
+
+  useEffect(
+    () => () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    },
+    [],
+  );
+
+  const plan = useMemo(
+    () => (source ? planExport(source.width, source.height, recipe) : null),
+    [source, recipe],
+  );
+
+  const frameAspect = useMemo(() => {
+    if (!source) return 1;
+    const [w, h] = frameSize(source.width, source.height, recipe.geometry);
+    return w / h;
+  }, [source, recipe.geometry]);
+
+  return useMemo(
+    () => ({
+      canvasRef,
+      viewportRef,
+      recipe,
+      source,
+      fatal,
+      tool,
+      mode,
+      look,
+      strength,
+      comparing,
+      exporting,
+      stats,
+      toneResponse,
+      thumbnails,
+      scale,
+      previewSize,
+      workingSpace,
+      toast,
+      plan,
+      frameAspect,
+      selectedText,
+      fontRevision,
+      setTool,
+      setMode,
+      setComparing,
+      setParam,
+      setOutput,
+      setMetadata,
+      setLook,
+      setStrength,
+      setGeometry,
+      setCrop,
+      setAspect,
+      rotate,
+      flip,
+      resetFraming,
+      setTiles,
+      matchCropToTiles,
+      addText,
+      updateText,
+      removeText,
+      selectText,
+      loadFont,
+      openFiles,
+      runAuto,
+      runExport,
+    }),
+    [
+      recipe,
+      source,
+      fatal,
+      tool,
+      mode,
+      look,
+      strength,
+      comparing,
+      exporting,
+      stats,
+      toneResponse,
+      thumbnails,
+      scale,
+      previewSize,
+      workingSpace,
+      toast,
+      plan,
+      frameAspect,
+      selectedText,
+      fontRevision,
+      setTool,
+      setComparing,
+      setParam,
+      setOutput,
+      setMetadata,
+      setLook,
+      setStrength,
+      setGeometry,
+      setCrop,
+      setAspect,
+      rotate,
+      flip,
+      resetFraming,
+      setTiles,
+      matchCropToTiles,
+      addText,
+      updateText,
+      removeText,
+      selectText,
+      loadFont,
+      openFiles,
+      runAuto,
+      runExport,
+    ],
+  );
+}
