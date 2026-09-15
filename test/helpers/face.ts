@@ -32,6 +32,18 @@ export interface FaceShape {
   relief?: number;
   /** How far the nose comes forward on top of that. */
   nose?: number;
+  /**
+   * How much the lower outline narrows towards the chin, 0 to 1.
+   *
+   * Zero leaves the outline an ellipse, and an ellipse is the one shape whose
+   * widest point sits at exactly half the width the area gives back — so it is
+   * the one shape that cannot tell whether something keyed to "how far out this
+   * vertex is" was measured against the outline or against the width. A real
+   * outline is wide at the cheekbones and narrow at the chin, which takes area
+   * away without taking any sideways reach away: measured on six photographs it
+   * reaches 1.11 to 1.35 times half its own recovered width.
+   */
+  taper?: number;
 }
 
 /**
@@ -133,6 +145,7 @@ export function makeFace({
   aspect = 1,
   relief = width * 0.25,
   nose = width * 0.06,
+  taper = 0,
 }: FaceShape = {}): NormalisedLandmark[] {
   const landmarks: NormalisedLandmark[] = Array.from({ length: 478 }, () => ({ x: 0, y: 0, z: 0 }));
   const cos = Math.cos(rotation);
@@ -178,8 +191,15 @@ export function makeFace({
   };
 
   // Semi-axes chosen so the outline's area is the canonical proportion of its
-  // own width squared, which is what the width is recovered from.
-  ellipse(CONTOURS.faceOval, 0, 0, width / 2, width * 0.7);
+  // own width squared, which is what the width is recovered from. The taper
+  // takes area out of the lower half without moving the widest point, which is
+  // the one thing an ellipse cannot do.
+  CONTOURS.faceOval.forEach((index, i) => {
+    const angle = (i / CONTOURS.faceOval.length) * Math.PI * 2;
+    const y = Math.sin(angle);
+    const narrowing = 1 - taper * Math.max(0, y);
+    put(index, Math.cos(angle) * (width / 2) * narrowing, y * (width * 0.7));
+  });
   ellipse(CONTOURS.leftEye, -width * 0.22, -width * 0.12, width * 0.09, width * 0.045);
   ellipse(CONTOURS.rightEye, width * 0.22, -width * 0.12, width * 0.09, width * 0.045);
   ellipse(CONTOURS.leftBrow, -width * 0.22, -width * 0.24, width * 0.11, width * 0.02);

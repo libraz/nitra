@@ -50,6 +50,19 @@ export interface ControlPoint {
  * are set from anatomical proportion and have not been calibrated against a
  * measured preference, so they are a starting point: the amount is right when
  * the top of the slider is clearly too much and three quarters of it is not.
+ *
+ * What the field actually carries out has been measured against them, on six
+ * photographs, because the shader averages the deltas reaching a pixel and
+ * fades that average by the largest weight among them — either step could have
+ * cost some of the amount, and neither does: the largest displacement the field
+ * realises is between 97 and 100 per cent of the largest delta asked for.
+ *
+ * Two of them do not mean their own number, for reasons in the geometry rather
+ * than in the field. {@link eyeEnlarge} is a fraction of an eye and not of a
+ * face, which comes out around a fifth of this in face widths. And the jaw term
+ * is proportional to how far out a vertex is *and* how low it is, and the
+ * outline is at its widest above where it is lowest, so their product peaks
+ * below either: the realised maximum is 55 to 71 per cent of the number here.
  */
 const REACH = {
   /** Half the narrowing at the widest part of the outline. */
@@ -185,6 +198,18 @@ function thinned(ring: readonly Point[], limit: number): Point[] {
  * to that over the lower half only, which is what separates "a narrower face"
  * from "a narrower jaw" — the same pull applied everywhere just scales the
  * face down.
+ *
+ * How far out a vertex is is measured against the outline's own widest point,
+ * not against half the face width. Those are not the same number: the width is
+ * taken from the outline's area so that it survives a tilted head, and the
+ * outline reaches 1.11 to 1.35 times half of it sideways, measured across six
+ * photographs. Against half the width the proportion overshoots one at the
+ * widest vertex by that much, so the slider's top asked for up to a third more
+ * than {@link REACH} says and asked for a different amount on every face — and
+ * on the widest of the six it was the guardrail rather than the reach that
+ * decided where the slider stopped. Against the outline's own reach the
+ * proportion is one exactly where the outline is widest, which is what makes
+ * the amount mean the same thing on the next photograph.
  */
 function outlinePoints(
   face: FaceRegions,
@@ -194,11 +219,16 @@ function outlinePoints(
   if (warp.faceSlim < 1e-4 && warp.jawline < 1e-4) return [];
   const { width, centre, axes } = face;
   const half = width / 2;
+  // Over the whole outline rather than the vertices this ends up using, so a
+  // photograph with more faces in it does not slim each of them differently.
+  let reach = 0;
+  for (const p of face.oval) reach = Math.max(reach, Math.abs(dot(sub(p, centre), axes.right)));
+  if (reach < 1e-9) return [];
   const points: ControlPoint[] = [];
 
   for (const p of thinned(face.oval, budget)) {
     const offset = sub(p, centre);
-    const lateral = dot(offset, axes.right) / half;
+    const lateral = dot(offset, axes.right) / reach;
     // Zero above the eye line, one at the bottom of the outline.
     const lower = Math.min(1, Math.max(0, dot(offset, axes.down) / half));
     // Negated, so the pull is towards the midline whichever side of it this

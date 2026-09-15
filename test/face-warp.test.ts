@@ -382,6 +382,36 @@ describe('the amounts staying relative to the face', () => {
     }
   });
 
+  it('slims by the same fraction whatever shape the outline is', () => {
+    // The slimming is proportional to how far out a vertex already is, and that
+    // proportion has to reach one where the outline is widest — otherwise the
+    // top of the slider means a different amount on every face.
+    //
+    // An ellipse cannot show this: its widest point sits at exactly half the
+    // width its area gives back, so measuring against the outline and measuring
+    // against the width agree. A real outline is wide at the cheekbones and
+    // narrow at the chin, which is what the taper is, and there the two differ
+    // by a third.
+    const warp = warpOf({ faceSlim: 1 });
+    const sideways = (region: FaceRegions) =>
+      Math.max(...region.oval.map((p) => Math.abs(along(p, region.centre, region.axes.right))));
+
+    const round = face();
+    const base = warpMagnitude(pointsOf([round], warp), round.width);
+    expect(sideways(round) / (round.width / 2)).toBeCloseTo(1, 1);
+
+    for (const taper of [0.6, 1]) {
+      const shaped = face({ taper });
+      // The case is only worth asserting if the outline really does reach past
+      // half its own width, which is what a taper is for.
+      expect(sideways(shaped) / (shaped.width / 2), `taper ${taper}`).toBeGreaterThan(1.05);
+      expect(warpMagnitude(pointsOf([shaped], warp), shaped.width), `taper ${taper}`).toBeCloseTo(
+        base,
+        4,
+      );
+    }
+  });
+
   it('means the same thing on a frame that is not square', () => {
     const warp = warpOf({ faceSlim: 1, eyeEnlarge: 1 });
     const square = face({ aspect: 1 });
