@@ -67,8 +67,12 @@ bool inRegion(vec2 uv) {
  * `uWarped` is zero when nothing is being reshaped, and then this is the
  * identity. It has to be a uniform rather than an absent texture because a
  * sampler that is never bound still reads, and what it reads is not zero.
+ *
+ * Exported because the background separation is built in that same unwarped
+ * frame and has to follow the displacement for the same reason. One copy, so
+ * the two cannot end up disagreeing about where the face went.
  */
-const GLSL_WARP = `
+export const GLSL_WARP = `
 uniform sampler2D uWarp;
 uniform int uWarped;
 
