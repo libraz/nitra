@@ -50,9 +50,25 @@ export function spec(path: string, labelKey: MessageKey): ParamSpec {
 }
 
 export const GROUPS: readonly ParamGroup[] = [
-  // Skin and the parts come first because they run first: the order the panel
-  // reads in is the order the picture is built in, which is the only ordering
-  // that keeps explaining itself as stages are added.
+  // The order the panel reads in is the order the picture is built in, which is
+  // the only ordering that keeps explaining itself as stages are added.
+  // Reshaping moves the pixels the skin stage then works on, so it comes first
+  // here for the same reason it comes first there.
+  {
+    id: 'reshape',
+    nameKey: 'groups.reshape',
+    requiresFace: true,
+    params: [
+      spec('face.warp.faceSlim', 'params.faceSlim'),
+      spec('face.warp.jawline', 'params.faceJawline'),
+      spec('face.warp.chin', 'params.faceChin'),
+      spec('face.warp.eyeEnlarge', 'params.faceEyeEnlarge'),
+      spec('face.warp.eyeTilt', 'params.faceEyeTilt'),
+      spec('face.warp.noseNarrow', 'params.faceNoseNarrow'),
+      spec('face.warp.noseBridge', 'params.faceNoseBridge'),
+      spec('face.warp.mouthWidth', 'params.faceMouthWidth'),
+    ],
+  },
   {
     id: 'skin',
     nameKey: 'groups.skin',

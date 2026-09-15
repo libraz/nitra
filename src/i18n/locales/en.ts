@@ -118,6 +118,7 @@ export const en = {
   'looks.none': 'Unedited',
   'looks.custom': 'Custom',
 
+  'groups.reshape': 'Shape',
   'groups.skin': 'Skin',
   'groups.parts': 'Eyes, lips and cheeks',
   'groups.tone': 'Tone',
@@ -128,6 +129,14 @@ export const en = {
   'groups.detail': 'Detail',
   'groups.effects': 'Effects',
 
+  'params.faceSlim': 'Slim the face',
+  'params.faceJawline': 'Tighten the jaw',
+  'params.faceChin': 'Chin length',
+  'params.faceEyeEnlarge': 'Open the eyes',
+  'params.faceEyeTilt': 'Eye tilt',
+  'params.faceNoseNarrow': 'Narrow the nose',
+  'params.faceNoseBridge': 'Nose bridge',
+  'params.faceMouthWidth': 'Mouth width',
   'params.faceSmooth': 'Smoothing',
   'params.faceBlemish': 'Even out',
   'params.faceTexture': 'Texture',

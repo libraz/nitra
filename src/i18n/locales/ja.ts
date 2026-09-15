@@ -115,6 +115,7 @@ export const ja: Messages = {
   'looks.none': '素のまま',
   'looks.custom': 'カスタム',
 
+  'groups.reshape': '輪郭',
   'groups.skin': '肌',
   'groups.parts': '目・唇・頬',
   'groups.tone': '階調',
@@ -125,6 +126,14 @@ export const ja: Messages = {
   'groups.detail': 'ディテール',
   'groups.effects': '効果',
 
+  'params.faceSlim': '小顔',
+  'params.faceJawline': '顎のライン',
+  'params.faceChin': '顎の長さ',
+  'params.faceEyeEnlarge': '目の大きさ',
+  'params.faceEyeTilt': '目尻の角度',
+  'params.faceNoseNarrow': '鼻幅',
+  'params.faceNoseBridge': '鼻筋',
+  'params.faceMouthWidth': '口幅',
   'params.faceSmooth': 'スムージング',
   'params.faceBlemish': '色ムラ均し',
   'params.faceTexture': '質感',
