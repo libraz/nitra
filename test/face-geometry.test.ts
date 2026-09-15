@@ -10,87 +10,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CONTOURS } from '../src/core/face/contours';
 import {
   centroid,
   convexHull,
   dilate,
   faceRegions,
-  type NormalisedLandmark,
   type Point,
   polygonArea,
 } from '../src/core/face/geometry';
-
-interface FaceShape {
-  /** Centre of the head, in image-width units. */
-  centre?: Point;
-  /** Width of the head, in image-width units. */
-  width?: number;
-  /** Tilt, in radians, clockwise. */
-  rotation?: number;
-  /** Image height over image width. */
-  aspect?: number;
-}
-
-/**
- * A synthetic face: ellipses where a real one has features.
- *
- * Laid out in the same isotropic units the geometry works in and converted back
- * to the model's normalised box on the way out, so a non-square frame exercises
- * the conversion rather than hiding it.
- */
-function makeFace({
-  centre = { x: 0.5, y: 0.5 },
-  width = 0.3,
-  rotation = 0,
-  aspect = 1,
-}: FaceShape = {}): NormalisedLandmark[] {
-  const landmarks: NormalisedLandmark[] = Array.from({ length: 478 }, () => ({ x: 0, y: 0 }));
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-
-  const put = (index: number, x: number, y: number) => {
-    const rx = x * cos - y * sin;
-    const ry = x * sin + y * cos;
-    landmarks[index] = { x: centre.x + rx, y: (centre.y + ry) / aspect };
-  };
-
-  const ellipse = (indices: readonly number[], cx: number, cy: number, rx: number, ry: number) => {
-    indices.forEach((index, i) => {
-      const angle = (i / indices.length) * Math.PI * 2;
-      put(index, cx + Math.cos(angle) * rx, cy + Math.sin(angle) * ry);
-    });
-  };
-
-  // Semi-axes chosen so the outline's area is the canonical proportion of its
-  // own width squared, which is what the width is recovered from.
-  ellipse(CONTOURS.faceOval, 0, 0, width / 2, width * 0.7);
-  ellipse(CONTOURS.leftEye, -width * 0.22, -width * 0.12, width * 0.09, width * 0.045);
-  ellipse(CONTOURS.rightEye, width * 0.22, -width * 0.12, width * 0.09, width * 0.045);
-  ellipse(CONTOURS.leftBrow, -width * 0.22, -width * 0.24, width * 0.11, width * 0.02);
-  ellipse(CONTOURS.rightBrow, width * 0.22, -width * 0.24, width * 0.11, width * 0.02);
-  ellipse(CONTOURS.lips[0] ?? [], 0, width * 0.28, width * 0.14, width * 0.07);
-  ellipse(CONTOURS.lips[1] ?? [], 0, width * 0.28, width * 0.09, width * 0.03);
-  return landmarks;
-}
-
-/** How far a point lies along an axis from a centre. */
-function along(point: Point, from: Point, axis: Point): number {
-  return (point.x - from.x) * axis.x + (point.y - from.y) * axis.y;
-}
-
-function inside(polygon: readonly Point[], point: Point): boolean {
-  let crossings = 0;
-  for (let i = 0; i < polygon.length; i++) {
-    const a = polygon[i] as Point;
-    const b = polygon[(i + 1) % polygon.length] as Point;
-    if (a.y === b.y) continue;
-    if (point.y < Math.min(a.y, b.y) || point.y >= Math.max(a.y, b.y)) continue;
-    const x = a.x + ((point.y - a.y) / (b.y - a.y)) * (b.x - a.x);
-    if (x > point.x) crossings++;
-  }
-  return crossings % 2 === 1;
-}
+import { along, inside, makeFace } from './helpers/face';
 
 describe('the face width every radius is a fraction of', () => {
   it('recovers the width of the outline it was built from', () => {
