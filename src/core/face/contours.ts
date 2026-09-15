@@ -125,4 +125,16 @@ export const CONTOURS = {
   lips: pathsFromConnections(FaceLandmarker.FACE_LANDMARKS_LIPS)
     .filter((path) => path.closed)
     .map((path) => path.indices),
+  /**
+   * The rim of each iris: four points at its extremes.
+   *
+   * These are the only landmarks that come from the model's refinement pass
+   * rather than from its mesh, so they are the only ones that can be absent. A
+   * build served a model without them gets 468 points instead of 478, and
+   * `faceRegions` treats the irises as not found rather than failing — which
+   * leaves the two iris controls doing nothing, the same as they do on a photo
+   * with no face in it.
+   */
+  leftIris: ring(FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, 'left iris'),
+  rightIris: ring(FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, 'right iris'),
 } as const;

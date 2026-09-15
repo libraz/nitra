@@ -53,6 +53,8 @@ function face(centre = { x: 0.5, y: 0.5 }, width = 0.3): NormalisedLandmark[] {
   ellipse(CONTOURS.rightEye, width * 0.22, -width * 0.12, width * 0.09, width * 0.045);
   ellipse(CONTOURS.leftBrow, -width * 0.22, -width * 0.24, width * 0.11, width * 0.02);
   ellipse(CONTOURS.rightBrow, width * 0.22, -width * 0.24, width * 0.11, width * 0.02);
+  ellipse(CONTOURS.leftIris, -width * 0.22, -width * 0.12, width * 0.05, width * 0.05);
+  ellipse(CONTOURS.rightIris, width * 0.22, -width * 0.12, width * 0.05, width * 0.05);
   ellipse(CONTOURS.lips[0] ?? [], 0, width * 0.28, width * 0.14, width * 0.07);
   ellipse(CONTOURS.lips[1] ?? [], 0, width * 0.28, width * 0.09, width * 0.03);
   return landmarks;
@@ -276,6 +278,20 @@ describe('rasterising a face', () => {
         },
       );
       expect(sample('features', centre)).toBeGreaterThan(200);
+    }
+  });
+
+  it('puts each iris inside its own eye and reaching past the lid', () => {
+    // The stage multiplies the two channels together, so the iris being a
+    // circle wider than the opening is not a fault — it is why the opening has
+    // to be the other half of the answer.
+    for (const [i, iris] of regions.irises.entries()) {
+      expect(sample('irises', iris.centre)).toBeGreaterThan(200);
+      expect(sample('sclera', iris.centre)).toBeGreaterThan(200);
+      const eye = centroid(regions.sclera[i] as { x: number; y: number }[]);
+      const aboveLid = { x: eye.x, y: eye.y - iris.radius * 1.05 };
+      expect(sample('irises', aboveLid)).toBeGreaterThan(0);
+      expect(sample('sclera', aboveLid)).toBe(0);
     }
   });
 

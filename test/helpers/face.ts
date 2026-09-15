@@ -55,6 +55,10 @@ export function makeFace({
   ellipse(CONTOURS.rightEye, width * 0.22, -width * 0.12, width * 0.09, width * 0.045);
   ellipse(CONTOURS.leftBrow, -width * 0.22, -width * 0.24, width * 0.11, width * 0.02);
   ellipse(CONTOURS.rightBrow, width * 0.22, -width * 0.24, width * 0.11, width * 0.02);
+  // Wider than the eye opening is tall, which is what an iris is: the lid
+  // covers the top and the bottom of it.
+  ellipse(CONTOURS.leftIris, -width * 0.22, -width * 0.12, width * 0.05, width * 0.05);
+  ellipse(CONTOURS.rightIris, width * 0.22, -width * 0.12, width * 0.05, width * 0.05);
   ellipse(CONTOURS.lips[0] ?? [], 0, width * 0.28, width * 0.14, width * 0.07);
   ellipse(CONTOURS.lips[1] ?? [], 0, width * 0.28, width * 0.09, width * 0.03);
   return landmarks;

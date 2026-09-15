@@ -114,6 +114,32 @@ describe('the regions', () => {
     }
   });
 
+  it('fits each iris to the middle of its own eye', () => {
+    const regions = faceRegions(makeFace(), 1);
+    expect(regions.irises).toHaveLength(2);
+    for (const [i, iris] of regions.irises.entries()) {
+      const eye = centroid(regions.sclera[i] as Point[]);
+      expect(Math.hypot(iris.centre.x - eye.x, iris.centre.y - eye.y)).toBeLessThan(
+        regions.width * 0.01,
+      );
+      // A circle fitted to four points on it, not a quadrilateral through them:
+      // the radius has to be the distance to the rim rather than shorter.
+      expect(iris.radius).toBeCloseTo(regions.width * 0.05, 3);
+      // Narrow, because the work inside it must not reach the white of the eye.
+      expect(iris.feather).toBeLessThan(iris.radius * 0.5);
+    }
+  });
+
+  it('treats a landmark set without the iris refinement as having no irises', () => {
+    // A model served without the refinement returns 468 points rather than 478,
+    // and the two iris controls then do nothing — which is the same thing they
+    // do on a photo with no face in it, and better than an analysis that fails.
+    const mesh = makeFace().slice(0, 468);
+    const regions = faceRegions(mesh, 1);
+    expect(regions.irises).toEqual([]);
+    expect(regions.sclera).toHaveLength(2);
+  });
+
   it('keeps every radius proportional to the face', () => {
     const small = faceRegions(makeFace({ width: 0.15 }), 1);
     const large = faceRegions(makeFace({ width: 0.45 }), 1);
@@ -124,6 +150,10 @@ describe('the regions', () => {
     );
     expect(polygonArea(large.undereye[0] as Point[])).toBeCloseTo(
       polygonArea(small.undereye[0] as Point[]) * ratio * ratio,
+      3,
+    );
+    expect((large.irises[0] as { radius: number }).radius).toBeCloseTo(
+      (small.irises[0] as { radius: number }).radius * ratio,
       3,
     );
   });

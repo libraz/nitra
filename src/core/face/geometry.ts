@@ -49,6 +49,14 @@ export interface FaceRegions {
   undereye: Point[][];
   cheeks: Disc[];
   /**
+   * The irises, as circles. Empty when the model did not return them.
+   *
+   * Two rather than one per eye is not assumed anywhere: the stages read a
+   * coverage channel, so a face turned far enough that only one iris was found
+   * is a face with one iris in it.
+   */
+  irises: Disc[];
+  /**
    * The width of the face, in image-width units.
    *
    * Every radius in the pipeline is a fraction of this.
@@ -88,6 +96,15 @@ const OVAL_AREA_RATIO = 1.1;
 
 /** How far the feature exclusions are grown, as a fraction of the face width. */
 const FEATURE_MARGIN = 0.012;
+
+/**
+ * Softness of the iris edge, as a fraction of its own radius.
+ *
+ * Narrow on purpose. The limbus is the sharpest edge in an eye, and the work
+ * done inside this region is local contrast — a wide falloff would spread it
+ * onto the white of the eye, where the same operation reads as a dirty sclera.
+ */
+const IRIS_FEATHER = 0.2;
 
 export function polygonArea(points: readonly Point[]): number {
   let sum = 0;
@@ -217,6 +234,23 @@ function undereyeBand(
 }
 
 /**
+ * The iris as a circle, fitted to the four points around its rim.
+ *
+ * Fitted rather than filled as a polygon, because a quadrilateral through four
+ * points on a circle encloses under two thirds of it: a third of every iris
+ * would sit outside the region, in a ring, which is the one place a local
+ * contrast must not stop abruptly. Four points are exactly enough to fit a
+ * circle to, and an iris is a circle.
+ */
+function irisDisc(rim: readonly Point[]): Disc {
+  const centre = centroid(rim);
+  const radius =
+    rim.reduce((sum, p) => sum + Math.hypot(p.x - centre.x, p.y - centre.y), 0) /
+    Math.max(rim.length, 1);
+  return { centre, radius, feather: radius * IRIS_FEATHER };
+}
+
+/**
  * Resolve one face's landmarks into the regions the stages need.
  *
  * @param aspect Image height divided by its width, which is what turns the
@@ -247,6 +281,12 @@ export function faceRegions(landmarks: readonly NormalisedLandmark[], aspect: nu
   const right = normalise(sub(centroid(rightEye), centroid(leftEye)));
   const centre = centroid(oval);
 
+  // The iris landmarks are the model's refinement rather than its mesh, so they
+  // are the one part of this that can simply be missing.
+  const irises = [CONTOURS.leftIris, CONTOURS.rightIris]
+    .filter((indices) => indices.every((i) => landmarks[i] !== undefined))
+    .map((indices) => irisDisc(pick(landmarks, indices, aspect)));
+
   const cheeks: Disc[] = [leftEye, rightEye].map((eye) => {
     const eyeCentre = centroid(eye);
     const below = add(eyeCentre, down, width * 0.3);
@@ -275,6 +315,7 @@ export function faceRegions(landmarks: readonly NormalisedLandmark[], aspect: nu
       undereyeBand(rightEye, right, down, width),
     ],
     cheeks,
+    irises,
     width,
     centre,
     axes: { right, down },

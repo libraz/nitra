@@ -53,6 +53,7 @@ export const FACE_MASK_CHANNELS = {
   sclera: { map: 1, channel: 0 },
   undereye: { map: 1, channel: 1 },
   cheeks: { map: 1, channel: 2 },
+  irises: { map: 1, channel: 3 },
 } as const;
 
 /** Longest edge of the coverage bitmaps. */
@@ -274,6 +275,14 @@ export function rasteriseFaces(
         maps[c.cheeks.map],
         c.cheeks.channel,
         { ...cheek, centre: { x: cheek.centre.x - shift.x, y: cheek.centre.y - shift.y } },
+        scale,
+      );
+    }
+    for (const iris of face.irises) {
+      fillDisc(
+        maps[c.irises.map],
+        c.irises.channel,
+        { ...iris, centre: { x: iris.centre.x - shift.x, y: iris.centre.y - shift.y } },
         scale,
       );
     }
