@@ -84,9 +84,14 @@ export function drawGrade(
   height: number,
 ): void {
   const useCurve = uniforms.curveKey !== 'identity' && curve !== null;
-  const program = programs.grade.bind().texture('uSource', sourceTexture);
-  if (useCurve && curve) program.texture('uCurve', curve);
-  program
+  programs.grade
+    .bind()
+    .texture('uSource', sourceTexture)
+    // Bound whether or not there is a curve, with the flag below saying which,
+    // because an unbound sampler still reads and what it reads is not the
+    // identity. The stand-in is the photo, which the shader never looks at on
+    // this path — the same arrangement the reshaping and the hair use.
+    .texture('uCurve', curve ?? sourceTexture)
     .float('uExposure', uniforms.exposure)
     .float('uContrast', uniforms.contrast)
     .float('uHighlights', uniforms.highlights)
@@ -221,7 +226,15 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
    * a local average multiplied by one minus the filter's `a`, so it falls away
    * at every edge the filter is protecting, and anything reading it as a
    * lightness is reading the filter's own decisions back as if they were skin.
+   *
+   * Every accumulation in the chain is weighted by the skin mask and carries the
+   * weight it accumulated, for the reason `GLSL_SKIN_MEAN` gives. With no face
+   * there is no mask to weight by, and the pass is told so rather than being
+   * handed a stand-in — the chain is still reachable by name, because the
+   * measurements ask for it under a recipe that switches the stages off.
    */
+  const skinMask = (ctx: PassContext) => ctx.face?.mask.texture ?? ctx.source.texture;
+
   const faceMean: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'faceMean',
     // No graph input: it reads the source photograph, over the working area
@@ -236,6 +249,8 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
       ctx.programs.faceMean
         .bind()
         .texture('uSource', ctx.source.texture)
+        .texture('uMask', skinMask(ctx))
+        .int('uMasked', ctx.face !== null ? 1 : 0)
         .int('uFromSrgb', ctx.source.fromSrgb ? 1 : 0)
         .vec4('uRegion', ...regionOf(ctx));
       ctx.glctx.draw(target, width, height);
@@ -256,9 +271,38 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
         .bind()
         .texture('uSource', ctx.source.texture)
         .texture('uMean', src.texture)
+        .texture('uMask', skinMask(ctx))
+        .int('uMasked', ctx.face !== null ? 1 : 0)
         .int('uFromSrgb', ctx.source.fromSrgb ? 1 : 0)
         .vec4('uRegion', ...regionOf(ctx));
       ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  /**
+   * The same statistics over the plain window, for the parts stage.
+   *
+   * Separate from the chain above because it answers a different question, and
+   * the difference falls exactly over the features: see
+   * {@link FACE_LOCAL_FRAGMENT}. It carries a weight of one so that readers
+   * divide through the same helper either way rather than having to know which
+   * texture they were given.
+   */
+  const faceLocal: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'faceLocal',
+    inputs: [],
+    signature: (_recipe, ctx) =>
+      `faceLocal:${ctx.source.generation}:${faceFilterSize(ctx).join('x')}:${ctx.face?.key ?? 'none'}`,
+    evaluate: (ctx) => {
+      const [width, height] = faceFilterSize(ctx);
+      const target = ctx.glctx.pool.acquire(width, height);
+      ctx.programs.faceLocal
+        .bind()
+        .texture('uSource', ctx.source.texture)
+        .int('uFromSrgb', ctx.source.fromSrgb ? 1 : 0)
+        .vec4('uRegion', ...regionOf(ctx));
+      ctx.glctx.draw(target, width, height);
       return target;
     },
   };
@@ -357,14 +401,17 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
    * under an eye.
    *
    * Both averages are read, and they answer different questions. The wide one
-   * is the skin an under-eye shadow is lifted towards; the narrow one is the
-   * local average the iris's own contrast is expanded about, and its window is
-   * the filter's radius, which is a few per cent of a face — about a third of
+   * is the skin an under-eye shadow is lifted towards, so it is the skin-weighted
+   * one: the band under an eye is skin, and a window over it that counted the
+   * eye would lift the shadow towards something darker than the cheek. The
+   * narrow one is the local average the iris's own contrast is expanded about,
+   * and an iris is not skin at all, so that one is the plain window. Its width
+   * is the filter's radius, which is a few per cent of a face — about a third of
    * an iris, which is the scale its pattern lives at.
    */
   const parts: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'parts',
-    inputs: ['skin', 'faceMeanV', 'faceWideMean', 'warpField'],
+    inputs: ['skin', 'faceLocalV', 'faceWideMean', 'warpField'],
     active: (recipe, ctx) => ctx.face !== null && !isPartsNeutral(recipe.face),
     signature: (recipe, ctx) =>
       `parts:${JSON.stringify(partsUniforms(recipe, ctx))}:${isWarping(recipe, ctx)}`,
@@ -846,6 +893,9 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     box('faceCoeff', 'faceCoeffH', 'y', radius),
     box('faceWideMeanH', 'faceMeanV', 'x', wideRadius),
     box('faceWideMean', 'faceWideMeanH', 'y', wideRadius),
+    faceLocal,
+    box('faceLocalH', 'faceLocal', 'x', radius),
+    box('faceLocalV', 'faceLocalH', 'y', radius),
     skin,
     parts,
     hairRaw,

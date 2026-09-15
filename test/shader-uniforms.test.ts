@@ -1,6 +1,6 @@
 /**
- * Every uniform a face shader declares has to be set, and every uniform the
- * pipeline sets has to exist.
+ * Every uniform a shader declares has to be set, and every uniform the render
+ * layer sets has to exist.
  *
  * This is checked because WebGL will not check it. Asking for the location of a
  * uniform that is not there returns nothing and setting it is quietly ignored,
@@ -30,8 +30,13 @@ const uniformsSource = readFileSync(
   'utf8',
 );
 
-/** The programs built from a stage shader, and the source of each. */
+/** Every program the pipeline builds, and the source of each. */
 const PROGRAMS: Record<string, string> = {
+  ingest: passes.INGEST_FRAGMENT,
+  grade: passes.GRADE_FRAGMENT,
+  blur: passes.BLUR_FRAGMENT,
+  copy: passes.COPY_FRAGMENT,
+  finish: passes.FINISH_FRAGMENT,
   subjectRaw: bokeh.SUBJECT_RAW_FRAGMENT,
   bokehLift: bokeh.BOKEH_LIFT_FRAGMENT,
   bokehGather: bokeh.BOKEH_GATHER_FRAGMENT,
@@ -40,6 +45,7 @@ const PROGRAMS: Record<string, string> = {
   warpField: face.FACE_WARP_FIELD_FRAGMENT,
   warp: face.FACE_WARP_FRAGMENT,
   faceMean: face.FACE_MEAN_FRAGMENT,
+  faceLocal: face.FACE_LOCAL_FRAGMENT,
   faceDeviation: face.FACE_DEVIATION_FRAGMENT,
   faceCoeff: face.FACE_COEFF_FRAGMENT,
   faceMaskRaw: face.FACE_MASK_RAW_FRAGMENT,
@@ -104,13 +110,26 @@ function assignedUniforms(program: string): Set<string> {
 }
 
 describe('the stage shaders and the calls that drive them', () => {
-  it('covers every program the pipeline builds from a stage shader', () => {
-    // A new shader that nothing here knows about would go unchecked.
-    const built = [
-      ...pipelineSource.matchAll(/(\w+): Program\.create\(this\.gl, (\w+)_FRAGMENT\)/g),
-    ].map(([, key]) => key as string);
-    const fromStageShaders = built.filter((key) => key in PROGRAMS);
-    expect(new Set(fromStageShaders)).toEqual(new Set(Object.keys(PROGRAMS)));
+  it('covers every program the pipeline builds', () => {
+    // The list above is written by hand, so the thing to check is that it is
+    // complete — and completeness has to be decided against the shader modules
+    // rather than against the list itself. Intersecting the two and comparing
+    // the result to the list is the mistake this replaced: it says every name
+    // in the list is built, which is true of a list missing half the shaders.
+    //
+    // What makes it decidable is that the modules export nothing but shaders, so
+    // a `Program.create` naming one of their exports is a program this file is
+    // responsible for, and a new shader is unchecked until it is added.
+    const shaders = new Set(
+      [bokeh, face, hair, passes].flatMap((module) =>
+        Object.keys(module).filter((name) => name.endsWith('_FRAGMENT')),
+      ),
+    );
+    const built = [...pipelineSource.matchAll(/(\w+): Program\.create\(this\.gl, (\w+)\)/g)];
+    const fromShaders = built
+      .filter(([, , source]) => shaders.has(source as string))
+      .map(([, key]) => key as string);
+    expect(new Set(fromShaders)).toEqual(new Set(Object.keys(PROGRAMS)));
   });
 
   for (const [program, source] of Object.entries(PROGRAMS)) {
@@ -140,6 +159,11 @@ describe('the stage shaders and the calls that drive them', () => {
     // present in the rest, which is not a shape anybody would look for.
     const missing = graphSource
       .split(/\n {2}const /)
+      // A node, rather than any declaration at that indentation: the helpers
+      // beside them reach for the source texture too, as the stand-in bound to
+      // a sampler a pass is told not to read, and a helper has no signature to
+      // carry anything in.
+      .filter((node) => /id: '[^']+'/.test(node))
       .filter((node) => node.includes('ctx.source.texture'))
       .filter((node) => !node.includes('ctx.source.generation'))
       .map((node) => node.match(/id: '([^']+)'/)?.[1] ?? node.slice(0, 40));
@@ -298,7 +322,60 @@ describe('the stage shaders themselves', () => {
   it('expands the iris about a local average rather than a fixed pivot', () => {
     // A pivot would darken a pale eye and lighten a dark one, which is a change
     // of eye colour wearing a contrast slider's label.
-    expect(face.FACE_PARTS_FRAGMENT).toMatch(/float detail = L - texture\(uMean, region\)\.x/);
+    expect(face.FACE_PARTS_FRAGMENT).toMatch(
+      /float detail = L - perSkin\(texture\(uMean, region\)\)\.x/,
+    );
+  });
+
+  it('gives the parts stage the plain window and the skin stage the weighted one', () => {
+    // Both are called `uMean` where they are read, so which texture is bound is
+    // the whole of the distinction, and it is made in one line of the graph. An
+    // iris averaged over the skin around it is averaged over the eyelid, since
+    // the features are what the skin mask has taken out: the expansion then
+    // pushes the eye towards the colour of the lid, which is not a contrast
+    // control at all.
+    expect(graphSource).toMatch(/id: 'parts',\n\s*inputs: \['skin', 'faceLocalV'/);
+    expect(graphSource).toMatch(/id: 'skin',\n\s*inputs: \['warp', 'faceCoeff', 'faceMeanV'/);
+  });
+
+  it('divides every weighted average through before reading it', () => {
+    // The statistics carry the skin they averaged over in the fourth channel, so
+    // a reader that takes `.xyz` straight gets a lightness scaled by how much
+    // skin happened to be in the window — near one over a cheek, near zero at
+    // the jaw. Which reads as a stage that works in the middle of a face and
+    // fades out towards the edge of it, rather than as an arithmetic mistake.
+    // Named rather than found by the sampler's name, because the same name is
+    // used for a different texture: the mask's own refinement has a `uMean`
+    // holding two unweighted signals, and it is not this. Which is the whole
+    // reason to write the pairs out — there is no property of the source that
+    // tells the two apart, so a guess at one is a check that passes for the
+    // wrong reason.
+    const READERS: Record<string, string[]> = {
+      faceDeviation: ['uMean'],
+      faceCoeff: ['uMean', 'uVariance'],
+      skin: ['uCoeff', 'uMean', 'uWideMean'],
+      parts: ['uMean', 'uWideMean'],
+      faceProbe: ['uMean', 'uWideMean'],
+    };
+
+    for (const [name, samplers] of Object.entries(READERS)) {
+      const source = PROGRAMS[name] as string;
+      expect(source, `${name} does not have the helper`).toContain('perSkin');
+      for (const sampler of samplers) {
+        expect(source, `${name} does not declare ${sampler}`).toContain(
+          `uniform sampler2D ${sampler};`,
+        );
+        // Stated as what may not appear rather than as what must: the division
+        // can be taken at the read or later, off a variable holding the whole of
+        // it, and both are fine. What is never fine is a channel taken straight
+        // off the packed texture, and that is the one a reader writes by habit,
+        // because it is what these textures held before they carried a weight.
+        const swizzled = new RegExp(`texture\\(${sampler},[^)]*\\)\\.[xyzwrgba]`);
+        expect(swizzled.test(source), `${name} takes a channel of ${sampler} undivided`).toBe(
+          false,
+        );
+      }
+    }
   });
 
   it('bounds the gather by a constant and spends every tap on the aperture', () => {

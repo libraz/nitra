@@ -126,6 +126,7 @@ export interface Programs {
   finish: Program;
   boxBlur: Program;
   faceMean: Program;
+  faceLocal: Program;
   faceDeviation: Program;
   faceCoeff: Program;
   faceMaskRaw: Program;

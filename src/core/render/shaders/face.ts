@@ -54,6 +54,39 @@ bool inRegion(vec2 uv) {
 `;
 
 /**
+ * Every average over the working area is an average of *skin*.
+ *
+ * A box window near the jaw or the hairline is half background and half face,
+ * and the average of it is a number about neither. The filter's low frequency
+ * then carries the hair into the cheek it is next to, and the wider average —
+ * which three stages read as "the skin around here" — carries it further,
+ * because that window is three times as wide.
+ *
+ * It shows up as a bias rather than as noise, and in one direction: whatever a
+ * face is in front of is usually darker than the face. So the wider average
+ * along the jaw sits below the narrower one, the skin stage reads the difference
+ * as blotchiness and subtracts it, and smoothing quietly darkens the edge of
+ * every face. That is the same term the smoothing is built on, so the effect
+ * grows with the slider rather than appearing at the top of it.
+ *
+ * The fix is to weight every accumulation by the skin mask and carry the weight
+ * along in the fourth channel, exactly as the skin probe already does with its
+ * sums: box averaging is linear, so the ratio of the two comes out as the
+ * mask-weighted mean with no scale left to take out. Readers divide through
+ * `perSkin` at the point of use.
+ *
+ * Where the window saw no skin at all the ratio is meaningless, and the guard
+ * in the denominator is there to keep it finite rather than to make it mean
+ * something: every stage that reads these bails out on a mask of zero before it
+ * looks at them.
+ */
+export const GLSL_SKIN_MEAN = `
+vec3 perSkin(vec4 packed) {
+  return packed.xyz / max(packed.w, 1e-4);
+}
+`;
+
+/**
  * Following the reshaping, for everything that reads a mask.
  *
  * The masks and the filter coefficients are built in the photograph's own frame
@@ -197,8 +230,44 @@ void main() {
  * those into the variance. Squaring here instead, the textbook way, does not
  * survive the precision the intermediates are held at: see {@link
  * FACE_DEVIATION_FRAGMENT}.
+ *
+ * Weighted by the skin mask, for the reason {@link GLSL_SKIN_MEAN} gives. The
+ * weight is a uniform rather than an unbound sampler because a photo with no
+ * face in it has no mask to bind, and a sampler nobody bound still reads.
  */
 export const FACE_MEAN_FRAGMENT = `${GLSL_HEADER}
+${GLSL_COLOR}
+${GLSL_REGION}
+uniform sampler2D uSource;
+uniform sampler2D uMask;
+uniform int uMasked;
+uniform int uFromSrgb;
+
+void main() {
+  vec3 c = max(texture(uSource, fromRegion(vUv)).rgb, 0.0);
+  if (uFromSrgb == 1) c = SRGB_TO_P3 * c;
+  vec3 lab = linearToOklab(c);
+  float w = uMasked == 1 ? texture(uMask, vUv).r : 1.0;
+  fragColor = vec4(lab * w, w);
+}
+`;
+
+/**
+ * The same lightness and chroma, over the plain window.
+ *
+ * The one thing that wants an average of the picture rather than an average of
+ * the skin: the iris. Its pattern is expanded about its own local average, and
+ * an iris is not skin — the features are taken out of the skin mask, so a
+ * skin-weighted window over an eye averages the eyelid around it and divides by
+ * almost nothing. Expanding the iris about *that* is not contrast, it is an eye
+ * pushed towards the colour of the lid.
+ *
+ * So the two questions get two windows. The skin stage asks what the skin
+ * around here looks like, and the parts stage asks what the picture around here
+ * looks like; neither answer serves the other, and the difference is exactly
+ * over the features, which is where the parts stage does all its work.
+ */
+export const FACE_LOCAL_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
 uniform sampler2D uSource;
@@ -207,8 +276,7 @@ uniform int uFromSrgb;
 void main() {
   vec3 c = max(texture(uSource, fromRegion(vUv)).rgb, 0.0);
   if (uFromSrgb == 1) c = SRGB_TO_P3 * c;
-  vec3 lab = linearToOklab(c);
-  fragColor = vec4(lab.x, lab.y, lab.z, 1.0);
+  fragColor = vec4(linearToOklab(c), 1.0);
 }
 `;
 
@@ -230,15 +298,19 @@ void main() {
 export const FACE_DEVIATION_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
+${GLSL_SKIN_MEAN}
 uniform sampler2D uSource;
 uniform sampler2D uMean;
+uniform sampler2D uMask;
+uniform int uMasked;
 uniform int uFromSrgb;
 
 void main() {
   vec3 c = max(texture(uSource, fromRegion(vUv)).rgb, 0.0);
   if (uFromSrgb == 1) c = SRGB_TO_P3 * c;
-  float d = linearToOklab(c).x - texture(uMean, vUv).x;
-  fragColor = vec4(d * d, 0.0, 0.0, 1.0);
+  float d = linearToOklab(c).x - perSkin(texture(uMean, vUv)).x;
+  float w = uMasked == 1 ? texture(uMask, vUv).r : 1.0;
+  fragColor = vec4(d * d * w, 0.0, 0.0, w);
 }
 `;
 
@@ -276,17 +348,26 @@ void main() {
  * `a` goes to zero and the filter returns the local mean. Where it straddles an
  * edge, `a` goes to one and the filter returns the photo. That is the whole
  * reason an eyelash survives this and a pore does not.
+ *
+ * The coefficients are averaged after this, so they carry the same weight the
+ * statistics they came from did. Averaged unweighted, a window at the jaw would
+ * mix in coefficients computed where there was no skin to compute them from,
+ * and those sit at the end of the range that returns the photograph unchanged —
+ * a ring of unsmoothed skin just inside the mask.
  */
 export const FACE_COEFF_FRAGMENT = `${GLSL_HEADER}
+${GLSL_SKIN_MEAN}
 uniform sampler2D uMean;
 uniform sampler2D uVariance;
 uniform float uEpsilon;
 
 void main() {
-  float meanL = texture(uMean, vUv).x;
-  float variance = max(texture(uVariance, vUv).x, 0.0);
+  vec4 mean = texture(uMean, vUv);
+  float meanL = perSkin(mean).x;
+  float variance = max(perSkin(texture(uVariance, vUv)).x, 0.0);
   float a = variance / (variance + uEpsilon);
-  fragColor = vec4(a, meanL - a * meanL, 0.0, 1.0);
+  float w = mean.w;
+  fragColor = vec4(a * w, (meanL - a * meanL) * w, 0.0, w);
 }
 `;
 
@@ -405,6 +486,7 @@ export const FACE_SKIN_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
 ${GLSL_WARP}
+${GLSL_SKIN_MEAN}
 uniform sampler2D uSource;
 uniform sampler2D uCoeff;
 uniform sampler2D uMean;
@@ -433,9 +515,9 @@ void main() {
     return;
   }
 
-  vec4 coeff = texture(uCoeff, region);
-  vec3 mean = texture(uMean, region).xyz;
-  vec3 wide = texture(uWideMean, region).xyz;
+  vec3 coeff = perSkin(texture(uCoeff, region));
+  vec3 mean = perSkin(texture(uMean, region));
+  vec3 wide = perSkin(texture(uWideMean, region));
   vec3 lab = linearToOklab(c);
   float L = lab.x;
   vec2 ab = lab.yz;
@@ -506,6 +588,7 @@ export const FACE_PARTS_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
 ${GLSL_WARP}
+${GLSL_SKIN_MEAN}
 uniform sampler2D uSource;
 uniform sampler2D uPolyA;
 uniform sampler2D uPolyB;
@@ -541,7 +624,7 @@ void main() {
     return;
   }
 
-  vec3 wide = texture(uWideMean, region).xyz;
+  vec3 wide = perSkin(texture(uWideMean, region));
   vec3 lab = linearToOklab(c);
   float L = lab.x;
   vec2 ab = lab.yz;
@@ -575,7 +658,7 @@ void main() {
     // Against a local average of the photograph rather than a fixed pivot, so
     // what is expanded is the pattern in this iris and the ring at its edge,
     // and a light eye does not come out darker than it was.
-    float detail = L - texture(uMean, region).x;
+    float detail = L - perSkin(texture(uMean, region)).x;
     L += detail * iris * (1.0 - pale) * uIris * 0.9;
     // The catchlight is the one thing in an iris far above its own average, so
     // it needs no mask of its own — and it must not be excluded as the white of
@@ -660,6 +743,7 @@ export const FACE_PROBE_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
 ${GLSL_WARP}
+${GLSL_SKIN_MEAN}
 uniform sampler2D uSource;
 uniform sampler2D uMask;
 uniform sampler2D uMean;
@@ -674,8 +758,8 @@ void main() {
   float weight = uSurround == 1 ? 1.0 - mask : mask;
   vec3 lab = linearToOklab(max(texture(uSource, vUv).rgb, 0.0));
   vec2 probeAt = here ? region : vec2(0.5);
-  vec3 mean = texture(uMean, probeAt).xyz;
-  vec3 wide = texture(uWideMean, probeAt).xyz;
+  vec3 mean = perSkin(texture(uMean, probeAt));
+  vec3 wide = perSkin(texture(uWideMean, probeAt));
 
   // Unevenness is the slow variation in the skin's own lightness: the local
   // average against a wider one, which is the same difference the skin stage
