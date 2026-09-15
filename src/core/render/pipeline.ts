@@ -24,7 +24,7 @@ import {
   outputToSource,
 } from '../geometry/transform';
 import { Dag } from '../graph/dag';
-import { cutOut, loadHealer } from '../heal/inpaint';
+import { cutOut } from '../heal/inpaint';
 import { HealPlate } from '../heal/plate';
 import type { SourceImage } from '../io/decode';
 import { buildCurveLut } from '../recipe/curve';
@@ -224,16 +224,21 @@ export class Pipeline {
   /**
    * Fill the spots the recipe asks for, and put the result on the GPU.
    *
-   * Asynchronous, and the only stage that is. Everything else is a shader the
-   * renderer can run inside a frame; this one has to fetch a module the first
-   * time and then read and write pixels on the CPU, so it is a step the caller
-   * takes before rendering rather than a node in the graph. A render that
-   * happens before it resolves shows the photograph as it was, which is the
-   * right thing to show while the fill has not happened yet.
+   * A step the caller takes before rendering rather than a node in the graph.
+   * Everything else is a shader the renderer can run inside a frame; this one
+   * reads and writes pixels on the CPU, and a render that happens before it has
+   * run shows the photograph as it was, which is the right thing to show while
+   * the fill has not happened yet.
    *
-   * It must never be awaited from a drag: the fill is milliseconds, but a
-   * synchronous pixel read inside the loop is a slider that stops following the
-   * pointer. Spots are placed by a click, and this runs on that click.
+   * The promise is the stage's contract rather than a description of what it
+   * does: the fill does not yield, and while it runs nothing else does. Keeping
+   * it is what would let the work move off the main thread without the
+   * scheduler learning about it.
+   *
+   * It must never be awaited from a drag. The fill is tenths of a second at the
+   * top of the brush's range, and a pixel read inside the loop is a slider that
+   * stops following the pointer. Spots are placed by a click, and this runs on
+   * that click.
    *
    * What comes out is a second source texture standing in for the photograph.
    * Substituting the source is what puts the stage where the design fixes it —
@@ -245,16 +250,11 @@ export class Pipeline {
     const plate = this.plate;
     const source = this.source;
     if (!plate || !source) return;
-    // Asked before the module is fetched: this runs on the way to every settled
-    // render, and almost none of them placed a spot.
+    // This runs on the way to every settled render, and almost none of them
+    // placed a spot.
     if (plate.matches(recipe.heal)) return;
 
-    const module = await loadHealer();
-    // A second photograph arrived while the module was being fetched, and this
-    // plate belongs to the one that left.
-    if (this.plate !== plate || this.source !== source) return;
-
-    const update = plate.apply(module, recipe.heal);
+    const update = plate.apply(recipe.heal);
     if (update === null) return;
 
     const pixels = plate.pixels;

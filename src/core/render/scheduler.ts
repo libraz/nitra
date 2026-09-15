@@ -19,7 +19,7 @@ export interface SchedulerHooks {
   stats?(stats: RenderStats): void;
   /** Called whenever the displayed resolution changes. */
   scaleChanged?(scale: 'proxy' | 'full'): void;
-  /** Called when the inpainting module could not be loaded or run. */
+  /** Called when the fill, or the texture it has to go into, could not be made. */
   healFailed?(error: unknown): void;
 }
 

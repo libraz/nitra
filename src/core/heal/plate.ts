@@ -15,7 +15,7 @@
  * plate is as large as the decoded image.
  */
 
-import { type Healer, type HealSpot, healSpot, type Region, regionFor } from './inpaint';
+import { type HealSpot, healSpot, type Region, regionFor } from './inpaint';
 
 /** What changed in the plate, for whoever has to get it onto the GPU. */
 export interface PlateUpdate {
@@ -58,10 +58,8 @@ export class HealPlate {
   /**
    * Whether the plate already says what `spots` asks for.
    *
-   * Asked before the module is fetched, not after. This is the common answer —
-   * it is true on the way to every settled render that did not place a spot —
-   * and loading a module to be told nothing needs filling would retry a failed
-   * fetch, and report it, once per render.
+   * The common answer, and the cheap one: it is true on the way to every settled
+   * render that did not place a spot, which is almost all of them.
    */
   matches(spots: readonly HealSpot[]): boolean {
     return spots.length === this.applied.length && this.appends(spots);
@@ -77,7 +75,7 @@ export class HealPlate {
    * spots are filled into the plate as it stands, and their own rectangles are
    * all that has to be uploaded. Anything else is a rebuild.
    */
-  apply(module: Healer, spots: readonly HealSpot[]): PlateUpdate | null {
+  apply(spots: readonly HealSpot[]): PlateUpdate | null {
     if (this.matches(spots)) return null;
 
     if (spots.length === 0) {
@@ -101,7 +99,7 @@ export class HealPlate {
       this.applied.push(spot);
       // A spot too small to have a pixel in it fills nothing, and reporting a
       // rectangle for it would upload bytes that did not change.
-      if (healSpot(module, plate, this.width, this.height, spot) === 0) continue;
+      if (healSpot(plate, this.width, this.height, spot) === 0) continue;
       rects.push(regionFor(spot, this.width, this.height).region);
     }
     return { rebuilt: !appended, rects };

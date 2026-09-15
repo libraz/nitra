@@ -1,38 +1,28 @@
 /**
  * The Heal stage, both halves of it.
  *
- * The arithmetic around the module is asserted over the whole cross-product of
+ * The arithmetic around the fill is asserted over the whole cross-product of
  * where a spot can sit and how large it can be, rather than over cases chosen by
  * hand: a region that slips outside the frame or loses the spot it was cut for
  * is a crash or a fill in the wrong place, and the combination that does it is
  * the one nobody would think to try.
  *
- * The module itself is loaded from the build tree. It is compiled rather than
- * committed, so `bun run test` builds it first — unconditionally, because the
- * alternative is a suite that skips the only test of the only hand-written
- * WebAssembly in the project and reports the same green either way.
+ * The fill itself is asserted by what it leaves behind rather than against
+ * stored bytes. What it has to do is clear a mark and keep the pores, and a
+ * golden would pass or fail on a tie between two equally good matched patches —
+ * which says nothing about either.
  */
 
-import { readFileSync } from 'node:fs';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   cutOut,
-  type Healer,
   type HealSpot,
   healSpot,
   pasteInto,
   type Region,
   regionFor,
 } from '../src/core/heal/inpaint';
-
-const WASM = new URL('../public/wasm/heal.wasm', import.meta.url);
-
-let healer: Healer;
-
-beforeAll(async () => {
-  const { instance } = await WebAssembly.instantiate(readFileSync(WASM), {});
-  healer = instance.exports as unknown as Healer;
-});
+import { inpaint } from '../src/core/heal/patchmatch';
 
 /**
  * A patch of synthetic skin with a dark blemish in the middle of it.
@@ -149,7 +139,7 @@ describe('the region one spot is worked on', () => {
   });
 
   it('puts the spot where the region says it is', () => {
-    // The centre is handed to the module in the region's own coordinates. Off by
+    // The centre is handed to the fill in the region's own coordinates. Off by
     // the region's offset, the fill lands somewhere else entirely — and on a
     // spot near an edge, where the region is no longer centred on it, that is
     // exactly the mistake available to make.
@@ -217,13 +207,13 @@ describe('filling a blemish', () => {
     return d > 14 && d < 26;
   };
   // A spot in image coordinates that lands on the synthetic blemish. The region
-  // is the whole patch, so the module sees exactly what is built above.
+  // is the whole patch, so the fill sees exactly what is built above.
   const spot: HealSpot = { x: 0.5078125, y: 0.5078125, r: 8 / SIZE };
 
   it('takes the mark back to the skin around it', () => {
     const marked = skin(SIZE, SPOT);
     const plate = new Uint8ClampedArray(marked);
-    expect(healSpot(healer, plate, SIZE, SIZE, spot)).toBeGreaterThan(0);
+    expect(healSpot(plate, SIZE, SIZE, spot)).toBeGreaterThan(0);
     const surround = mean(marked, SIZE, around);
     expect(mean(marked, SIZE, inside)).toBeLessThan(surround - 30);
     expect(mean(plate, SIZE, inside)).toBeCloseTo(surround, -1);
@@ -235,7 +225,7 @@ describe('filling a blemish', () => {
     // which is the plastic skin the rest of the pipeline is built to avoid — so
     // the fill is measured against the texture of the skin it sits in.
     const plate = skin(SIZE, SPOT);
-    healSpot(healer, plate, SIZE, SIZE, spot);
+    healSpot(plate, SIZE, SIZE, spot);
     const kept = detail(plate, SIZE, inside) / detail(skin(SIZE), SIZE, around);
     expect(kept).toBeGreaterThan(0.8);
   });
@@ -244,7 +234,7 @@ describe('filling a blemish', () => {
     const marked = skin(SIZE, SPOT);
     const plate = new Uint8ClampedArray(marked);
     const { radius } = regionFor(spot, SIZE, SIZE);
-    healSpot(healer, plate, SIZE, SIZE, spot);
+    healSpot(plate, SIZE, SIZE, spot);
     for (let y = 0; y < SIZE; y++) {
       for (let x = 0; x < SIZE; x++) {
         // The join reaches a little past the radius; beyond that the photograph
@@ -261,8 +251,8 @@ describe('filling a blemish', () => {
     // different photograph, so the search is seeded rather than random.
     const first = skin(SIZE, SPOT);
     const second = skin(SIZE, SPOT);
-    healSpot(healer, first, SIZE, SIZE, spot);
-    healSpot(healer, second, SIZE, SIZE, spot);
+    healSpot(first, SIZE, SIZE, spot);
+    healSpot(second, SIZE, SIZE, spot);
     expect([...first]).toEqual([...second]);
   });
 
@@ -270,10 +260,10 @@ describe('filling a blemish', () => {
     // The second reads what the first left behind, the same way it would if a
     // person had healed them one after the other.
     const plate = skin(SIZE, SPOT);
-    healSpot(healer, plate, SIZE, SIZE, spot);
+    healSpot(plate, SIZE, SIZE, spot);
     const once = new Uint8ClampedArray(plate);
     const overlapping: HealSpot = { x: 0.55, y: 0.5078125, r: 8 / SIZE };
-    expect(healSpot(healer, plate, SIZE, SIZE, overlapping)).toBeGreaterThan(0);
+    expect(healSpot(plate, SIZE, SIZE, overlapping)).toBeGreaterThan(0);
     expect([...plate]).not.toEqual([...once]);
     expect(mean(plate, SIZE, inside)).toBeCloseTo(mean(skin(SIZE), SIZE, around), -1);
   });
@@ -281,7 +271,7 @@ describe('filling a blemish', () => {
   it('does nothing for a spot smaller than a pixel', () => {
     const plate = skin(SIZE, SPOT);
     const before = new Uint8ClampedArray(plate);
-    expect(healSpot(healer, plate, SIZE, SIZE, { x: 0.5, y: 0.5, r: 0.0001 })).toBe(0);
+    expect(healSpot(plate, SIZE, SIZE, { x: 0.5, y: 0.5, r: 0.0001 })).toBe(0);
     expect([...plate]).toEqual([...before]);
   });
 
@@ -291,12 +281,8 @@ describe('filling a blemish', () => {
     // something is the one answer worth refusing.
     const size = 12;
     const patch = skin(size);
-    const ptr = healer.allocate(patch.length);
-    new Uint8Array(healer.memory.buffer, ptr, patch.length).set(patch);
-    const touched = healer.heal(ptr, size, size, size / 2, size / 2, size, 1);
-    const after = new Uint8ClampedArray(new Uint8Array(healer.memory.buffer, ptr, patch.length));
-    healer.release(ptr, patch.length);
-    expect(touched).toBe(0);
-    expect([...after]).toEqual([...patch]);
+    const before = new Uint8ClampedArray(patch);
+    expect(inpaint(patch, size, size, size / 2, size / 2, size, 1)).toBe(0);
+    expect([...patch]).toEqual([...before]);
   });
 });

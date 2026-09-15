@@ -8,20 +8,11 @@
  * inverse of a fill, so the pixels have to come from the decoded photograph.
  */
 
-import { readFileSync } from 'node:fs';
-import { beforeAll, describe, expect, it } from 'vitest';
-import type { Healer, HealSpot } from '../src/core/heal/inpaint';
+import { describe, expect, it } from 'vitest';
+import type { HealSpot } from '../src/core/heal/inpaint';
 import { HealPlate } from '../src/core/heal/plate';
 
-const WASM = new URL('../public/wasm/heal.wasm', import.meta.url);
 const SIZE = 192;
-
-let healer: Healer;
-
-beforeAll(async () => {
-  const { instance } = await WebAssembly.instantiate(readFileSync(WASM), {});
-  healer = instance.exports as unknown as Healer;
-});
 
 /** Flat skin with grain, and a dark mark wherever one is asked for. */
 function photograph(marks: readonly { x: number; y: number; r: number }[]): Uint8ClampedArray {
@@ -78,7 +69,7 @@ describe('the plate', () => {
     const { plate } = plateOf();
     expect(plate.pixels).toBeNull();
     // An empty list is not a change to apply; the photograph is already it.
-    expect(plate.apply(healer, [])).toBeNull();
+    expect(plate.apply([])).toBeNull();
     expect(plate.pixels).toBeNull();
   });
 
@@ -87,7 +78,7 @@ describe('the plate', () => {
     const before = pristine.slice();
     const dark = meanAt(pristine, LEFT);
 
-    const update = plate.apply(healer, [LEFT]);
+    const update = plate.apply([LEFT]);
     expect(update).not.toBeNull();
     expect(update?.rebuilt).toBe(false);
     expect(update?.rects).toHaveLength(1);
@@ -101,7 +92,7 @@ describe('the plate', () => {
 
   it('reports the rectangle the fill reached, not the whole frame', () => {
     const { plate } = plateOf();
-    const update = plate.apply(healer, [LEFT]);
+    const update = plate.apply([LEFT]);
     const rect = update?.rects[0] as { x: number; y: number; width: number; height: number };
     // The region reaches past the spot on every side, because the surrounding
     // skin is the only place the fill has to copy from.
@@ -113,19 +104,19 @@ describe('the plate', () => {
 
   it('does nothing when asked for what it has already done', () => {
     const { plate } = plateOf();
-    expect(plate.apply(healer, [LEFT, RIGHT])).not.toBeNull();
-    expect(plate.apply(healer, [LEFT, RIGHT])).toBeNull();
+    expect(plate.apply([LEFT, RIGHT])).not.toBeNull();
+    expect(plate.apply([LEFT, RIGHT])).toBeNull();
     // A separate object with the same numbers is the same edit: the recipe is
     // replaced on every change, so identity would report work on every render.
-    expect(plate.apply(healer, [{ ...LEFT }, { ...RIGHT }])).toBeNull();
+    expect(plate.apply([{ ...LEFT }, { ...RIGHT }])).toBeNull();
   });
 
   it('appends without redoing what is already in the plate', () => {
     const { plate } = plateOf();
-    plate.apply(healer, [LEFT]);
+    plate.apply([LEFT]);
     const filled = (plate.pixels as Uint8ClampedArray).slice();
 
-    const update = plate.apply(healer, [LEFT, RIGHT]);
+    const update = plate.apply([LEFT, RIGHT]);
     expect(update?.rebuilt).toBe(false);
     expect(update?.rects).toHaveLength(1);
 
@@ -144,9 +135,9 @@ describe('the plate', () => {
 
   it('puts back what was under a spot that is taken away', () => {
     const { pristine, plate } = plateOf();
-    plate.apply(healer, [LEFT, RIGHT]);
+    plate.apply([LEFT, RIGHT]);
 
-    const update = plate.apply(healer, [LEFT]);
+    const update = plate.apply([LEFT]);
     // There is no inverse of a fill, so the plate is built again from the
     // photograph and the remaining spots are replayed.
     expect(update?.rebuilt).toBe(true);
@@ -159,16 +150,16 @@ describe('the plate', () => {
 
   it('rebuilds when a spot moves rather than treating it as a new one', () => {
     const { plate } = plateOf();
-    plate.apply(healer, [LEFT, RIGHT]);
-    const update = plate.apply(healer, [LEFT, { ...RIGHT, x: 0.66 }]);
+    plate.apply([LEFT, RIGHT]);
+    const update = plate.apply([LEFT, { ...RIGHT, x: 0.66 }]);
     expect(update?.rebuilt).toBe(true);
     expect(update?.rects).toHaveLength(2);
   });
 
   it('goes back to costing nothing when the last spot is removed', () => {
     const { plate } = plateOf();
-    plate.apply(healer, [LEFT]);
-    const update = plate.apply(healer, []);
+    plate.apply([LEFT]);
+    const update = plate.apply([]);
     expect(update).toEqual({ rebuilt: true, rects: [] });
     // The plate is dropped rather than refilled: the photograph is already the
     // answer, and holding a copy of it is holding the decoded image twice.
@@ -178,7 +169,7 @@ describe('the plate', () => {
   it('composes two spots that overlap', () => {
     const near: HealSpot = { x: 0.32, y: 0.4, r: 0.03 };
     const { pristine, plate } = plateOf([LEFT, near]);
-    plate.apply(healer, [LEFT, near]);
+    plate.apply([LEFT, near]);
     const pixels = plate.pixels as Uint8ClampedArray;
     // The second fill read what the first left behind, so neither mark is left
     // in the overlap — which is what would happen if a person had healed them
@@ -190,11 +181,11 @@ describe('the plate', () => {
   it('remembers a spot too small to fill anything', () => {
     const { plate } = plateOf();
     const speck: HealSpot = { x: 0.5, y: 0.5, r: 0.002 };
-    const update = plate.apply(healer, [speck]);
+    const update = plate.apply([speck]);
     // Under a pixel and a half of radius there is nothing to fill, so there is
     // nothing to upload either — but the spot is in the recipe, and asking again
     // must not run it a second time.
     expect(update).toEqual({ rebuilt: false, rects: [] });
-    expect(plate.apply(healer, [speck])).toBeNull();
+    expect(plate.apply([speck])).toBeNull();
   });
 });

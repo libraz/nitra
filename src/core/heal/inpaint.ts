@@ -1,21 +1,18 @@
 /**
- * The Heal stage's host side: cutting a region out, and putting it back.
+ * The Heal stage around the fill: cutting a region out, and putting it back.
  *
- * The inpainting itself is the one piece of hand-written WebAssembly in the
- * project (`crates/heal`), and everything here is the arithmetic around it: how
- * large a region one spot needs, where that region sits in the photograph, and
- * the copy across the module boundary.
+ * The fill itself is in `patchmatch.ts`; everything here is the arithmetic
+ * around it — how large a region one spot needs, and where that region sits in
+ * the photograph.
  *
- * It never runs inside the drag loop. A module that reads pixels has to be given
- * them, and giving it pixels while a slider is moving means a synchronous read
- * that stops the pipeline — the slider stops following the pointer, which is the
- * one thing the whole proxy renderer exists to prevent. So this runs once per
- * spot, against the photograph as it was decoded, and what the renderer samples
- * afterwards is the result.
+ * It never runs inside the drag loop. The fill reads pixels, and reading pixels
+ * while a slider is moving means a synchronous read that stops the pipeline —
+ * the slider stops following the pointer, which is the one thing the whole proxy
+ * renderer exists to prevent. So this runs once per spot, against the photograph
+ * as it was decoded, and what the renderer samples afterwards is the result.
  */
 
-/** Where the compiled module is served from. See `scripts/build-wasm.ts`. */
-const MODULE_URL = 'wasm/heal.wasm';
+import { inpaint } from './patchmatch';
 
 /**
  * How far past the spot the region reaches, in multiples of its radius.
@@ -30,58 +27,8 @@ const REGION_MARGIN = 1.6;
 /** Softness of the join, as a fraction of the spot's radius. */
 const FEATHER = 0.35;
 
-/** Smallest spot worth running the module for, in pixels of radius. */
+/** Smallest spot worth running the fill for, in pixels of radius. */
 const LEAST_RADIUS = 1.5;
-
-export class HealError extends Error {}
-
-/** The module's exports, as the host uses them. */
-export interface Healer {
-  memory: WebAssembly.Memory;
-  allocate: (len: number) => number;
-  release: (ptr: number, len: number) => void;
-  heal: (
-    ptr: number,
-    width: number,
-    height: number,
-    cx: number,
-    cy: number,
-    radius: number,
-    feather: number,
-  ) => number;
-}
-
-let loading: Promise<Healer> | null = null;
-
-/**
- * Load the module, once per session.
- *
- * Held as the pending promise rather than the resolved value, so two spots
- * placed in quick succession wait on one fetch instead of starting two. A failed
- * load is not remembered as a load: the next spot tries again rather than
- * inheriting a rejected promise for the rest of the session.
- */
-export function loadHealer(): Promise<Healer> {
-  if (loading) return loading;
-  loading = (async () => {
-    const response = await fetch(MODULE_URL);
-    if (!response.ok) {
-      throw new HealError(`${MODULE_URL}: ${response.status} ${response.statusText}`);
-    }
-    const { instance } = await WebAssembly.instantiate(await response.arrayBuffer(), {});
-    const exports = instance.exports as unknown as Healer;
-    for (const name of ['memory', 'allocate', 'release', 'heal'] as const) {
-      if (!exports[name]) throw new HealError(`the inpainting module has no ${name}`);
-    }
-    return exports;
-  })().catch((cause) => {
-    loading = null;
-    throw cause instanceof HealError
-      ? cause
-      : new HealError(cause instanceof Error ? cause.message : 'the inpainting module failed');
-  });
-  return loading;
-}
 
 /** A spot as the recipe holds it: normalised centre, radius in image widths. */
 export interface HealSpot {
@@ -164,7 +111,6 @@ export function pasteInto(
  * and so has no photograph left to copy from.
  */
 export function healSpot(
-  module: Healer,
   plate: Uint8ClampedArray,
   imageWidth: number,
   imageHeight: number,
@@ -173,31 +119,20 @@ export function healSpot(
   const { region, centre, radius } = regionFor(spot, imageWidth, imageHeight);
   if (radius < LEAST_RADIUS) return 0;
 
+  // Cut out rather than filled where it lies. The region is not a working copy
+  // the fill happens to need — it is the bound on what the search may copy from,
+  // and handing over exactly those pixels is what states that bound.
   const patch = cutOut(plate, imageWidth, region);
-  const ptr = module.allocate(patch.length);
-  try {
-    new Uint8Array(module.memory.buffer, ptr, patch.length).set(patch);
-    const touched = module.heal(
-      ptr,
-      region.width,
-      region.height,
-      centre[0],
-      centre[1],
-      radius,
-      radius * FEATHER,
-    );
-    if (touched === 0) return 0;
-    // Read back before the buffer is handed over, and copy rather than view:
-    // the module's memory can move under a later allocation, and a view into it
-    // would then be pointing at somebody else's bytes.
-    pasteInto(
-      plate,
-      imageWidth,
-      region,
-      new Uint8ClampedArray(new Uint8Array(module.memory.buffer, ptr, patch.length)),
-    );
-    return touched;
-  } finally {
-    module.release(ptr, patch.length);
-  }
+  const touched = inpaint(
+    patch,
+    region.width,
+    region.height,
+    centre[0],
+    centre[1],
+    radius,
+    radius * FEATHER,
+  );
+  if (touched === 0) return 0;
+  pasteInto(plate, imageWidth, region, patch);
+  return touched;
 }
