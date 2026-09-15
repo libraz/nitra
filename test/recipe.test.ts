@@ -18,10 +18,11 @@ describe('defaults', () => {
     // so must one where a field went missing.
     const recipe = neutralRecipe() as unknown as Record<string, Record<string, unknown>>;
     for (const def of paramDefs().values()) {
-      // Text-layer fields are registered once for the field rather than per
-      // layer, because layers are addressed by index; they are checked below
-      // against a fresh layer instead.
-      if (def.path.startsWith('text.')) continue;
+      // The fields of a list — text layers, heal spots — are registered once for
+      // the field rather than once per entry, because entries are addressed by
+      // index and a range belongs to the field. A list's own no-effect value is
+      // that it is empty, which is asserted separately.
+      if (def.path.startsWith('text.') || def.path.startsWith('heal.')) continue;
       const value = def.path
         .split('.')
         .reduce<unknown>((cursor, key) => (cursor as Record<string, unknown>)?.[key], recipe);
@@ -45,6 +46,9 @@ describe('defaults', () => {
     expect(recipe.geometry.quarterTurns).toBe(0);
     expect(recipe.tiles).toEqual({ cols: 1, rows: 1, gap: 0 });
     expect(recipe.text).toEqual([]);
+    // Nothing is filled until somebody points at something: an empty list is
+    // what makes the Heal stage cost nothing rather than cost a copy.
+    expect(recipe.heal).toEqual([]);
     // Zero means "the size it already is", so an untouched recipe never resizes.
     expect(recipe.output.longEdge).toBe(0);
   });

@@ -31,7 +31,15 @@ export interface SourceTexture {
   width: number;
   height: number;
   fromSrgb: boolean;
-  /** Bumped on every new source, so cached results cannot survive a file swap. */
+  /**
+   * Bumped on every new source, so cached results cannot survive a file swap.
+   *
+   * Also bumped when the Heal stage fills a spot. What the stages are handed
+   * then is a second texture standing in for the photograph, and every
+   * signature that samples the source carries this number — which is what makes
+   * one arithmetic operation invalidate everything downstream of a fill without
+   * any stage knowing that healing exists.
+   */
   generation: number;
 }
 

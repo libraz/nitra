@@ -410,7 +410,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     id: 'hairRaw',
     inputs: [],
     signature: (_recipe, ctx) =>
-      `hairRaw:${ctx.subject?.key ?? 'none'}:${subjectSize(ctx).join('x')}`,
+      `hairRaw:${ctx.source.generation}:${ctx.subject?.key ?? 'none'}:${subjectSize(ctx).join('x')}`,
     evaluate: (ctx) => {
       const subject = ctx.subject as SubjectTextures;
       const [width, height] = subjectSize(ctx);
@@ -461,7 +461,9 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   const hairMask: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'hairMask',
     inputs: ['hairCoeffV'],
-    signature: (_recipe, ctx) => `hairMask:${subjectSize(ctx).join('x')}`,
+    // The photograph is in here as the filter's guide, so the plate the Heal
+    // stage leaves is a different answer even at the same size.
+    signature: (_recipe, ctx) => `hairMask:${ctx.source.generation}:${subjectSize(ctx).join('x')}`,
     evaluate: (ctx, [coeff]) => {
       const src = coeff as RenderTarget;
       const target = ctx.glctx.pool.acquire(src.width, src.height);
@@ -554,7 +556,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     id: 'subjectRaw',
     inputs: [],
     signature: (_recipe, ctx) =>
-      `subjectRaw:${ctx.subject?.key ?? 'none'}:${subjectSize(ctx).join('x')}`,
+      `subjectRaw:${ctx.source.generation}:${ctx.subject?.key ?? 'none'}:${subjectSize(ctx).join('x')}`,
     evaluate: (ctx) => {
       const subject = ctx.subject as SubjectTextures;
       const [width, height] = subjectSize(ctx);
@@ -625,7 +627,8 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   const subjectMask: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'subjectMask',
     inputs: ['subjectCoeffV'],
-    signature: (_recipe, ctx) => `subjectMask:${subjectSize(ctx).join('x')}`,
+    signature: (_recipe, ctx) =>
+      `subjectMask:${ctx.source.generation}:${subjectSize(ctx).join('x')}`,
     evaluate: (ctx, [coeff]) => {
       const src = coeff as RenderTarget;
       const target = ctx.glctx.pool.acquire(src.width, src.height);

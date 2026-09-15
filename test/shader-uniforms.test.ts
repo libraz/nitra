@@ -130,6 +130,21 @@ describe('the stage shaders and the calls that drive them', () => {
       }
     });
   }
+
+  it('names the photograph in the signature of every node that samples it', () => {
+    // The photograph is not a constant: the Heal stage substitutes a plate with
+    // the fills in it, and says so by moving the source's generation. A node
+    // that samples the source without carrying that number in its signature
+    // breaks the graph's one rule — equal signatures, equal pixels — and the
+    // failure is a fill that is missing from one stage's cached result and
+    // present in the rest, which is not a shape anybody would look for.
+    const missing = graphSource
+      .split(/\n {2}const /)
+      .filter((node) => node.includes('ctx.source.texture'))
+      .filter((node) => !node.includes('ctx.source.generation'))
+      .map((node) => node.match(/id: '([^']+)'/)?.[1] ?? node.slice(0, 40));
+    expect(missing).toEqual([]);
+  });
 });
 
 describe('the stage shaders themselves', () => {

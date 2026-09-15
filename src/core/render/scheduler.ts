@@ -19,6 +19,8 @@ export interface SchedulerHooks {
   stats?(stats: RenderStats): void;
   /** Called whenever the displayed resolution changes. */
   scaleChanged?(scale: 'proxy' | 'full'): void;
+  /** Called when the inpainting module could not be loaded or run. */
+  healFailed?(error: unknown): void;
 }
 
 /** How long the recipe has to stay still before the full render is worth it. */
@@ -96,15 +98,37 @@ export class RenderScheduler {
     if (this.settleTimer) clearTimeout(this.settleTimer);
     this.settleTimer = setTimeout(() => {
       this.settleTimer = null;
-      if (this.disposed || !this.pipeline.hasSource) return;
-      const recipe = this.hooks.recipe();
-      this.atFullResolution = true;
-      this.pipeline.renderToCanvas(recipe, 'full', {
-        original: this.showOriginal,
-        fullFrame: this.fullFrame,
-      });
-      this.hooks.scaleChanged?.('full');
-      if (this.hooks.stats) this.hooks.stats(this.pipeline.measure(recipe));
+      void this.renderSettled();
     }, SETTLE_MS);
+  }
+
+  /**
+   * The full-resolution render, once the recipe has stopped moving.
+   *
+   * The Heal stage runs here and nowhere else, which is what keeps it out of the
+   * drag loop by construction rather than by everyone remembering: this function
+   * is only reachable from a recipe that has been still for {@link SETTLE_MS},
+   * and the proxy path — the one a moving slider goes through — cannot call it.
+   * Until it has run, the proxy shows the photograph with the spot still in it,
+   * which is what has actually happened so far.
+   */
+  private async renderSettled(): Promise<void> {
+    if (this.disposed || !this.pipeline.hasSource) return;
+    const recipe = this.hooks.recipe();
+    try {
+      await this.pipeline.syncHeal(recipe);
+    } catch (error) {
+      this.hooks.healFailed?.(error);
+    }
+    // Something moved while the fill was running, and there is a settle of its
+    // own on the way for whatever it was.
+    if (this.disposed || !this.pipeline.hasSource || this.hooks.recipe() !== recipe) return;
+    this.atFullResolution = true;
+    this.pipeline.renderToCanvas(recipe, 'full', {
+      original: this.showOriginal,
+      fullFrame: this.fullFrame,
+    });
+    this.hooks.scaleChanged?.('full');
+    if (this.hooks.stats) this.hooks.stats(this.pipeline.measure(recipe));
   }
 }

@@ -340,6 +340,53 @@ export function createSourceTexture(
   return texture;
 }
 
+/** A rectangle of replacement pixels, packed one row after another. */
+export interface TexturePatch {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+}
+
+/**
+ * Replace part of a source texture, and rebuild the mip chain over it.
+ *
+ * The rectangles are given packed, one row after another, rather than as a
+ * window onto the whole image: a sub-rectangle of a larger buffer would need
+ * `UNPACK_ROW_LENGTH` and its two companions set and then put back, and leaving
+ * one of the three set is a fault in whatever uploads next rather than here.
+ *
+ * The mip chain is regenerated for the whole texture. There is no partial
+ * `generateMipmap`, and a stale reduction is visible: the photo is shown minified
+ * whenever the frame is larger than the viewport, so the level being sampled is
+ * usually not the one that was written.
+ */
+export function updateSourceTexture(
+  gl: WebGL2RenderingContext,
+  texture: WebGLTexture,
+  width: number,
+  height: number,
+  patches: readonly TexturePatch[],
+): void {
+  if (patches.length === 0) return;
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  for (const patch of patches) {
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      patch.x,
+      patch.y,
+      patch.width,
+      patch.height,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array(patch.data.buffer, patch.data.byteOffset, patch.data.byteLength),
+    );
+  }
+  if (Math.floor(Math.log2(Math.max(width, height))) + 1 > 1) gl.generateMipmap(gl.TEXTURE_2D);
+}
+
 /**
  * Upload a rasterised text layer.
  *

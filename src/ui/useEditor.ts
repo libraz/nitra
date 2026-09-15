@@ -286,6 +286,11 @@ export function useEditor(): Editor {
         const [width, height] = pipeline.resolutionFor(recipeRef.current, next);
         setPreviewSize(`${width}×${height}`);
       },
+      // The module names what it could not fetch or run, and the spot stays in
+      // the picture rather than being reported as gone.
+      healFailed: (error) => {
+        notify(error instanceof Error ? error.message : String(error), 'alert');
+      },
     });
     schedulerRef.current = scheduler;
 
@@ -311,7 +316,9 @@ export function useEditor(): Editor {
       schedulerRef.current = null;
       pipelineRef.current = null;
     };
-  }, []);
+    // `notify` holds no state of its own and keeps its identity for the life of
+    // the editor, so naming it here does not put the GL context on a leash.
+  }, [notify]);
 
   const commit = useCallback((next: Recipe) => {
     recipeRef.current = next;
@@ -726,6 +733,10 @@ export function useEditor(): Editor {
       try {
         const current = recipeRef.current;
         const plan = planExport(image.width, image.height, current);
+        // The export is not allowed to be behind the preview. The fills the
+        // preview is showing were made on the way to a settled render, and an
+        // export taken before one has happened would write the spots back in.
+        await pipeline.syncHeal(current);
         const pixels = pipeline.readFullResolution(current);
         const result = await exportImage(pixels, current, image.fileName, plan.tiles, image.exif);
         const download = result.archive ?? (result.files[0] as { name: string; blob: Blob });

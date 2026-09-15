@@ -24,6 +24,8 @@ import {
   outputToSource,
 } from '../geometry/transform';
 import { Dag } from '../graph/dag';
+import { cutOut, loadHealer } from '../heal/inpaint';
+import { HealPlate } from '../heal/plate';
 import type { SourceImage } from '../io/decode';
 import { buildCurveLut } from '../recipe/curve';
 import { isIdentityCurve, isSkinNeutral, type Recipe } from '../recipe/schema';
@@ -51,6 +53,7 @@ import {
   GlError,
   Program,
   type RenderTarget,
+  updateSourceTexture,
 } from './gl';
 import { buildNodes, drawGrade } from './graph';
 import {
@@ -114,6 +117,8 @@ export class Pipeline {
   private readonly programs: Programs;
   private readonly dag: Dag<PassContext, RenderTarget, Recipe>;
   private source: SourceTexture | null = null;
+  private plate: HealPlate | null = null;
+  private healed: SourceTexture | null = null;
   private generation = 0;
   private curveTexture: WebGLTexture | null = null;
   private curveKey = 'identity';
@@ -184,6 +189,7 @@ export class Pipeline {
   setSource(image: SourceImage): void {
     this.dag.invalidate();
     if (this.source) this.gl.deleteTexture(this.source.texture);
+    this.dropHealed();
     // The masks describe the photo that is going away.
     this.setFaceAnalysis(null);
     this.generation += 1;
@@ -194,6 +200,91 @@ export class Pipeline {
       fromSrgb: image.space === 'srgb',
       generation: this.generation,
     };
+    // The decoded pixels are held, not copied: they are the only record of what
+    // is under a fill, and a copy is made only once something is filled.
+    this.plate = new HealPlate(image.data, image.width, image.height);
+  }
+
+  /**
+   * Fill the spots the recipe asks for, and put the result on the GPU.
+   *
+   * Asynchronous, and the only stage that is. Everything else is a shader the
+   * renderer can run inside a frame; this one has to fetch a module the first
+   * time and then read and write pixels on the CPU, so it is a step the caller
+   * takes before rendering rather than a node in the graph. A render that
+   * happens before it resolves shows the photograph as it was, which is the
+   * right thing to show while the fill has not happened yet.
+   *
+   * It must never be awaited from a drag: the fill is milliseconds, but a
+   * synchronous pixel read inside the loop is a slider that stops following the
+   * pointer. Spots are placed by a click, and this runs on that click.
+   *
+   * What comes out is a second source texture standing in for the photograph.
+   * Substituting the source is what puts the stage where the design fixes it —
+   * ahead of the reshaping, which is why the coordinates are in the
+   * photograph's own frame — and it means the stages downstream need to know
+   * nothing about healing at all: they read the source they always read.
+   */
+  async syncHeal(recipe: Recipe): Promise<void> {
+    const plate = this.plate;
+    const source = this.source;
+    if (!plate || !source) return;
+    // Asked before the module is fetched: this runs on the way to every settled
+    // render, and almost none of them placed a spot.
+    if (plate.matches(recipe.heal)) return;
+
+    const module = await loadHealer();
+    // A second photograph arrived while the module was being fetched, and this
+    // plate belongs to the one that left.
+    if (this.plate !== plate || this.source !== source) return;
+
+    const update = plate.apply(module, recipe.heal);
+    if (update === null) return;
+
+    const pixels = plate.pixels;
+    if (!pixels) {
+      // Back to the photograph, and back to costing nothing.
+      this.dropHealed();
+      this.dag.invalidate();
+      return;
+    }
+    // Nothing was reached: every new spot was smaller than a pixel, so the
+    // texture already says what the plate says.
+    if (!update.rebuilt && this.healed && update.rects.length === 0) return;
+
+    // A new photograph as far as anything downstream is concerned, and the
+    // cheapest way to say so: every signature that samples the source carries
+    // this number.
+    this.generation += 1;
+    if (update.rebuilt || !this.healed) {
+      this.dropHealed();
+      this.healed = {
+        texture: createSourceTexture(this.gl, plate.width, plate.height, pixels),
+        width: plate.width,
+        height: plate.height,
+        fromSrgb: source.fromSrgb,
+        generation: this.generation,
+      };
+      return;
+    }
+    updateSourceTexture(
+      this.gl,
+      this.healed.texture,
+      plate.width,
+      plate.height,
+      update.rects.map((region) => ({ ...region, data: cutOut(pixels, plate.width, region) })),
+    );
+    this.healed.generation = this.generation;
+  }
+
+  /** What the stages read as the photograph: the plate if there is one. */
+  private photograph(): SourceTexture {
+    return this.healed ?? this.requireSource();
+  }
+
+  private dropHealed(): void {
+    if (this.healed) this.gl.deleteTexture(this.healed.texture);
+    this.healed = null;
   }
 
   /**
@@ -403,8 +494,12 @@ export class Pipeline {
     const original = options.original ?? false;
     const fullFrame = options.fullFrame ?? false;
     const spec = this.frameSpec(recipe, scale, fullFrame);
-    const ctx = this.context(recipe, spec);
-    const variant = variantKey(spec);
+    const ctx = this.context(recipe, spec, original);
+    // The comparison is against the photograph, which since the Heal stage is a
+    // different picture from the one the edit is built on. It gets its own
+    // variant so that holding the button down does not evict the edit's chain:
+    // one slot per node per variant, and these two disagree about the source.
+    const variant = original ? `${variantKey(spec)}:decoded` : variantKey(spec);
 
     const graded = original
       ? this.dag.evaluate(ctx, recipe, 'ingest', variant)
@@ -764,6 +859,7 @@ export class Pipeline {
     this.setFaceAnalysis(null);
     if (this.ramp) this.gl.deleteTexture(this.ramp);
     if (this.source) this.gl.deleteTexture(this.source.texture);
+    this.dropHealed();
     if (this.curveTexture) this.gl.deleteTexture(this.curveTexture);
     if (this.textTexture) this.gl.deleteTexture(this.textTexture);
     for (const target of this.byteTargets.values()) {
@@ -812,13 +908,17 @@ export class Pipeline {
     };
   }
 
-  private context(recipe: Recipe, spec: FrameSpec): PassContext {
+  /**
+   * @param asDecoded Read the photograph as it was decoded, healing and all
+   * else aside. Only the comparison view wants this.
+   */
+  private context(recipe: Recipe, spec: FrameSpec, asDecoded = false): PassContext {
     this.syncCurve(recipe);
     return {
       gl: this.gl,
       glctx: this.glctx,
       programs: this.programs,
-      source: this.requireSource(),
+      source: asDecoded ? this.requireSource() : this.photograph(),
       width: spec.width,
       height: spec.height,
       geometry: spec.matrix,

@@ -192,6 +192,25 @@ const globalSchema = z.object({
 });
 
 /**
+ * One blemish to fill.
+ *
+ * Relative like everything else, and normalised against the *source* frame
+ * rather than against the crop. That is the one place this differs from a text
+ * layer, and it is not a detail: a spot is a mark on the photograph, so cropping
+ * has to leave it where it is. Normalised against the crop, the same recipe
+ * would slide every fill across the face the moment the frame was tightened.
+ *
+ * The radius is a fraction of the width on both axes, so a round spot stays
+ * round; taken against the height, the vertical would make it an ellipse on
+ * anything but a square photo.
+ */
+const healSpotSchema = z.object({
+  x: num('heal.x', 0, 1, 0.5),
+  y: num('heal.y', 0, 1, 0.5),
+  r: num('heal.r', 0.002, 0.08, 0.012),
+});
+
+/**
  * The face stages: what happens inside a skin mask, and to the parts.
  *
  * Every radius is a fraction of the width of the face it is applied to, never
@@ -577,6 +596,15 @@ export const recipeSchema = z.object({
     })
     .optional(),
   geometry: geometrySchema,
+  /**
+   * The spots to fill, in the order they were placed.
+   *
+   * The order is part of the edit: two overlapping spots compose, and the second
+   * one fills from what the first one left behind. Capped because every entry is
+   * work that runs the moment the recipe is opened — unlike a slider, a list
+   * arriving from elsewhere decides how much computation happens.
+   */
+  heal: z.array(healSpotSchema).max(200).default([]),
   face: faceSchema,
   hair: hairSchema,
   depth: depthSchema,
