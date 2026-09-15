@@ -19,17 +19,6 @@ jobs:
         with:
           bun-version-file: package.json
 
-      # The inpainting crate is compiled, not committed, so every target below
-      # that touches `assets` needs the wasm toolchain rather than just Bun.
-      - uses: dtolnay/rust-toolchain@1.98.0
-        with:
-          targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: crates/heal
-
       # The models are pinned by URL and by digest in the fetch script, so that
       # script's own contents are the cache key: a new model revision is a new
       # key, and a cache hit can only be the exact bytes the build asked for.
@@ -61,11 +50,9 @@ jobs:
           path: dist
           retention-days: 1
 
-  # Cloudflare's build image carries no Rust toolchain, and the inpainting
-  # module is compiled rather than committed, so the site cannot be built there.
-  # It is built here instead and the finished directory is uploaded — which also
-  # means the bytes that go live are the ones the job above tested, not a second
-  # build of the same commit.
+  # The finished directory is uploaded rather than rebuilt where it is served,
+  # so the bytes that go live are the ones the job above tested rather than a
+  # second build of the same commit.
   deploy:
     needs: check
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

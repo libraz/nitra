@@ -12,10 +12,6 @@ tsconfig.tsbuildinfo
 # Face-analysis models and their runtime, fetched by scripts/fetch-models.ts
 public/models/
 
-# The inpainting module and its build tree, compiled by scripts/build-wasm.ts
-public/wasm/
-crates/*/target/
-
 # Agent configuration (local only)
 .claude/
 CLAUDE.md
