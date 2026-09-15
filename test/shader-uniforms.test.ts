@@ -20,6 +20,13 @@ const pipelineSource = readFileSync(
   'utf8',
 );
 
+const graphSource = readFileSync(new URL('../src/core/render/graph.ts', import.meta.url), 'utf8');
+
+const uniformsSource = readFileSync(
+  new URL('../src/core/render/uniforms.ts', import.meta.url),
+  'utf8',
+);
+
 /** The programs built from the face shaders, and the source of each. */
 const PROGRAMS: Record<string, string> = {
   boxBlur: face.BOX_BLUR_FRAGMENT,
@@ -48,7 +55,11 @@ function declaredUniforms(source: string): Set<string> {
 }
 
 /**
- * The pipeline with its comments taken out.
+ * Everywhere a uniform is set, with the comments taken out.
+ *
+ * Both files that set one: the graph binds the stages, while the pipeline class
+ * binds the mask refinement, the box blur and the probes. Read from only one of
+ * them, every uniform belonging to the other would be reported as never set.
  *
  * Attribution below splits on the statement separator, and a semicolon inside a
  * comment splits a setter chain in half — which would drop the uniforms after it
@@ -56,10 +67,12 @@ function declaredUniforms(source: string): Set<string> {
  * other direction: a real missing uniform in the first half would be excused by
  * a stray semicolon in the prose above it.
  */
-const pipelineCode = pipelineSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const renderCode = `${pipelineSource}\n${graphSource}`
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
 
 /**
- * The uniform names set on one program, read out of the pipeline.
+ * The uniform names set on one program, read out of the render layer.
  *
  * The setters are chained off `programs.<name>.bind()`, so one statement is one
  * program's worth of calls, and splitting on the statement separator is enough
@@ -72,7 +85,7 @@ const pipelineCode = pipelineSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\
 function assignedUniforms(program: string): Set<string> {
   const names = new Set<string>();
   const call = new RegExp(`programs\\.${program}\\b`);
-  for (const statement of pipelineCode.split(';')) {
+  for (const statement of renderCode.split(';')) {
     if (!call.test(statement)) continue;
     for (const [, name] of statement.matchAll(/'(u[A-Z]\w*)'/g)) {
       if (name) names.add(name);
@@ -172,6 +185,6 @@ describe('the face shaders themselves', () => {
     // A loop bound by a uniform does not compile everywhere, so the radius is
     // clamped against the same constant the shader is written with.
     expect(face.BOX_BLUR_FRAGMENT).toMatch(/for \(int i = -64; i <= 64; i\+\+\)/);
-    expect(pipelineSource).toMatch(/MAX_BLUR_RADIUS = 64/);
+    expect(uniformsSource).toMatch(/MAX_BLUR_RADIUS = 64/);
   });
 });
