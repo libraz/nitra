@@ -9,7 +9,14 @@
 
 import type { FaceMaskRegion } from '../face/raster';
 import { type ControlPoint, MAX_CONTROL_POINTS } from '../face/warp';
-import { type FaceParams, HUE_BANDS, isWarpNeutral, type Recipe } from '../recipe/schema';
+import {
+  type DepthParams,
+  type FaceParams,
+  HUE_BANDS,
+  isDepthNeutral,
+  isWarpNeutral,
+  type Recipe,
+} from '../recipe/schema';
 import type { PassContext } from './context';
 
 /** Width the low-frequency reference is built at, whatever the image size. */
@@ -43,6 +50,16 @@ export const FACE_FILTER_EDGE = 512;
  * whose face is large in the frame.
  */
 export const MAX_BLUR_RADIUS = 64;
+
+/**
+ * How much variance the mask refinement treats as noise rather than as an edge.
+ *
+ * The same guided filter the skin stage runs, with coverage for a signal
+ * instead of lightness, and both masks are refined against it — the skin mask
+ * around the faces and the background separation over the frame. One constant,
+ * because it is a statement about the filter rather than about either mask.
+ */
+export const MASK_EPSILON = 1e-3;
 
 export function fitLongEdge(width: number, height: number, longEdge: number): [number, number] {
   const scale = Math.min(1, longEdge / Math.max(width, height));
@@ -277,4 +294,104 @@ export function partsUniforms(recipe: Recipe, ctx: PassContext): PartsUniforms {
 
 export function lowSize(ctx: PassContext): [number, number] {
   return fitWidth(ctx.width, ctx.height, LOW_FREQUENCY_WIDTH);
+}
+
+/**
+ * Longest edge the background separation is refined at.
+ *
+ * Over the whole frame, unlike the skin mask, because what it divides is the
+ * picture. Read out of the source rather than the framed render, for the same
+ * reason the skin filter is: a separation computed from a proxy while
+ * previewing and from twelve megapixels while exporting is a preview that lies
+ * about where the shoulder is.
+ */
+export const SUBJECT_EDGE = 512;
+
+/** How far the guided filter may move the separation, as a fraction of the frame. */
+const SUBJECT_REFINE_RADIUS = 0.03;
+
+/** Kernel radius at full defocus, as a fraction of the frame's width. */
+const BOKEH_REACH = 0.045;
+
+/**
+ * Radius the gather runs at, in texels of whatever size it runs at.
+ *
+ * This is the constant that flattens the cost. The convolution is not run at
+ * the render size: it is run at whatever size makes the requested radius come
+ * out at this many texels, so a background thrown a long way out of focus is
+ * the same forty-eight taps over a smaller picture rather than a wider kernel
+ * over a large one. Nothing is lost by it — what is being resampled is about to
+ * be defocused by several times the amount the reduction cost it.
+ */
+const BOKEH_TAP_RADIUS = 8;
+
+/** Smallest the convolution is allowed to shrink to, in texels across. */
+const BOKEH_MIN_WIDTH = 24;
+
+/** Aperture shapes, indexed the way the gather shader switches on them. */
+const APERTURE_INDEX: Record<DepthParams['aperture'], number> = {
+  circle: 0,
+  hex: 1,
+  anamorphic: 2,
+};
+
+export function apertureIndex(depth: DepthParams): number {
+  return APERTURE_INDEX[depth.aperture];
+}
+
+/**
+ * Whether the background is being separated from the person at all.
+ *
+ * Asked before the separation is refined, which is nine passes over the frame,
+ * and before the convolution, which is the most expensive thing in the graph.
+ * A missing segmentation answers false: there is no division to act on, and a
+ * recipe carrying a defocus has to render such a photo unchanged rather than
+ * approximately.
+ */
+export function isDefocusing(recipe: Recipe, ctx: PassContext): boolean {
+  return ctx.subject !== null && !isDepthNeutral(recipe.depth);
+}
+
+export function subjectSize(ctx: PassContext): [number, number] {
+  return fitLongEdge(ctx.source.width, ctx.source.height, SUBJECT_EDGE);
+}
+
+/** How far the refinement may move the boundary, in texels of its own working size. */
+export function subjectRadius(recipe: Recipe, ctx: PassContext): number {
+  const [width] = subjectSize(ctx);
+  return clampRadius(recipe.depth.edgeRefine * SUBJECT_REFINE_RADIUS * width, 1);
+}
+
+/** Kernel radius, as a fraction of the rendered frame's width. */
+export function bokehReach(recipe: Recipe): number {
+  return recipe.depth.bokeh * BOKEH_REACH;
+}
+
+/**
+ * The size the convolution is run at.
+ *
+ * Chosen from the radius rather than from the render, so the tap spacing stays
+ * the same handful of texels at every setting. A radius of nothing leaves the
+ * render size alone: the stage still has the two background adjustments to
+ * apply, and the gather is branched past inside the shader.
+ */
+export function bokehSize(recipe: Recipe, ctx: PassContext): [number, number] {
+  const reach = bokehReach(recipe);
+  if (reach <= 0) return [ctx.width, ctx.height];
+  const width = Math.max(BOKEH_MIN_WIDTH, Math.round(BOKEH_TAP_RADIUS / reach));
+  return fitWidth(ctx.width, ctx.height, width);
+}
+
+/**
+ * The kernel radius in the convolution's own texture coordinates.
+ *
+ * Isotropic, which is what the second component is for: a circle in a frame
+ * that is not square is not a circle in its normalised coordinates, and an
+ * aperture that came out as an ellipse would make every photograph look like it
+ * was taken on an anamorphic lens.
+ */
+export function bokehRadius(recipe: Recipe, ctx: PassContext): [number, number] {
+  const reach = bokehReach(recipe);
+  const [width, height] = bokehSize(recipe, ctx);
+  return [reach, (reach * width) / Math.max(height, 1)];
 }

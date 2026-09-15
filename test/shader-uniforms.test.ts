@@ -12,6 +12,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MAX_CONTROL_POINTS } from '../src/core/face/warp';
+import * as bokeh from '../src/core/render/shaders/bokeh';
+import { GLSL_COLOR } from '../src/core/render/shaders/common';
 import * as face from '../src/core/render/shaders/face';
 import * as passes from '../src/core/render/shaders/passes';
 
@@ -27,8 +29,12 @@ const uniformsSource = readFileSync(
   'utf8',
 );
 
-/** The programs built from the face shaders, and the source of each. */
+/** The programs built from a stage shader, and the source of each. */
 const PROGRAMS: Record<string, string> = {
+  subjectRaw: bokeh.SUBJECT_RAW_FRAGMENT,
+  bokehLift: bokeh.BOKEH_LIFT_FRAGMENT,
+  bokehGather: bokeh.BOKEH_GATHER_FRAGMENT,
+  bokeh: bokeh.BOKEH_FRAGMENT,
   boxBlur: face.BOX_BLUR_FRAGMENT,
   warpField: face.FACE_WARP_FIELD_FRAGMENT,
   warp: face.FACE_WARP_FRAGMENT,
@@ -94,14 +100,14 @@ function assignedUniforms(program: string): Set<string> {
   return names;
 }
 
-describe('the face shaders and the calls that drive them', () => {
-  it('covers every program the pipeline builds from a face shader', () => {
+describe('the stage shaders and the calls that drive them', () => {
+  it('covers every program the pipeline builds from a stage shader', () => {
     // A new shader that nothing here knows about would go unchecked.
     const built = [
       ...pipelineSource.matchAll(/(\w+): Program\.create\(this\.gl, (\w+)_FRAGMENT\)/g),
     ].map(([, key]) => key as string);
-    const fromFaceShaders = built.filter((key) => key in PROGRAMS);
-    expect(new Set(fromFaceShaders)).toEqual(new Set(Object.keys(PROGRAMS)));
+    const fromStageShaders = built.filter((key) => key in PROGRAMS);
+    expect(new Set(fromStageShaders)).toEqual(new Set(Object.keys(PROGRAMS)));
   });
 
   for (const [program, source] of Object.entries(PROGRAMS)) {
@@ -123,7 +129,7 @@ describe('the face shaders and the calls that drive them', () => {
   }
 });
 
-describe('the face shaders themselves', () => {
+describe('the stage shaders themselves', () => {
   it('writes a result from every one of them', () => {
     for (const [program, source] of Object.entries(PROGRAMS)) {
       expect(source.includes('fragColor'), program).toBe(true);
@@ -132,6 +138,21 @@ describe('the face shaders themselves', () => {
 
   /** The stages that go from the rendered frame into the masks' own space. */
   const MASK_READERS = ['skin', 'parts', 'faceTexture', 'faceProbe'];
+
+  /** The stages whose mask is the whole frame rather than a working area. */
+  const FRAME_MASK_READERS = ['bokehLift', 'bokeh'];
+
+  it('reads the separation through the framing and the displacement', () => {
+    // The separation covers the frame, so there is no working area to map into
+    // and no `toRegion` — but it was still built before the photo was cropped
+    // and before the face was reshaped, so both of those still have to be
+    // composed or the boundary sits a displacement away from the shoulder.
+    for (const program of FRAME_MASK_READERS) {
+      const source = PROGRAMS[program] as string;
+      expect(source.includes('warped((uGeometry * vec3(vUv, 1.0)).xy)'), program).toBe(true);
+      expect(source.includes('toRegion('), program).toBe(false);
+    }
+  });
 
   it('samples the masks through the framing matrix', () => {
     // The masks are built in the source image's own frame. A stage that sampled
@@ -179,6 +200,50 @@ describe('the face shaders themselves', () => {
     // face it described would stay put while its neighbours moved.
     expect(face.FACE_WARP_FIELD_FRAGMENT).toContain(`uniform vec4 uPoint[${MAX_CONTROL_POINTS}]`);
     expect(face.FACE_WARP_FIELD_FRAGMENT).toContain(`i < ${MAX_CONTROL_POINTS}`);
+  });
+
+  it('convolves the background in linear light', () => {
+    // The reason the working space is linear at all. In a gamma space a bright
+    // point smears into a dull cloud instead of spreading as a disc that holds
+    // its energy, and that one difference is most of what separates a defocused
+    // background from a blurred one. A transfer function anywhere in this chain
+    // would undo it silently: the result still looks blurred.
+    //
+    // The shared colour block is taken out first, because it is where both
+    // transfer functions are declared — searching the whole source finds the
+    // declaration in every shader that includes it and proves nothing.
+    for (const program of ['bokehLift', 'bokehGather', 'bokeh']) {
+      const body = (PROGRAMS[program] as string).replace(GLSL_COLOR, '');
+      expect(body.includes('encodeTransfer('), program).toBe(false);
+      expect(body.includes('decodeTransfer('), program).toBe(false);
+    }
+  });
+
+  it('weights the background by its own coverage and divides by what it found', () => {
+    // The halo fix, and it is two halves that only work together. The lift
+    // multiplies by the background weight and carries it alongside; the gather
+    // divides by the weight it accumulated rather than by the tap count. Keep
+    // only the first and the background darkens towards every subject edge;
+    // keep only the second and the subject's own colour is dragged outwards as
+    // a rim of light, which is the artefact that gives the whole effect away.
+    expect(bokeh.BOKEH_LIFT_FRAGMENT).toMatch(/colour \* lift \* background, background\)/);
+    expect(bokeh.BOKEH_GATHER_FRAGMENT).toMatch(/total\.rgb \/ max\(total\.a/);
+  });
+
+  it('bounds the gather by a constant and spends every tap on the aperture', () => {
+    // A loop bound by a uniform does not compile everywhere. Shaping the unit
+    // disc rather than discarding the taps that fall outside the shape is what
+    // keeps a hexagon's middle as well sampled as a circle's.
+    expect(bokeh.BOKEH_GATHER_FRAGMENT).toMatch(/for \(int i = 0; i < BOKEH_TAPS; i\+\+\)/);
+    expect(bokeh.BOKEH_GATHER_FRAGMENT).toMatch(/unit \*= hexReach\(angle\)/);
+  });
+
+  it('puts the defocus before the grade', () => {
+    // Stage order is a statement about the picture. A lens is in front of the
+    // film, so raising the exposure and then defocusing is not a photograph
+    // anything could have taken — and the difference shows in the highlights,
+    // which is the one place the effect is judged.
+    expect(graphSource).toMatch(/id: 'grade',\s*inputs: \['bokeh'\]/);
   });
 
   it('keeps the loop in the blur bounded by a constant', () => {

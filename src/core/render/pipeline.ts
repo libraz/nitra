@@ -37,6 +37,7 @@ import type {
   RenderScale,
   RenderStats,
   SourceTexture,
+  SubjectTextures,
 } from './context';
 import {
   createGlContext,
@@ -51,6 +52,12 @@ import {
   type RenderTarget,
 } from './gl';
 import { buildNodes, drawGrade } from './graph';
+import {
+  BOKEH_FRAGMENT,
+  BOKEH_GATHER_FRAGMENT,
+  BOKEH_LIFT_FRAGMENT,
+  SUBJECT_RAW_FRAGMENT,
+} from './shaders/bokeh';
 import {
   BOX_BLUR_FRAGMENT,
   FACE_COEFF_FRAGMENT,
@@ -81,6 +88,7 @@ import {
   fitWidth,
   gradeUniforms,
   isWarping,
+  MASK_EPSILON,
   rectOf,
 } from './uniforms';
 
@@ -91,9 +99,6 @@ export const PROXY_LONG_EDGE = 1024;
 
 /** Width the guardrail measurement is taken at. */
 const MEASURE_WIDTH = 256;
-
-/** The same threshold for the mask refinement, where the signal is coverage. */
-const MASK_EPSILON = 1e-3;
 
 /** Feather on the skin mask, as a fraction of the face width. */
 const MASK_FEATHER = 0.01;
@@ -115,7 +120,7 @@ export class Pipeline {
   private readonly byteTargets = new Map<string, RenderTarget>();
   private ramp: WebGLTexture | null = null;
   private face: FaceTextures | null = null;
-  private faceSegment: WebGLTexture | null = null;
+  private subject: SubjectTextures | null = null;
 
   /**
    * @param measureViewport The box the image is allowed to occupy, in CSS pixels. It has
@@ -147,6 +152,10 @@ export class Pipeline {
       warp: Program.create(this.gl, FACE_WARP_FRAGMENT),
       skin: Program.create(this.gl, FACE_SKIN_FRAGMENT),
       parts: Program.create(this.gl, FACE_PARTS_FRAGMENT),
+      subjectRaw: Program.create(this.gl, SUBJECT_RAW_FRAGMENT),
+      bokehLift: Program.create(this.gl, BOKEH_LIFT_FRAGMENT),
+      bokehGather: Program.create(this.gl, BOKEH_GATHER_FRAGMENT),
+      bokeh: Program.create(this.gl, BOKEH_FRAGMENT),
       faceTexture: Program.create(this.gl, FACE_TEXTURE_FRAGMENT),
       faceProbe: Program.create(this.gl, FACE_PROBE_FRAGMENT),
     };
@@ -184,17 +193,23 @@ export class Pipeline {
   }
 
   /**
-   * Take delivery of the face analysis, and refine its mask.
+   * Take delivery of the analysis, and refine the skin mask.
    *
    * The refinement happens here rather than in the effect graph because nothing
    * about it depends on the framing or on a slider: it is a property of the
    * photo. Running it once on arrival is also what keeps it out of the drag
    * loop, where nine passes over a mask would be felt.
    *
-   * Passing null is how a photo with no face in it, a failed analysis and a
-   * replaced source are all expressed. The face stages then have no mask and
-   * switch themselves off, which is a different thing from having a mask that
-   * is empty: an empty mask still costs a pass over every pixel.
+   * The two halves of the result are taken separately on purpose. A photograph
+   * with no face in it still has a person in it often enough — turned away, or
+   * too small for the mesh — and the division between them and the room behind
+   * them is exactly as good either way. So the segmentation is kept whenever it
+   * describes the photo on screen, and only the face half needs a face.
+   *
+   * Passing null is how a failed analysis and a replaced source are expressed.
+   * The stages then have no mask and switch themselves off, which is a
+   * different thing from having a mask that is empty: an empty mask still costs
+   * a pass over every pixel.
    */
   setFaceAnalysis(analysis: FaceAnalysis | null): void {
     if (this.face) {
@@ -202,17 +217,28 @@ export class Pipeline {
       this.gl.deleteTexture(this.face.polyA);
       this.gl.deleteTexture(this.face.polyB);
     }
-    if (this.faceSegment) this.gl.deleteTexture(this.faceSegment);
+    if (this.subject) this.gl.deleteTexture(this.subject.segment);
     this.face = null;
-    this.faceSegment = null;
-    // Every cached result downstream of the mask was rendered without one.
+    this.subject = null;
+    // Every cached result downstream of the masks was rendered without them.
     this.dag.invalidate();
 
-    if (!analysis || analysis.faces.length === 0) return;
     const source = this.source;
-    if (!source) return;
+    if (!analysis || !source) return;
     // An analysis of a different photo would put a mask over the wrong face.
     if (analysis.sourceWidth !== source.width || analysis.sourceHeight !== source.height) return;
+
+    this.subject = {
+      segment: createSegmentationTexture(
+        this.gl,
+        analysis.segmentation.width,
+        analysis.segmentation.height,
+        analysis.segmentation.data,
+      ),
+      key: `${analysis.revision}`,
+    };
+
+    if (analysis.faces.length === 0) return;
 
     const [maskWidth, maskHeight] = [analysis.masks[0].width, analysis.masks[0].height];
     const regionPixels: [number, number] = [
@@ -231,15 +257,8 @@ export class Pipeline {
       analysis.masks[1].height,
       analysis.masks[1].data,
     );
-    this.faceSegment = createSegmentationTexture(
-      this.gl,
-      analysis.segmentation.width,
-      analysis.segmentation.height,
-      analysis.segmentation.data,
-    );
-
     this.face = {
-      mask: this.refineMask(polyA, this.faceSegment, analysis, maskWidth, maskHeight),
+      mask: this.refineMask(polyA, this.subject.segment, analysis, maskWidth, maskHeight),
       polyA,
       polyB,
       faceWidth: analysis.faceWidth,
@@ -788,6 +807,7 @@ export class Pipeline {
       curve: this.curveTexture,
       curveKey: this.curveKey,
       face: this.face,
+      subject: this.subject,
     };
   }
 

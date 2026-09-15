@@ -80,6 +80,21 @@ export interface FaceTextures {
   key: string;
 }
 
+/**
+ * What the segmentation left on the GPU, face or no face.
+ *
+ * Held apart from {@link FaceTextures} because it answers a different question
+ * and survives a different set of photographs. The skin mask needs an outline
+ * and therefore a found face; the division between a person and what is behind
+ * them needs neither, and a head turned away from the camera is still somebody
+ * to separate from the room.
+ */
+export interface SubjectTextures {
+  /** Face-skin, hair and person confidence, at the model's own 256 pixels. */
+  segment: WebGLTexture;
+  key: string;
+}
+
 export interface PassContext {
   gl: WebGL2RenderingContext;
   glctx: GlContext;
@@ -92,6 +107,7 @@ export interface PassContext {
   curve: WebGLTexture | null;
   curveKey: string;
   face: FaceTextures | null;
+  subject: SubjectTextures | null;
 }
 
 export interface Programs {
@@ -112,6 +128,10 @@ export interface Programs {
   warp: Program;
   skin: Program;
   parts: Program;
+  subjectRaw: Program;
+  bokehLift: Program;
+  bokehGather: Program;
+  bokeh: Program;
   faceTexture: Program;
   faceProbe: Program;
 }

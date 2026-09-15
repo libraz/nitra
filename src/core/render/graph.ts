@@ -9,21 +9,28 @@
 import { warpControlPoints } from '../face/warp';
 import type { DagNode } from '../graph/dag';
 import { isPartsNeutral, isSkinNeutral, type Recipe } from '../recipe/schema';
-import type { FaceTextures, PassContext, Programs } from './context';
+import type { FaceTextures, PassContext, Programs, SubjectTextures } from './context';
 import type { GlContext, RenderTarget } from './gl';
 import {
+  apertureIndex,
+  bokehRadius,
+  bokehSize,
   clampRadius,
   faceFilterSize,
   fitLongEdge,
   type GradeUniforms,
   gradeUniforms,
+  isDefocusing,
   isWarping,
   lowSize,
+  MASK_EPSILON,
   packControlPoints,
   partsUniforms,
   regionOf,
   skinRadius,
   skinUniforms,
+  subjectRadius,
+  subjectSize,
 } from './uniforms';
 
 /**
@@ -281,6 +288,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   // it, and evening that out is what flattens a face into a mask.
   const wideRadius = (recipe: Recipe, ctx: PassContext) =>
     clampRadius(skinRadius(recipe.face, ctx) * 3, 2);
+  const subjectBoundary = (recipe: Recipe, ctx: PassContext) => subjectRadius(recipe, ctx);
 
   const faceCoeffRaw: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'faceCoeffRaw',
@@ -373,9 +381,226 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     },
   };
 
+  /**
+   * The separation, before it is refined: the person, and a guide to snap to.
+   *
+   * No graph input, for the same reason `faceMean` has none — it reads the
+   * source photograph rather than the framed render, so the boundary lands in
+   * the same place on the proxy and on the export.
+   */
+  const subjectRaw: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'subjectRaw',
+    inputs: [],
+    signature: (_recipe, ctx) =>
+      `subjectRaw:${ctx.subject?.key ?? 'none'}:${subjectSize(ctx).join('x')}`,
+    evaluate: (ctx) => {
+      const subject = ctx.subject as SubjectTextures;
+      const [width, height] = subjectSize(ctx);
+      const target = ctx.glctx.pool.acquire(width, height);
+      ctx.programs.subjectRaw
+        .bind()
+        .texture('uSegment', subject.segment)
+        .texture('uImage', ctx.source.texture);
+      ctx.glctx.draw(target, width, height);
+      return target;
+    },
+  };
+
+  /**
+   * The guided filter that moves the boundary onto the photograph.
+   *
+   * The same filter the skin mask is refined by, and the same four programs:
+   * what differs is the signal and the working area, not the arithmetic. The
+   * segmentation arrives 256 pixels across, so magnified to a frame its edge
+   * sits a long way from the shoulder it is meant to follow, and nothing else
+   * here knows where hair ends.
+   *
+   * There is no separate feather afterwards. The radius the refinement is given
+   * is also the softness it leaves behind, which makes `edgeRefine` one control
+   * over one thing rather than two that have to be balanced against each other.
+   */
+  const subjectDeviation: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'subjectDeviation',
+    inputs: ['subjectRaw', 'subjectMean'],
+    signature: (_recipe, ctx) => `subjectDeviation:${subjectSize(ctx).join('x')}`,
+    evaluate: (ctx, [raw, mean]) => {
+      const src = raw as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceMaskDeviation
+        .bind()
+        .texture('uSource', src.texture)
+        .texture('uMean', (mean as RenderTarget).texture);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  const subjectCoeff: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'subjectCoeff',
+    inputs: ['subjectMean', 'subjectDeviationV'],
+    signature: () => `subjectCoeff:${MASK_EPSILON}`,
+    evaluate: (ctx, [mean, deviation]) => {
+      const src = mean as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceMaskCoeff
+        .bind()
+        .texture('uMean', src.texture)
+        .texture('uDeviation', (deviation as RenderTarget).texture)
+        .float('uEpsilon', MASK_EPSILON);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  /**
+   * The separation itself, in the photograph's own frame.
+   *
+   * `uRegion` is the whole frame rather than a working area around the faces.
+   * The mask shaders take the rectangle as a uniform precisely so that both
+   * answers are available: the skin mask needs the faces resolved, and this
+   * needs the frame divided.
+   */
+  const subjectMask: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'subjectMask',
+    inputs: ['subjectCoeffV'],
+    signature: (_recipe, ctx) => `subjectMask:${subjectSize(ctx).join('x')}`,
+    evaluate: (ctx, [coeff]) => {
+      const src = coeff as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceMaskApply
+        .bind()
+        .vec4('uRegion', 0, 0, 1, 1)
+        .texture('uCoeff', src.texture)
+        .texture('uImage', ctx.source.texture);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  /**
+   * Lift the highlights and weight the frame by how much of it is background.
+   *
+   * At the render size rather than at the convolution's, because the mask is
+   * read here and the mask is the one thing in this chain that has to stay
+   * sharp: the boundary is where the whole effect is judged.
+   */
+  const bokehLift: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'bokehLift',
+    inputs: ['parts', 'subjectMask', 'warpField'],
+    active: isDefocusing,
+    signature: (recipe, ctx) =>
+      `bokehLift:${ctx.width}x${ctx.height}:${recipe.depth.bokehBloom}:${ctx.geometryKey}:${isWarping(recipe, ctx)}`,
+    evaluate: (ctx, [source, mask, field], recipe) => {
+      const src = source as RenderTarget;
+      const target = ctx.glctx.pool.acquire(ctx.width, ctx.height);
+      ctx.programs.bokehLift
+        .bind()
+        .texture('uSource', src.texture)
+        .texture('uSubject', (mask as RenderTarget).texture)
+        .texture('uWarp', (field as RenderTarget).texture)
+        .int('uWarped', isWarping(recipe, ctx) ? 1 : 0)
+        .mat3('uGeometry', ctx.geometry)
+        .float('uBloom', recipe.depth.bokehBloom);
+      ctx.glctx.draw(target, ctx.width, ctx.height);
+      return target;
+    },
+  };
+
+  /**
+   * Down to the size the convolution runs at, halving at a time.
+   *
+   * One bilinear tap across a reduction of six is a point sample of six texels
+   * and it aliases; halving is the one ratio at which a bilinear tap is exactly
+   * the average of what it replaced. Doing it in steps is therefore not a
+   * refinement, it is the difference between a smooth background and a
+   * shimmering one — and it doubles as the prefilter that closes the gaps
+   * between the gather's taps.
+   */
+  const bokehReduce: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'bokehReduce',
+    inputs: ['bokehLift'],
+    active: isDefocusing,
+    signature: (recipe, ctx) => `bokehReduce:${bokehSize(recipe, ctx).join('x')}`,
+    evaluate: (ctx, [input], recipe) => {
+      const [width, height] = bokehSize(recipe, ctx);
+      let current = input as RenderTarget;
+      // The first one belongs to the graph; every one after it is ours.
+      let owned = false;
+      while (current.width > width * 2 && current.height > height * 2) {
+        const next = ctx.glctx.pool.acquire(
+          Math.max(width, Math.round(current.width / 2)),
+          Math.max(height, Math.round(current.height / 2)),
+        );
+        ctx.programs.copy.bind().texture('uSource', current.texture);
+        ctx.glctx.draw(next, next.width, next.height);
+        if (owned) ctx.glctx.pool.release(current);
+        current = next;
+        owned = true;
+      }
+      const target = ctx.glctx.pool.acquire(width, height);
+      ctx.programs.copy.bind().texture('uSource', current.texture);
+      ctx.glctx.draw(target, width, height);
+      if (owned) ctx.glctx.pool.release(current);
+      return target;
+    },
+  };
+
+  /** The convolution: an aperture-shaped gather over the premultiplied frame. */
+  const bokehGather: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'bokehGather',
+    inputs: ['bokehReduce'],
+    active: isDefocusing,
+    signature: (recipe, ctx) =>
+      `bokehGather:${bokehRadius(recipe, ctx).join(',')}:${recipe.depth.aperture}:${recipe.depth.catsEye}`,
+    evaluate: (ctx, [input], recipe) => {
+      const src = input as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.bokehGather
+        .bind()
+        .texture('uSource', src.texture)
+        .vec2('uRadius', ...bokehRadius(recipe, ctx))
+        .int('uAperture', apertureIndex(recipe.depth))
+        .float('uCatsEye', recipe.depth.catsEye)
+        .float('uAspect', src.height / Math.max(src.width, 1));
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  /**
+   * Depth: the defocused background put back behind the person.
+   *
+   * Before the grade, because a lens is in front of the film. Raising the
+   * exposure and then defocusing is not the same photograph as defocusing and
+   * then raising it, and only the second order is one a camera can produce.
+   */
+  const bokeh: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'bokeh',
+    inputs: ['parts', 'bokehGather', 'subjectMask', 'warpField'],
+    active: isDefocusing,
+    signature: (recipe, ctx) =>
+      `bokeh:${ctx.width}x${ctx.height}:${recipe.depth.bgBrightness}:${recipe.depth.bgSaturation}:${ctx.geometryKey}:${isWarping(recipe, ctx)}`,
+    evaluate: (ctx, [source, gathered, mask, field], recipe) => {
+      const src = source as RenderTarget;
+      const target = ctx.glctx.pool.acquire(ctx.width, ctx.height);
+      ctx.programs.bokeh
+        .bind()
+        .texture('uSource', src.texture)
+        .texture('uBokeh', (gathered as RenderTarget).texture)
+        .texture('uSubject', (mask as RenderTarget).texture)
+        .texture('uWarp', (field as RenderTarget).texture)
+        .int('uWarped', isWarping(recipe, ctx) ? 1 : 0)
+        .mat3('uGeometry', ctx.geometry)
+        .float('uBrightness', recipe.depth.bgBrightness)
+        .float('uSaturation', recipe.depth.bgSaturation);
+      ctx.glctx.draw(target, ctx.width, ctx.height);
+      return target;
+    },
+  };
+
   const grade: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'grade',
-    inputs: ['parts'],
+    inputs: ['bokeh'],
     signature: (recipe, ctx) =>
       `grade:${JSON.stringify(gradeUniforms(recipe, ctx.width / ctx.height, ctx.curveKey))}`,
     evaluate: (ctx, [input], recipe) => {
@@ -458,6 +683,20 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     box('faceWideMean', 'faceWideMeanH', 'y', wideRadius),
     skin,
     parts,
+    subjectRaw,
+    box('subjectMeanH', 'subjectRaw', 'x', subjectBoundary),
+    box('subjectMean', 'subjectMeanH', 'y', subjectBoundary),
+    subjectDeviation,
+    box('subjectDeviationH', 'subjectDeviation', 'x', subjectBoundary),
+    box('subjectDeviationV', 'subjectDeviationH', 'y', subjectBoundary),
+    subjectCoeff,
+    box('subjectCoeffH', 'subjectCoeff', 'x', subjectBoundary),
+    box('subjectCoeffV', 'subjectCoeffH', 'y', subjectBoundary),
+    subjectMask,
+    bokehLift,
+    bokehReduce,
+    bokehGather,
+    bokeh,
     grade,
     lowSmall,
     lowH,
