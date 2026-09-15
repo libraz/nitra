@@ -257,6 +257,38 @@ const faceSchema = z
         hue: num('face.cheek.hue', 0, 360, 18),
       })
       .prefault({}),
+    /**
+     * Reshaping: the amounts that move the face rather than recolour it.
+     *
+     * Each one is a slider, not a distance. What a slider at one means in the
+     * picture is decided in `src/core/face/warp.ts` as a fraction of the face's
+     * own width, for the same reason every radius is: a displacement in pixels
+     * would be a different retouch on the next photograph.
+     *
+     * The ones whose two directions are both a retouch someone asks for are
+     * signed; the rest only go one way. `faceSlim` narrows, it does not widen,
+     * because nobody reaches for this to make a face broader.
+     */
+    warp: z
+      .object({
+        /** Draws the outline of the face inwards, away from the ears. */
+        faceSlim: num('face.warp.faceSlim', 0, 1, 0),
+        /** Tightens the lower half of the outline, along the jaw. */
+        jawline: num('face.warp.jawline', 0, 1, 0),
+        /** Shortens the chin, or lengthens it. */
+        chin: num('face.warp.chin', -1, 1, 0),
+        /** Opens the eyes outwards from their own centres. */
+        eyeEnlarge: num('face.warp.eyeEnlarge', 0, 1, 0),
+        /** Lifts the outer corner of each eye, or drops it. */
+        eyeTilt: num('face.warp.eyeTilt', -1, 1, 0),
+        /** Narrows the nose towards the middle of the face. */
+        noseNarrow: num('face.warp.noseNarrow', 0, 1, 0),
+        /** Raises the bridge of the nose, or flattens it. */
+        noseBridge: num('face.warp.noseBridge', -1, 1, 0),
+        /** Widens the mouth, or narrows it. */
+        mouthWidth: num('face.warp.mouthWidth', -1, 1, 0),
+      })
+      .prefault({}),
   })
   .prefault({});
 
@@ -491,9 +523,32 @@ export function isPartsNeutral(face: FaceParams): boolean {
   );
 }
 
+/**
+ * True when no reshaping amount would move a pixel.
+ *
+ * The renderer asks this before it builds the displacement field, and the field
+ * is what every other stage's mask lookup has to go through once it exists. A
+ * false answer here therefore costs more than one pass: it is the difference
+ * between the face stages sampling their masks directly and sampling them
+ * through a texture. A recipe that only smooths must answer true.
+ */
+export function isWarpNeutral(face: FaceParams): boolean {
+  const w = face.warp;
+  return (
+    w.faceSlim < 1e-4 &&
+    w.jawline < 1e-4 &&
+    Math.abs(w.chin) < 1e-4 &&
+    w.eyeEnlarge < 1e-4 &&
+    Math.abs(w.eyeTilt) < 1e-4 &&
+    w.noseNarrow < 1e-4 &&
+    Math.abs(w.noseBridge) < 1e-4 &&
+    Math.abs(w.mouthWidth) < 1e-4
+  );
+}
+
 /** True when the whole face block is at its no-effect values. */
 export function isFaceNeutral(face: FaceParams): boolean {
-  return isSkinNeutral(face) && isPartsNeutral(face);
+  return isSkinNeutral(face) && isPartsNeutral(face) && isWarpNeutral(face);
 }
 
 /** True when the curve is the identity and the shader can skip the lookup. */
