@@ -28,7 +28,7 @@ import { cutOut, loadHealer } from '../heal/inpaint';
 import { HealPlate } from '../heal/plate';
 import type { SourceImage } from '../io/decode';
 import { buildCurveLut } from '../recipe/curve';
-import { isIdentityCurve, isSkinNeutral, type Recipe } from '../recipe/schema';
+import { isIdentityCurve, isSkinNeutral, neutralRecipe, type Recipe } from '../recipe/schema';
 import { rasterizeText, textSignature } from '../text/raster';
 import type {
   FaceStats,
@@ -55,7 +55,7 @@ import {
   type RenderTarget,
   updateSourceTexture,
 } from './gl';
-import { buildNodes, drawGrade } from './graph';
+import { buildNodes, drawGrade, SKIN_SPREAD_REFERENCE } from './graph';
 import {
   BOKEH_FRAGMENT,
   BOKEH_GATHER_FRAGMENT,
@@ -75,6 +75,7 @@ import {
   FACE_PARTS_FRAGMENT,
   FACE_PROBE_FRAGMENT,
   FACE_SKIN_FRAGMENT,
+  FACE_SPREAD_FRAGMENT,
   FACE_TEXTURE_FRAGMENT,
   FACE_WARP_FIELD_FRAGMENT,
   FACE_WARP_FRAGMENT,
@@ -102,6 +103,16 @@ export type { FaceStats, RenderOptions, RenderScale, RenderStats } from './conte
 
 /** Longest edge of the interactive proxy. */
 export const PROXY_LONG_EDGE = 1024;
+
+/**
+ * How the skin's spread is packed into eight bits on the way back.
+ *
+ * A standard deviation rather than a variance, so the range skin occupies is
+ * spread over the byte evenly; this puts the calibration near a third of the
+ * way up it and leaves room for skin several times noisier before the top
+ * clips, which is past where the threshold's own bound has taken over anyway.
+ */
+const SKIN_SPREAD_SCALE = 8;
 
 /** Width the guardrail measurement is taken at. */
 const MEASURE_WIDTH = 256;
@@ -169,6 +180,7 @@ export class Pipeline {
       bokeh: Program.create(this.gl, BOKEH_FRAGMENT),
       faceTexture: Program.create(this.gl, FACE_TEXTURE_FRAGMENT),
       faceProbe: Program.create(this.gl, FACE_PROBE_FRAGMENT),
+      faceSpread: Program.create(this.gl, FACE_SPREAD_FRAGMENT),
     };
     this.dag = new Dag(buildNodes(), (target) => this.glctx.pool.release(target));
   }
@@ -364,8 +376,73 @@ export class Pipeline {
       aspect: analysis.sourceHeight / analysis.sourceWidth,
       region: analysis.region,
       regionPixels,
+      // Stood in for until it has been measured, which cannot happen before the
+      // mask it is measured through is here. Nothing is evaluated in between.
+      spread: SKIN_SPREAD_REFERENCE,
       key: `${analysis.revision}`,
     };
+    this.face = { ...this.face, spread: this.measureSkinSpread() };
+  }
+
+  /**
+   * How much the skin's lightness varies inside one filter window.
+   *
+   * Taken once, on arrival, at the default radius — the same place and for the
+   * same reason as the mask refinement above. The filter's threshold is set
+   * against it, so it has to be a property of the photograph rather than of the
+   * recipe: measured at whatever radius the recipe happened to hold, it would be
+   * a readback on the radius slider, which is a readback in the drag loop.
+   *
+   * The variance is already accumulated inside the mask by the filter's own
+   * chain, so this adds one pass and one read rather than a measurement of its
+   * own. What comes back is a weighted sum and its weight, both as bytes, which
+   * divide into the mask-weighted mean with the byte range cancelling.
+   */
+  private measureSkinSpread(): number {
+    const face = this.face;
+    if (!face) return SKIN_SPREAD_REFERENCE;
+    const recipe = neutralRecipe();
+    const [width, height] = fitLongEdge(...face.regionPixels, FACE_FILTER_EDGE);
+    const spec: FrameSpec = {
+      width,
+      height,
+      matrix: [face.region.width, 0, face.region.x, 0, face.region.height, face.region.y, 0, 0, 1],
+      key: `faceRegion:${face.key}`,
+    };
+    const ctx = this.context(recipe, spec);
+    const variance = this.dag.evaluate(ctx, recipe, 'faceDeviationV', variantKey(spec));
+
+    const target = this.acquireByteTarget(variance.width, variance.height);
+    this.programs.faceSpread
+      .bind()
+      .texture('uVariance', variance.texture)
+      .float('uScale', SKIN_SPREAD_SCALE);
+    this.glctx.draw(target, variance.width, variance.height);
+
+    const pixels = new Uint8Array(variance.width * variance.height * 4);
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
+    this.gl.readPixels(
+      0,
+      0,
+      variance.width,
+      variance.height,
+      this.gl.RGBA,
+      this.gl.UNSIGNED_BYTE,
+      pixels,
+    );
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+
+    let spread = 0;
+    let weight = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      spread += pixels[i] as number;
+      weight += pixels[i + 1] as number;
+    }
+    // Too little skin in the working area to have measured anything, which is a
+    // mask that disagrees with the outline rather than a photograph with flat
+    // skin — and the calibration is a better answer than a reading off nothing.
+    if (weight < 255) return SKIN_SPREAD_REFERENCE;
+    return spread / (weight * SKIN_SPREAD_SCALE);
   }
 
   /**

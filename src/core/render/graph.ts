@@ -60,10 +60,9 @@ const WARP_FIELD_EDGE = 512;
  * is not a free parameter: it has to sit above the variance of skin and below
  * the variance of a feature, and those are measurable. Over a window the width
  * the radius asks for, skin lightness in Oklab varies by a few hundredths and
- * the eyes, brows and lips by a few times more, with the two distributions
- * meeting around six per cent. Squared, because it is compared against a
- * variance, that is the number below; it leaves typical skin about a seventh of
- * its detail and a feature edge about two thirds of its own.
+ * the eyes, brows and lips by a few times more. Squared, because it is compared
+ * against a variance, that is the number below; it leaves the skin it was
+ * measured on about a tenth of its detail and a feature edge most of its own.
  *
  * The danger of getting it wrong is one-sided and quiet. Too high and the face
  * flattens, which is obvious and what the texture guardrail measures. Too low
@@ -71,6 +70,49 @@ const WARP_FIELD_EDGE = 512;
  * unchanged: the slider moves, the render changes, and nothing looks smoothed.
  */
 const SKIN_EPSILON = 4e-3;
+
+/**
+ * The skin the threshold above was measured on, as a standard deviation.
+ *
+ * Measured inside the mask, at the default radius, on the photograph the
+ * calibration was taken from. It is here so that the pair says what it means: a
+ * threshold is only a number about skin if the skin it was set against is
+ * written down next to it.
+ */
+export const SKIN_SPREAD_REFERENCE = 0.0209;
+
+/**
+ * How far the threshold is allowed to follow the photograph.
+ *
+ * Skin that varies twice as much wants a threshold four times as high, or the
+ * filter reads it as an edge; the ratio, not the level, is what the filter's
+ * behaviour is made of, and keeping the ratio is what makes the same slider mean
+ * the same retouch on a clean frame and a noisy one.
+ *
+ * The bound is what a measurement is worth rather than what the arithmetic
+ * allows. A mask that caught hair, or a face so blown out it has no variance
+ * left to measure, produces a reading with nothing behind it, and at the ends of
+ * this range the filter is already doing as little or as much as it has any
+ * business doing: four times the threshold returns a face barely touched, and a
+ * quarter of it is the flattening the guardrail is there to report.
+ */
+const SKIN_EPSILON_REACH = 4;
+
+/**
+ * The threshold for the skin in front of the filter.
+ *
+ * Falls back to the calibration itself when there is no face, which is the only
+ * honest answer — with no mask there is nothing to have measured, and the nodes
+ * that would read this are switched off anyway.
+ */
+function skinEpsilon(ctx: PassContext): number {
+  const spread = ctx.face?.spread ?? SKIN_SPREAD_REFERENCE;
+  const scaled = SKIN_EPSILON * (spread / SKIN_SPREAD_REFERENCE) ** 2;
+  return Math.min(
+    SKIN_EPSILON * SKIN_EPSILON_REACH,
+    Math.max(SKIN_EPSILON / SKIN_EPSILON_REACH, scaled),
+  );
+}
 
 /** Run the grade shader. Shared by the graph node and the tone-response probe. */
 export function drawGrade(
@@ -343,7 +385,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   const faceCoeffRaw: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'faceCoeffRaw',
     inputs: ['faceMeanV', 'faceDeviationV'],
-    signature: () => `faceCoeffRaw:${SKIN_EPSILON}`,
+    signature: (_recipe, ctx) => `faceCoeffRaw:${skinEpsilon(ctx)}`,
     evaluate: (ctx, [mean, variance]) => {
       const src = mean as RenderTarget;
       const target = ctx.glctx.pool.acquire(src.width, src.height);
@@ -351,7 +393,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
         .bind()
         .texture('uMean', src.texture)
         .texture('uVariance', (variance as RenderTarget).texture)
-        .float('uEpsilon', SKIN_EPSILON);
+        .float('uEpsilon', skinEpsilon(ctx));
       ctx.glctx.draw(target, src.width, src.height);
       return target;
     },

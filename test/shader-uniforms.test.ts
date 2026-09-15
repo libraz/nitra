@@ -58,6 +58,7 @@ const PROGRAMS: Record<string, string> = {
   hair: hair.HAIR_FRAGMENT,
   faceTexture: face.FACE_TEXTURE_FRAGMENT,
   faceProbe: face.FACE_PROBE_FRAGMENT,
+  faceSpread: face.FACE_SPREAD_FRAGMENT,
 };
 
 function declaredUniforms(source: string): Set<string> {
@@ -353,6 +354,7 @@ describe('the stage shaders themselves', () => {
     const READERS: Record<string, string[]> = {
       faceDeviation: ['uMean'],
       faceCoeff: ['uMean', 'uVariance'],
+      faceSpread: ['uVariance'],
       skin: ['uCoeff', 'uMean', 'uWideMean'],
       parts: ['uMean', 'uWideMean'],
       faceProbe: ['uMean', 'uWideMean'],

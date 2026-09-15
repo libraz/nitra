@@ -85,6 +85,16 @@ export interface FaceTextures {
   region: FaceMaskRegion;
   /** Pixel size of the working area, which the filter is sized against. */
   regionPixels: [number, number];
+  /**
+   * Standard deviation of the skin's lightness inside one filter window.
+   *
+   * Measured on arrival, at the default radius, because the guided filter's
+   * threshold is a statement about how much the skin in front of it varies and
+   * that differs by several times between a clean frame and a noisy one. Held
+   * here rather than recomputed because it is a property of the photograph, like
+   * the mask beside it, and because measuring it means reading pixels back.
+   */
+  spread: number;
   key: string;
 }
 
@@ -145,6 +155,7 @@ export interface Programs {
   bokeh: Program;
   faceTexture: Program;
   faceProbe: Program;
+  faceSpread: Program;
 }
 
 /** Measured after the fact rather than predicted from the slider positions. */

@@ -728,6 +728,36 @@ void main() {
 `;
 
 /**
+ * How much the skin's lightness varies inside one filter window.
+ *
+ * The number the guided filter's threshold is set from, which is why it is
+ * measured rather than assumed: the threshold has to sit above the variance of
+ * skin, and that is a property of the photograph. A high-ISO frame's skin varies
+ * several times as much as a clean one's within the same window, and against a
+ * fixed threshold the filter calls it an edge and hands the photograph back —
+ * the slider moves, the render changes, and nothing looks smoothed. Which is the
+ * quiet half of {@link skinEpsilon}'s failure, and the half nobody reports as a
+ * bug because the control appears to work.
+ *
+ * The square root is what is accumulated, not the variance. Both come back
+ * through eight bits, and a standard deviation spends them evenly over the range
+ * skin occupies while a variance spends nearly all of them below the first
+ * useful value. Squared back afterwards, which is where the scale below has to
+ * be read: it puts the skin this was calibrated on near a third of the range.
+ */
+export const FACE_SPREAD_FRAGMENT = `${GLSL_HEADER}
+${GLSL_SKIN_MEAN}
+uniform sampler2D uVariance;
+uniform float uScale;
+
+void main() {
+  vec4 packed = texture(uVariance, vUv);
+  float spread = sqrt(max(perSkin(packed).x, 0.0));
+  fragColor = vec4(packed.w * clamp(spread * uScale, 0.0, 1.0), packed.w, 0.0, 1.0);
+}
+`;
+
+/**
  * What the skin looks like, as numbers, for the automatic starting values.
  *
  * Three things the sliders cannot be set from the whole frame: how bright the
@@ -773,9 +803,20 @@ void main() {
   // set from measured skin so that a clean face reads low rather than zero,
   // which is the honest answer, and leaves the top of the range for skin that is
   // several times less even than that.
-  float blotch = abs(mean.x - wide.x) * 7.0;
-  // Chroma wandering away from the local average is the colour half of it.
-  float drift = length(lab.yz - wide.yz) * 14.0;
+  //
+  // Both gains are twice what they were, and the reading is the same: they were
+  // set against a wider average that reached off the face, and about half of
+  // what a face measured here was whatever it was standing in front of. That
+  // came out of the average rather than out of this, so the difference it was
+  // inflating is gone and the gain has to make the remainder mean what the whole
+  // of it used to — otherwise every threshold fitted downstream is reading a
+  // scale half the size of the one it was fitted to, and the automatic values
+  // come back as nothing to do.
+  float blotch = abs(mean.x - wide.x) * 14.0;
+  // Chroma wandering away from the local average is the colour half of it. It
+  // lost less, because a mask edge disagrees about lightness far more than it
+  // does about colour, so the two are scaled by what each one measured.
+  float drift = length(lab.yz - wide.yz) * 17.0;
   float uneven = clamp(max(blotch, drift), 0.0, 1.0);
 
   float above = (lab.x - wide.x) / max(wide.x, 0.05);
