@@ -11,7 +11,9 @@
 
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { MAX_CONTROL_POINTS } from '../src/core/face/warp';
 import * as face from '../src/core/render/shaders/face';
+import * as passes from '../src/core/render/shaders/passes';
 
 const pipelineSource = readFileSync(
   new URL('../src/core/render/pipeline.ts', import.meta.url),
@@ -21,6 +23,8 @@ const pipelineSource = readFileSync(
 /** The programs built from the face shaders, and the source of each. */
 const PROGRAMS: Record<string, string> = {
   boxBlur: face.BOX_BLUR_FRAGMENT,
+  warpField: face.FACE_WARP_FIELD_FRAGMENT,
+  warp: face.FACE_WARP_FRAGMENT,
   faceMean: face.FACE_MEAN_FRAGMENT,
   faceDeviation: face.FACE_DEVIATION_FRAGMENT,
   faceCoeff: face.FACE_COEFF_FRAGMENT,
@@ -44,16 +48,32 @@ function declaredUniforms(source: string): Set<string> {
 }
 
 /**
+ * The pipeline with its comments taken out.
+ *
+ * Attribution below splits on the statement separator, and a semicolon inside a
+ * comment splits a setter chain in half — which would drop the uniforms after it
+ * from the program they belong to and report them as never set. Worse in the
+ * other direction: a real missing uniform in the first half would be excused by
+ * a stray semicolon in the prose above it.
+ */
+const pipelineCode = pipelineSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+/**
  * The uniform names set on one program, read out of the pipeline.
  *
  * The setters are chained off `programs.<name>.bind()`, so one statement is one
  * program's worth of calls, and splitting on the statement separator is enough
  * to attribute them without parsing TypeScript.
+ *
+ * The name has to end where it is written, or one program's name is a prefix of
+ * another's and it collects the other's uniforms — `warp` would be credited with
+ * everything `warpField` sets, and then neither of them is really being checked.
  */
 function assignedUniforms(program: string): Set<string> {
   const names = new Set<string>();
-  for (const statement of pipelineSource.split(';')) {
-    if (!statement.includes(`programs.${program}`)) continue;
+  const call = new RegExp(`programs\\.${program}\\b`);
+  for (const statement of pipelineCode.split(';')) {
+    if (!call.test(statement)) continue;
     for (const [, name] of statement.matchAll(/'(u[A-Z]\w*)'/g)) {
       if (name) names.add(name);
     }
@@ -97,14 +117,55 @@ describe('the face shaders themselves', () => {
     }
   });
 
+  /** The stages that go from the rendered frame into the masks' own space. */
+  const MASK_READERS = ['skin', 'parts', 'faceTexture', 'faceProbe'];
+
   it('samples the masks through the framing matrix', () => {
     // The masks are built in the source image's own frame. A stage that sampled
     // them with its own coordinates would put the mask somewhere else the moment
     // the photo was cropped or rotated.
-    for (const program of ['skin', 'parts', 'faceTexture', 'faceProbe']) {
+    for (const program of MASK_READERS) {
       const source = PROGRAMS[program] as string;
       expect(source.includes('uGeometry * vec3(vUv, 1.0)'), program).toBe(true);
     }
+  });
+
+  it('samples the masks through the displacement as well', () => {
+    // And then through the reshaping, in that order. The masks know nothing
+    // about a displacement, so a stage that stopped at the matrix would read the
+    // mask where the pixel is rather than where its content came from — the
+    // smoothing would run off the jaw on one side and stop short on the other.
+    for (const program of MASK_READERS) {
+      const source = PROGRAMS[program] as string;
+      expect(source.includes('toRegion(warped((uGeometry * vec3(vUv, 1.0)).xy))'), program).toBe(
+        true,
+      );
+    }
+  });
+
+  it('leaves the reshaping out of the pass the photograph arrives through', () => {
+    // `ingest` is what the photo looked like before anything was done to it,
+    // which is what the before-and-after view shows. A displacement in there
+    // would redefine "before" as "before everything except the reshaping".
+    expect(passes.INGEST_FRAGMENT.includes('warped(')).toBe(false);
+    expect(face.FACE_WARP_FRAGMENT.includes('warped(')).toBe(true);
+  });
+
+  it('fades the displacement out as well as averaging it', () => {
+    // An average on its own has no falloff. With one control point the weight
+    // cancels between the numerator and the denominator, so the displacement is
+    // the full delta everywhere inside the support and zero immediately outside
+    // it — a step, which is a tear in the picture rather than a reshaping.
+    // Measured on a GPU; asserted here because this suite has none, and the
+    // expression reads like something worth simplifying back.
+    expect(face.FACE_WARP_FIELD_FRAGMENT).toMatch(/\(sum \/ weight\) \* peak/);
+  });
+
+  it('bounds the control points by the same number the allocation uses', () => {
+    // A point past the array's length would not be summed, and the part of the
+    // face it described would stay put while its neighbours moved.
+    expect(face.FACE_WARP_FIELD_FRAGMENT).toContain(`uniform vec4 uPoint[${MAX_CONTROL_POINTS}]`);
+    expect(face.FACE_WARP_FIELD_FRAGMENT).toContain(`i < ${MAX_CONTROL_POINTS}`);
   });
 
   it('keeps the loop in the blur bounded by a constant', () => {

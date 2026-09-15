@@ -18,6 +18,7 @@
  * texture, which is then put back in whatever proportion was asked for.
  */
 
+import { MAX_CONTROL_POINTS } from '../../face/warp';
 import { GLSL_COLOR, GLSL_HEADER } from './common';
 
 /**
@@ -46,6 +47,129 @@ vec2 fromRegion(vec2 region) {
 }
 bool inRegion(vec2 uv) {
   return uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
+}
+`;
+
+/**
+ * Following the reshaping, for everything that reads a mask.
+ *
+ * The masks and the filter coefficients are built in the photograph's own frame
+ * and know nothing about a displacement. Once the face has been moved, the pixel
+ * a stage is looking at came from somewhere else in that frame, and reading the
+ * mask where the pixel *is* would put the mask a face-width away from the face —
+ * the smoothing would run off the jaw on one side and stop short on the other.
+ *
+ * So every stage that samples a mask goes from the frame through here first. The
+ * field holds the offset back to where the content was read from, which is the
+ * same offset the resampling used, so one texture serves both and they cannot
+ * disagree about where the face went.
+ *
+ * `uWarped` is zero when nothing is being reshaped, and then this is the
+ * identity. It has to be a uniform rather than an absent texture because a
+ * sampler that is never bound still reads, and what it reads is not zero.
+ */
+const GLSL_WARP = `
+uniform sampler2D uWarp;
+uniform int uWarped;
+
+vec2 warped(vec2 frame) {
+  if (uWarped == 0) return frame;
+  return frame + texture(uWarp, frame).xy;
+}
+`;
+
+/**
+ * The displacement field, over the photograph's own frame.
+ *
+ * Each control point says the face at its centre moves by its delta, fading to
+ * nothing at its radius. What is written here is the opposite of that: the
+ * offset back to where a pixel should be read from, because resampling asks
+ * where content came from rather than where it went. The negation happens once,
+ * here, and `warp.ts` carries the deltas the way a person would describe them.
+ *
+ * The deltas are averaged and the average is then faded, which is two steps
+ * because neither one alone is a field.
+ *
+ * Summing the contributions would move the middle of a cheek by the total of
+ * every pull that reaches it, an amount bounded by nothing in particular.
+ * Averaging bounds it by the largest single delta — but an average alone has no
+ * falloff at all: with one control point, the weight cancels between the
+ * numerator and the denominator, so the displacement is its full delta
+ * everywhere inside the support and zero immediately outside. That step is a
+ * tear in the picture, and it is what this looked like when it was measured.
+ *
+ * So the average decides the direction and magnitude, and the largest weight
+ * reaching the pixel fades it out: one at a control point's own centre, zero
+ * where every support has ended, smooth in between. Opposed deltas still cancel
+ * through the average, which is what keeps an eye growing instead of sliding.
+ *
+ * The weights are evaluated at the destination rather than at the source, which
+ * is the usual approximation for inverting a small displacement: it is exact in
+ * the limit and understates the movement slightly at the top of a slider. The
+ * error is smooth, so it costs a little of the effect rather than showing up as
+ * a seam.
+ *
+ * Distances are isotropic, in units of the image's width, so a radius is a
+ * circle on a photograph that is not square.
+ */
+export const FACE_WARP_FIELD_FRAGMENT = `${GLSL_HEADER}
+uniform vec4 uPoint[${MAX_CONTROL_POINTS}];
+uniform vec4 uDelta[${MAX_CONTROL_POINTS}];
+uniform int uCount;
+uniform float uAspect;
+
+void main() {
+  vec2 here = vec2(vUv.x, vUv.y * uAspect);
+  vec2 sum = vec2(0.0);
+  float weight = 0.0;
+  float peak = 0.0;
+
+  for (int i = 0; i < ${MAX_CONTROL_POINTS}; i++) {
+    if (i >= uCount) break;
+    float radius = uPoint[i].z;
+    float distance = length(here - uPoint[i].xy);
+    if (distance >= radius) continue;
+    // Smooth at both ends: a linear falloff leaves a crease at the centre of
+    // every control point, and a crease in a displacement is a visible kink in
+    // whatever was straight there.
+    float t = distance / radius;
+    float w = 1.0 - t * t * (3.0 - 2.0 * t);
+    sum += uDelta[i].xy * w;
+    weight += w;
+    peak = max(peak, w);
+  }
+
+  vec2 delta = weight > 0.0 ? (sum / weight) * peak : vec2(0.0);
+  fragColor = vec4(-delta.x, -delta.y / uAspect, 0.0, 1.0);
+}
+`;
+
+/**
+ * The photograph, resampled through the displacement field.
+ *
+ * Reads the source rather than the ingested frame. Resampling something that
+ * was already resampled costs a visible amount of sharpness at proxy sizes, and
+ * there is no reason to pay it: the framing is a matrix and the displacement is
+ * a field, so the two compose into one lookup.
+ *
+ * Kept apart from the ingest pass on purpose, rather than ingest gaining a
+ * displacement of its own. `ingest` is what the photograph looked like before
+ * anything was done to it, which is what the before-and-after view shows and
+ * what the texture measurement compares against. A reshaping inside it would
+ * quietly redefine both.
+ */
+export const FACE_WARP_FRAGMENT = `${GLSL_HEADER}
+${GLSL_COLOR}
+${GLSL_WARP}
+uniform sampler2D uSource;
+uniform mat3 uGeometry;
+uniform int uFromSrgb;
+
+void main() {
+  vec2 uv = warped((uGeometry * vec3(vUv, 1.0)).xy);
+  vec3 c = max(texture(uSource, uv).rgb, 0.0);
+  if (uFromSrgb == 1) c = SRGB_TO_P3 * c;
+  fragColor = vec4(c, 1.0);
 }
 `;
 
@@ -273,6 +397,7 @@ void main() {
 export const FACE_SKIN_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
+${GLSL_WARP}
 uniform sampler2D uSource;
 uniform sampler2D uCoeff;
 uniform sampler2D uMean;
@@ -290,7 +415,7 @@ void main() {
   vec3 c = max(texture(uSource, vUv).rgb, 0.0);
   // Into the source's frame, then into the working area the masks and the
   // filter coefficients live in. Outside it there is no face to work on.
-  vec2 region = toRegion((uGeometry * vec3(vUv, 1.0)).xy);
+  vec2 region = toRegion(warped((uGeometry * vec3(vUv, 1.0)).xy));
   if (!inRegion(region)) {
     fragColor = vec4(c, 1.0);
     return;
@@ -372,6 +497,7 @@ void main() {
 export const FACE_PARTS_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
+${GLSL_WARP}
 uniform sampler2D uSource;
 uniform sampler2D uPolyA;
 uniform sampler2D uPolyB;
@@ -389,7 +515,7 @@ uniform float uCheekHue;
 
 void main() {
   vec3 c = max(texture(uSource, vUv).rgb, 0.0);
-  vec2 region = toRegion((uGeometry * vec3(vUv, 1.0)).xy);
+  vec2 region = toRegion(warped((uGeometry * vec3(vUv, 1.0)).xy));
   if (!inRegion(region)) {
     fragColor = vec4(c, 1.0);
     return;
@@ -462,6 +588,7 @@ void main() {
 export const FACE_TEXTURE_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
+${GLSL_WARP}
 uniform sampler2D uBefore;
 uniform sampler2D uAfter;
 uniform sampler2D uMask;
@@ -480,7 +607,7 @@ float detail(sampler2D image, vec2 uv) {
 }
 
 void main() {
-  vec2 region = toRegion((uGeometry * vec3(vUv, 1.0)).xy);
+  vec2 region = toRegion(warped((uGeometry * vec3(vUv, 1.0)).xy));
   float mask = inRegion(region) ? texture(uMask, region).r : 0.0;
   float before = detail(uBefore, vUv);
   float after = detail(uAfter, vUv);
@@ -505,6 +632,7 @@ void main() {
 export const FACE_PROBE_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_REGION}
+${GLSL_WARP}
 uniform sampler2D uSource;
 uniform sampler2D uMask;
 uniform sampler2D uMean;
@@ -513,7 +641,7 @@ uniform mat3 uGeometry;
 uniform int uSurround;
 
 void main() {
-  vec2 region = toRegion((uGeometry * vec3(vUv, 1.0)).xy);
+  vec2 region = toRegion(warped((uGeometry * vec3(vUv, 1.0)).xy));
   bool here = inRegion(region);
   float mask = here ? texture(uMask, region).r : 0.0;
   float weight = uSurround == 1 ? 1.0 - mask : mask;

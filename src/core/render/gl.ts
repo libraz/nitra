@@ -116,6 +116,19 @@ export class Program {
   }
 
   /**
+   * Set a `vec4[]` uniform from a flat quadruplet list.
+   *
+   * The array's declared length is what the shader reserves, and every WebGL2
+   * implementation guarantees only 224 vectors to a fragment shader in total —
+   * so an array sized by what would be convenient rather than by what is needed
+   * is a pass that links on the machine it was written on and fails elsewhere.
+   */
+  vec4Array(name: string, values: Float32Array): this {
+    this.gl.uniform4fv(this.location(name), values);
+    return this;
+  }
+
+  /**
    * Set a `mat3` uniform from a row-major matrix.
    *
    * GLSL stores columns first, and the transpose flag is fixed at false in

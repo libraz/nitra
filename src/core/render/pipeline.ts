@@ -15,7 +15,9 @@
 
 import type { Mat3 } from '../color/matrix';
 import type { FaceAnalysis } from '../face/analyze';
+import type { FaceRegions } from '../face/geometry';
 import type { FaceMaskRegion } from '../face/raster';
+import { type ControlPoint, MAX_CONTROL_POINTS, warpControlPoints } from '../face/warp';
 import { planExport } from '../geometry/tiles';
 import {
   croppedSize,
@@ -33,6 +35,7 @@ import {
   isIdentityCurve,
   isPartsNeutral,
   isSkinNeutral,
+  isWarpNeutral,
   type Recipe,
 } from '../recipe/schema';
 import { rasterizeText, textSignature } from '../text/raster';
@@ -61,6 +64,8 @@ import {
   FACE_PROBE_FRAGMENT,
   FACE_SKIN_FRAGMENT,
   FACE_TEXTURE_FRAGMENT,
+  FACE_WARP_FIELD_FRAGMENT,
+  FACE_WARP_FRAGMENT,
 } from './shaders/face';
 import {
   BLUR_FRAGMENT,
@@ -97,6 +102,22 @@ const MEASURE_WIDTH = 256;
  * that lies.
  */
 const FACE_FILTER_EDGE = 512;
+
+/**
+ * Longest edge of the displacement field.
+ *
+ * The field is smooth by construction — its narrowest feature is a control
+ * point's own support, a tenth of a face across — so it is built small and
+ * sampled bilinearly rather than evaluated per pixel at full size. What decides
+ * the size is the smallest face worth reshaping: at this edge a face six per
+ * cent of the frame gets around thirty pixels, which is about as small as a face
+ * can be and still be one somebody is reshaping.
+ *
+ * It is held in the photograph's own frame rather than the rendered one, so the
+ * same field serves the proxy, the export and the face-region passes, and a
+ * crop cannot move the displacement relative to the face.
+ */
+const WARP_FIELD_EDGE = 512;
 
 /**
  * How much variance the guided filter treats as texture rather than as an edge.
@@ -187,6 +208,16 @@ interface FaceTextures {
   /** The widest face's width, in source-image-width units. */
   faceWidth: number;
   faceCount: number;
+  /**
+   * The outlines and features themselves, which reshaping displaces.
+   *
+   * The other stages work off the rasterised masks and never need these. A
+   * displacement is not a coverage value, though: it is a direction and a
+   * distance, and what decides both is where the outline of this face runs.
+   */
+  faces: readonly FaceRegions[];
+  /** Source height over source width, which makes the distances isotropic. */
+  aspect: number;
   /** The part of the photo the masks cover, in normalised image coordinates. */
   region: FaceMaskRegion;
   /** Pixel size of the working area, which the filter is sized against. */
@@ -222,6 +253,8 @@ interface Programs {
   faceMaskDeviation: Program;
   faceMaskCoeff: Program;
   faceMaskApply: Program;
+  warpField: Program;
+  warp: Program;
   skin: Program;
   parts: Program;
   faceTexture: Program;
@@ -392,6 +425,41 @@ function faceFilterSize(ctx: PassContext): [number, number] {
  * at the next resolution, with the face at the next size — which is the whole
  * point of holding the parameter as a fraction in the first place.
  */
+/**
+ * Whether anything is being reshaped.
+ *
+ * Asked by the field, by the resampling and by every stage that reads a mask,
+ * so all of them agree — a stage that thought the face had moved while the
+ * resampling thought it had not would read its mask a displacement away from
+ * where the pixels are.
+ */
+function isWarping(recipe: Recipe, ctx: PassContext): boolean {
+  return ctx.face !== null && ctx.face.faces.length > 0 && !isWarpNeutral(recipe.face);
+}
+
+/**
+ * The control points, as the two uniform arrays the field shader declares.
+ *
+ * Sent full length and zero filled rather than trimmed to the count. The
+ * shader stops at `uCount`, so the tail is never read, and a short write is the
+ * kind of thing a driver is entitled to treat differently from a long one.
+ */
+function packControlPoints(points: readonly ControlPoint[]): {
+  point: Float32Array;
+  delta: Float32Array;
+} {
+  const point = new Float32Array(MAX_CONTROL_POINTS * 4);
+  const delta = new Float32Array(MAX_CONTROL_POINTS * 4);
+  points.forEach((p, i) => {
+    point[i * 4] = p.centre.x;
+    point[i * 4 + 1] = p.centre.y;
+    point[i * 4 + 2] = p.radius;
+    delta[i * 4] = p.delta.x;
+    delta[i * 4 + 1] = p.delta.y;
+  });
+  return { point, delta };
+}
+
 function skinRadius(face: FaceParams, ctx: PassContext): number {
   if (!ctx.face) return 1;
   const [width] = faceFilterSize(ctx);
@@ -509,6 +577,8 @@ export class Pipeline {
       faceMaskDeviation: Program.create(this.gl, FACE_MASK_DEVIATION_FRAGMENT),
       faceMaskCoeff: Program.create(this.gl, FACE_MASK_COEFF_FRAGMENT),
       faceMaskApply: Program.create(this.gl, FACE_MASK_APPLY_FRAGMENT),
+      warpField: Program.create(this.gl, FACE_WARP_FIELD_FRAGMENT),
+      warp: Program.create(this.gl, FACE_WARP_FRAGMENT),
       skin: Program.create(this.gl, FACE_SKIN_FRAGMENT),
       parts: Program.create(this.gl, FACE_PARTS_FRAGMENT),
       faceTexture: Program.create(this.gl, FACE_TEXTURE_FRAGMENT),
@@ -608,6 +678,8 @@ export class Pipeline {
       polyB,
       faceWidth: analysis.faceWidth,
       faceCount: analysis.faces.length,
+      faces: analysis.faces,
+      aspect: analysis.sourceHeight / analysis.sourceWidth,
       region: analysis.region,
       regionPixels,
       key: `${analysis.revision}`,
@@ -886,6 +958,12 @@ export class Pipeline {
    * move the number — which also stops the gauge twitching while a crop is being
    * dragged.
    *
+   * What it compares against is the reshaped frame, not the photograph. Both
+   * sides are then resampled the same way and the difference between them is the
+   * face stages alone. Compared against the photograph, slimming a face would
+   * show up here as texture the smoothing had taken — the reading would fall
+   * while the slider it is reporting on had not moved.
+   *
    * Returns null when there is nothing to say — no face, or a face the stages
    * are not touching. An absent reading and a reading of one are different
    * claims.
@@ -905,8 +983,9 @@ export class Pipeline {
     };
     const ctx = this.context(recipe, spec);
     const variant = variantKey(spec);
-    const before = this.dag.evaluate(ctx, recipe, 'ingest', variant);
+    const before = this.dag.evaluate(ctx, recipe, 'warp', variant);
     const after = this.dag.evaluate(ctx, recipe, 'parts', variant);
+    const field = this.dag.evaluate(ctx, recipe, 'warpField', variant);
     const target = this.acquireByteTarget(width, height);
     this.programs.faceTexture
       .bind()
@@ -914,6 +993,8 @@ export class Pipeline {
       .texture('uBefore', before.texture)
       .texture('uAfter', after.texture)
       .texture('uMask', face.mask.texture)
+      .texture('uWarp', field.texture)
+      .int('uWarped', isWarping(recipe, ctx) ? 1 : 0)
       .mat3('uGeometry', ctx.geometry)
       .vec2('uStep', 1 / width, 1 / height);
     this.glctx.draw(target, width, height);
@@ -975,6 +1056,12 @@ export class Pipeline {
         .texture('uMask', face.mask.texture)
         .texture('uMean', mean.texture)
         .texture('uWideMean', wide.texture)
+        // The untouched photograph, read with the masks as they were built, so
+        // the displacement is switched off and the sampler bound to something
+        // valid that is never read. What the starting values are proposed from
+        // is the skin the camera recorded; moving a jaw does not change it.
+        .texture('uWarp', image.texture)
+        .int('uWarped', 0)
         .mat3('uGeometry', ctx.geometry)
         .int('uSurround', surround ? 1 : 0);
       this.glctx.draw(target, width, height);
@@ -1347,6 +1434,68 @@ function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   };
 
   /**
+   * The displacement field the reshaping acts through.
+   *
+   * `ingest` is named as an input for one reason: a node can only be switched
+   * off if it has something to pass through, and a recipe that is not reshaping
+   * anything must not pay for a field of zeros. What the stages downstream get
+   * in that case is the ingested frame bound to a sampler they never read,
+   * because `uWarped` is zero and the lookup is branched past.
+   */
+  const warpField: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'warpField',
+    inputs: ['ingest'],
+    active: isWarping,
+    // Held in the source's frame, so neither the render size nor the framing
+    // is in here: the same field is correct for the proxy and the export.
+    signature: (recipe, ctx) =>
+      `warpField:${ctx.face?.key ?? 'none'}:${JSON.stringify(recipe.face.warp)}`,
+    evaluate: (ctx, _inputs, recipe) => {
+      const face = ctx.face as FaceTextures;
+      const [width, height] = fitLongEdge(ctx.source.width, ctx.source.height, WARP_FIELD_EDGE);
+      const { points } = warpControlPoints(face.faces, recipe.face.warp);
+      const packed = packControlPoints(points);
+      const target = ctx.glctx.pool.acquire(width, height);
+      ctx.programs.warpField
+        .bind()
+        .vec4Array('uPoint', packed.point)
+        .vec4Array('uDelta', packed.delta)
+        .int('uCount', points.length)
+        .float('uAspect', face.aspect);
+      ctx.glctx.draw(target, width, height);
+      return target;
+    },
+  };
+
+  /**
+   * The photograph, moved.
+   *
+   * Before the skin stage, because the design fixes it there: smoothing a
+   * resampled face is smoothing the face that will be in the picture, while
+   * resampling a smoothed one stretches the texture the smoothing just decided
+   * to keep.
+   */
+  const warp: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'warp',
+    inputs: ['ingest', 'warpField'],
+    active: isWarping,
+    signature: (_recipe, ctx) =>
+      `warp:${ctx.source.generation}:${ctx.width}x${ctx.height}:${ctx.source.fromSrgb}:${ctx.geometryKey}`,
+    evaluate: (ctx, [, field]) => {
+      const target = ctx.glctx.pool.acquire(ctx.width, ctx.height);
+      ctx.programs.warp
+        .bind()
+        .texture('uSource', ctx.source.texture)
+        .texture('uWarp', (field as RenderTarget).texture)
+        .int('uWarped', 1)
+        .mat3('uGeometry', ctx.geometry)
+        .int('uFromSrgb', ctx.source.fromSrgb ? 1 : 0);
+      ctx.glctx.draw(target, ctx.width, ctx.height);
+      return target;
+    },
+  };
+
+  /**
    * The guided filter behind the skin stage, as a chain of small passes.
    *
    * Means, deviations from them, coefficients, averaged again: that is the
@@ -1460,10 +1609,11 @@ function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
    */
   const skin: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'skin',
-    inputs: ['ingest', 'faceCoeff', 'faceMeanV', 'faceWideMean'],
+    inputs: ['warp', 'faceCoeff', 'faceMeanV', 'faceWideMean', 'warpField'],
     active: (recipe, ctx) => ctx.face !== null && !isSkinNeutral(recipe.face),
-    signature: (recipe, ctx) => `skin:${JSON.stringify(skinUniforms(recipe, ctx))}`,
-    evaluate: (ctx, [source, coeff, mean, wide], recipe) => {
+    signature: (recipe, ctx) =>
+      `skin:${JSON.stringify(skinUniforms(recipe, ctx))}:${isWarping(recipe, ctx)}`,
+    evaluate: (ctx, [source, coeff, mean, wide, field], recipe) => {
       const src = source as RenderTarget;
       const face = ctx.face as FaceTextures;
       const uniforms = skinUniforms(recipe, ctx);
@@ -1476,6 +1626,8 @@ function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
         .texture('uMean', (mean as RenderTarget).texture)
         .texture('uWideMean', (wide as RenderTarget).texture)
         .texture('uMask', face.mask.texture)
+        .texture('uWarp', (field as RenderTarget).texture)
+        .int('uWarped', isWarping(recipe, ctx) ? 1 : 0)
         .mat3('uGeometry', ctx.geometry)
         .float('uSmooth', uniforms.smooth)
         .float('uBlemish', uniforms.blemish)
@@ -1490,10 +1642,11 @@ function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   /** Parts: the eyes, the teeth, the lips, the cheeks, the shadow under an eye. */
   const parts: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'parts',
-    inputs: ['skin', 'faceWideMean'],
+    inputs: ['skin', 'faceWideMean', 'warpField'],
     active: (recipe, ctx) => ctx.face !== null && !isPartsNeutral(recipe.face),
-    signature: (recipe, ctx) => `parts:${JSON.stringify(partsUniforms(recipe, ctx))}`,
-    evaluate: (ctx, [source, wide], recipe) => {
+    signature: (recipe, ctx) =>
+      `parts:${JSON.stringify(partsUniforms(recipe, ctx))}:${isWarping(recipe, ctx)}`,
+    evaluate: (ctx, [source, wide, field], recipe) => {
       const src = source as RenderTarget;
       const face = ctx.face as FaceTextures;
       const uniforms = partsUniforms(recipe, ctx);
@@ -1506,6 +1659,8 @@ function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
         .texture('uPolyB', face.polyB)
         .texture('uMask', face.mask.texture)
         .texture('uWideMean', (wide as RenderTarget).texture)
+        .texture('uWarp', (field as RenderTarget).texture)
+        .int('uWarped', isWarping(recipe, ctx) ? 1 : 0)
         .mat3('uGeometry', ctx.geometry)
         .float('uUndereye', uniforms.undereye)
         .float('uEyes', uniforms.eyes)
@@ -1589,6 +1744,8 @@ function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
 
   return [
     ingest,
+    warpField,
+    warp,
     faceMean,
     box('faceMeanH', 'faceMean', 'x', radius),
     box('faceMeanV', 'faceMeanH', 'y', radius),
