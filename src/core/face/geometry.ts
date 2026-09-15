@@ -56,6 +56,24 @@ export interface FaceRegions {
   width: number;
   /** Centre of the face outline. */
   centre: Point;
+  /**
+   * The face's own axes: unit vectors along the eyes and down towards the mouth.
+   *
+   * Carried rather than re-derived by whoever needs them. Reshaping has to know
+   * which way is sideways on this face, and a second derivation of the same two
+   * vectors is one that drifts from this one unnoticed. They are not exactly
+   * perpendicular — the eye line and the eyes-to-mouth line are measured
+   * separately and a turned head skews them, which is the information a
+   * reshaping needs rather than a defect to be orthogonalised away.
+   */
+  axes: FaceAxes;
+}
+
+export interface FaceAxes {
+  /** Towards the face's own right, which is the viewer's left. */
+  right: Point;
+  /** From the eyes towards the mouth. */
+  down: Point;
 }
 
 /**
@@ -259,5 +277,6 @@ export function faceRegions(landmarks: readonly NormalisedLandmark[], aspect: nu
     cheeks,
     width,
     centre,
+    axes: { right, down },
   };
 }
