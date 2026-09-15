@@ -15,6 +15,7 @@
  */
 
 import { FaceLandmarker, FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
+import { MESH_TRIANGLES } from './contours';
 import { type FaceRegions, faceRegions } from './geometry';
 import type { NormalBitmap } from './normals';
 import { rasteriseNormals } from './normals';
@@ -362,7 +363,7 @@ export async function analyzeFace(image: ImageData): Promise<FaceAnalysis> {
 
   const rasterised = rasteriseFaces(faces, image.width, image.height, aspect);
   // Over the same working area as the masks, so one rectangle addresses both.
-  const normals = rasteriseNormals(faces, image.width, image.height, aspect);
+  const normals = rasteriseNormals(faces, MESH_TRIANGLES, image.width, image.height, aspect);
 
   revision += 1;
   return {

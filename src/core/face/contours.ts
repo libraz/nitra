@@ -79,6 +79,91 @@ export function pathsFromConnections(connections: readonly Connection[]): Landma
   return paths;
 }
 
+/** Three landmark indices bounding one face of the mesh, in ascending order. */
+export type Triangle = readonly [number, number, number];
+
+/** One edge, as the pair of indices that identifies it either way round. */
+function edgeOf(a: number, b: number): string {
+  return a < b ? `${a},${b}` : `${b},${a}`;
+}
+
+function edgesOf([a, b, c]: Triangle): [string, string, string] {
+  return [edgeOf(a, b), edgeOf(a, c), edgeOf(b, c)];
+}
+
+/** How many faces an edge of a surface can belong to: two, or one at a border. */
+const EDGE_FACES = 2;
+
+/**
+ * Drop the cycles that are not faces, until the set describes a surface.
+ *
+ * A closed walk of three is not necessarily a triangle of the mesh: four mutually
+ * connected points give four of them, and only three can be faces — the fourth
+ * is the outline the other three fill. What identifies it is that all three of
+ * its edges are already carried by two faces each, which is the most an edge of
+ * a surface can have, so removing it is the only repair that leaves every edge
+ * with a face still on it.
+ *
+ * One at a time and the count strictly falls, so this terminates.
+ */
+function surfaceOf(cycles: readonly Triangle[]): Triangle[] {
+  const kept = [...cycles];
+  for (;;) {
+    const carried = new Map<string, number>();
+    for (const triangle of kept) {
+      for (const edge of edgesOf(triangle)) carried.set(edge, (carried.get(edge) ?? 0) + 1);
+    }
+    const spurious = kept.findIndex((triangle) =>
+      edgesOf(triangle).every((edge) => (carried.get(edge) ?? 0) > EDGE_FACES),
+    );
+    if (spurious < 0) return kept;
+    kept.splice(spurious, 1);
+  }
+}
+
+/**
+ * The triangles a tessellation's edge list describes.
+ *
+ * The model publishes its tessellation as edges, so the faces have to be
+ * recovered from them: every three points that are all connected to each other,
+ * less the ones that are an outline rather than a face. The winding is discarded
+ * on the way — both directions of every interior edge are published, so there is
+ * none to recover, and which way a face points is decided from its geometry
+ * where the depths are known.
+ *
+ * Derived rather than written out for the same reason the contours are: a row of
+ * index triples is a copy of the model's topology that nothing checks.
+ */
+export function trianglesFromConnections(connections: readonly Connection[]): Triangle[] {
+  const neighbours = new Map<number, Set<number>>();
+  const reach = (vertex: number): Set<number> => {
+    const known = neighbours.get(vertex);
+    if (known) return known;
+    const fresh = new Set<number>();
+    neighbours.set(vertex, fresh);
+    return fresh;
+  };
+  for (const { start, end } of connections) {
+    if (start === end) continue;
+    reach(start).add(end);
+    reach(end).add(start);
+  }
+
+  // Ascending within each triple and then sorted, so one cycle is found once and
+  // the order does not depend on the order the edges arrived in.
+  const cycles: Triangle[] = [];
+  for (const [a, from] of neighbours) {
+    for (const b of from) {
+      if (b <= a) continue;
+      for (const c of neighbours.get(b) ?? []) {
+        if (c > b && from.has(c)) cycles.push([a, b, c]);
+      }
+    }
+  }
+  cycles.sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
+  return surfaceOf(cycles);
+}
+
 /** The single closed ring a connection set describes. */
 function ring(connections: readonly Connection[], what: string): number[] {
   const paths = pathsFromConnections(connections);
@@ -138,3 +223,14 @@ export const CONTOURS = {
   leftIris: ring(FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, 'left iris'),
   rightIris: ring(FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, 'right iris'),
 } as const;
+
+/**
+ * The faces of the mesh, which is what makes the landmarks a surface.
+ *
+ * Only the mesh's own points are in it. The four points per iris come from the
+ * refinement pass and are not tessellated with the rest, so they are landmarks
+ * on a surface rather than part of one.
+ */
+export const MESH_TRIANGLES: readonly Triangle[] = trianglesFromConnections(
+  FaceLandmarker.FACE_LANDMARKS_TESSELATION,
+);

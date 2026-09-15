@@ -5,8 +5,17 @@
  * show up as a smoothing that leaks over an eyelid rather than as an error.
  */
 
+import { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { describe, expect, it } from 'vitest';
-import { CONTOURS, type Connection, pathsFromConnections } from '../src/core/face/contours';
+import {
+  CONTOURS,
+  type Connection,
+  MESH_TRIANGLES,
+  pathsFromConnections,
+  type Triangle,
+  trianglesFromConnections,
+} from '../src/core/face/contours';
+import { meshConnections, meshTriangles } from './helpers/face';
 
 /** The edges of a closed ring, shuffled and with some of them reversed. */
 function scramble(indices: readonly number[]): Connection[] {
@@ -69,6 +78,118 @@ describe('chaining a connection set', () => {
     expect(paths[0]?.closed).toBe(false);
     expect(paths[0]?.indices).toHaveLength(4);
     expect([paths[0]?.indices.at(0), paths[0]?.indices.at(-1)].sort()).toEqual([1, 4]);
+  });
+});
+
+/** How many of a triangle set's triangles each edge belongs to. */
+function edgeLoad(triangles: readonly Triangle[]): Map<string, number> {
+  const load = new Map<string, number>();
+  for (const [a, b, c] of triangles) {
+    for (const [p, q] of [
+      [a, b],
+      [a, c],
+      [b, c],
+    ] as [number, number][]) {
+      const edge = p < q ? `${p},${q}` : `${q},${p}`;
+      load.set(edge, (load.get(edge) ?? 0) + 1);
+    }
+  }
+  return load;
+}
+
+describe('recovering the mesh from its edges', () => {
+  it('returns exactly the faces of a triangulation it is given the edges of', () => {
+    // A grid, whose faces are known without computing a triangulation — which is
+    // the only way to check this without writing the thing under test twice.
+    const expected = meshTriangles()
+      .map((triangle) => triangle.join('-'))
+      .sort();
+    const recovered = trianglesFromConnections(meshConnections())
+      .map((triangle) => triangle.join('-'))
+      .sort();
+    expect(recovered).toEqual(expected);
+  });
+
+  it('leaves out the outline three triangles sit inside', () => {
+    // Point 3 inside the triangle 0-1-2 and joined to all of its corners, which
+    // is the shape the model's tessellation has twice, beside the nose. Four
+    // closed walks of three come out of it and only the three around 3 are
+    // faces; taking the outline as a fourth draws a flat patch over the detail
+    // it covers.
+    //
+    // What says it is the outline is that each of its edges already has two
+    // faces from elsewhere — so the ring of neighbours is part of the case, not
+    // scenery. Alone, the same four points are a tetrahedron, and then all four
+    // are faces.
+    const join = (pairs: [number, number][]): Connection[] =>
+      pairs.map(([start, end]) => ({ start, end }));
+    const triangles = trianglesFromConnections([
+      ...join([
+        [0, 1],
+        [1, 2],
+        [2, 0],
+      ]),
+      ...join([
+        [0, 3],
+        [1, 3],
+        [2, 3],
+      ]),
+      ...join([
+        [0, 4],
+        [1, 4],
+        [1, 5],
+        [2, 5],
+        [0, 6],
+        [2, 6],
+      ]),
+    ]);
+    expect(triangles.map((triangle) => triangle.join('-'))).toEqual([
+      '0-1-3',
+      '0-1-4',
+      '0-2-3',
+      '0-2-6',
+      '1-2-3',
+      '1-2-5',
+    ]);
+  });
+
+  it('finds no surface in an outline', () => {
+    // A contour is a ring of edges and encloses no triangles, which is what says
+    // the recovery is reading faces rather than anything three points long.
+    expect(trianglesFromConnections(scramble([0, 1, 2, 3, 4, 5]))).toEqual([]);
+  });
+});
+
+describe("the mesh's faces", () => {
+  it('accounts for every connection the model publishes', () => {
+    // Both directions of an interior edge are published and both of its faces
+    // use it; a border edge is published once and used once. So the number of
+    // connections is three times the number of faces, whatever those numbers
+    // are — which checks the count against the model rather than against a
+    // number written down here.
+    expect(MESH_TRIANGLES.length * 3).toBe(FaceLandmarker.FACE_LANDMARKS_TESSELATION.length);
+  });
+
+  it('describes a surface: every edge carries a face, and none carries three', () => {
+    const load = edgeLoad(MESH_TRIANGLES);
+    const published = new Set(
+      FaceLandmarker.FACE_LANDMARKS_TESSELATION.map(({ start, end }) =>
+        start < end ? `${start},${end}` : `${end},${start}`,
+      ),
+    );
+    expect(load.size).toBe(published.size);
+    for (const [edge, faces] of load) {
+      expect(published.has(edge), edge).toBe(true);
+      expect(faces, edge).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it('is made of mesh points only, and leaves none of them out', () => {
+    // The iris points come from the refinement pass and are not tessellated, so
+    // a triangle naming one would be a triangle over an eyeball.
+    const corners = new Set(MESH_TRIANGLES.flat());
+    expect(corners.size).toBe(468);
+    expect(Math.max(...corners)).toBe(467);
   });
 });
 

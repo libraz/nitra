@@ -16,13 +16,13 @@ import { describe, expect, it } from 'vitest';
 import { faceRegions } from '../src/core/face/geometry';
 import { type NormalBitmap, rasteriseNormals } from '../src/core/face/normals';
 import { faceRegion } from '../src/core/face/raster';
-import { makeFace } from './helpers/face';
+import { makeFace, meshTriangles } from './helpers/face';
 
 const SOURCE = 800;
 
 function build(shape: Parameters<typeof makeFace>[0] = {}) {
   const regions = faceRegions(makeFace(shape), 1);
-  return { regions, ...rasteriseNormals([regions], SOURCE, SOURCE, 1) };
+  return { regions, ...rasteriseNormals([regions], meshTriangles(), SOURCE, SOURCE, 1) };
 }
 
 /** The normal at a point given in image-width units, unpacked back to a vector. */
@@ -126,6 +126,29 @@ describe('the face normal field', () => {
     expect(normalAt(map, region, regions.centre).coverage).toBeCloseTo(1, 1);
     const corner = normalAt(map, region, { x: region.x, y: region.y });
     expect(corner.coverage).toBe(0);
+  });
+
+  it('counts a hole in the mesh as surface', () => {
+    // The tessellation has no triangles inside the eye openings or the mouth,
+    // because there are no landmarks in there to make any from. So the field
+    // arrives with holes in it, and a hole in the mesh is not a hole in the
+    // face: a light falls on an eye, and leaving it uncovered puts an unlit
+    // patch over each one with the feather drawn round it.
+    const regions = faceRegions(makeFace(), 1);
+    const { centre, width } = regions;
+    const punched = new Set<number>();
+    regions.surface.forEach((point, index) => {
+      if (Math.hypot(point.x - centre.x, point.y - centre.y) < width * 0.18) punched.add(index);
+    });
+    const whole = meshTriangles();
+    const holed = whole.filter((triangle) => !triangle.some((vertex) => punched.has(vertex)));
+    expect(holed.length).toBeLessThan(whole.length);
+
+    const { map, region } = rasteriseNormals([regions], holed, SOURCE, SOURCE, 1);
+    expect(normalAt(map, region, centre).coverage).toBeCloseTo(1, 1);
+    // Filled from the inside, not by growing the field: what is outside the mesh
+    // is still outside it.
+    expect(normalAt(map, region, { x: region.x, y: region.y }).coverage).toBe(0);
   });
 
   it('holds the shape still when the head is somewhere else in the frame', () => {

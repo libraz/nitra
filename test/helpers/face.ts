@@ -11,7 +11,7 @@
  * the conversion rather than hiding it.
  */
 
-import { CONTOURS } from '../../src/core/face/contours';
+import { CONTOURS, type Connection, type Triangle } from '../../src/core/face/contours';
 import type { NormalisedLandmark, Point } from '../../src/core/face/geometry';
 
 export interface FaceShape {
@@ -50,6 +50,82 @@ function surfaceDepth(x: number, y: number, width: number, relief: number, nose:
   return -(dome * relief + ridge * nose);
 }
 
+/**
+ * The interior mesh's grid, which is what makes the synthetic head a surface.
+ *
+ * A grid rather than a scatter because its triangulation is known without
+ * computing one, and computing one here would mean a second implementation of
+ * the thing under test.
+ *
+ * It is laid over the indices the named contours do not use. A contour point is
+ * moved onto its own ellipse afterwards, and a vertex that moves out from under
+ * its triangles is a fold in the surface; leaving them out makes them landmarks
+ * on the mesh rather than corners of it. There are exactly this many free, which
+ * is where the shape of the grid comes from.
+ */
+const MESH_COLS = 17;
+const MESH_ROWS = 20;
+
+/** The landmark indices the grid is laid over, in ascending order. */
+const GRID: readonly number[] = (() => {
+  const taken = new Set(Object.values(CONTOURS).flat(2) as number[]);
+  const free: number[] = [];
+  for (let index = 0; index < 468 && free.length < MESH_COLS * MESH_ROWS; index++) {
+    if (!taken.has(index)) free.push(index);
+  }
+  return free;
+})();
+
+function at(row: number, col: number): number {
+  return GRID[row * MESH_COLS + col] as number;
+}
+
+function ascending(a: number, b: number, c: number): Triangle {
+  const [p, q, r] = [a, b, c].sort((one, other) => one - other) as [number, number, number];
+  return [p, q, r];
+}
+
+/** The grid's own triangulation: the two triangles either side of each cell's diagonal. */
+export function meshTriangles(): Triangle[] {
+  const triangles: Triangle[] = [];
+  for (let row = 0; row + 1 < MESH_ROWS; row++) {
+    for (let col = 0; col + 1 < MESH_COLS; col++) {
+      const topLeft = at(row, col);
+      const bottomRight = at(row + 1, col + 1);
+      triangles.push(ascending(topLeft, at(row, col + 1), bottomRight));
+      triangles.push(ascending(topLeft, bottomRight, at(row + 1, col)));
+    }
+  }
+  return triangles;
+}
+
+/**
+ * The same triangulation as the edge list a model publishes it as.
+ *
+ * Both directions of every edge, including the ones along the border, because
+ * that is the shape the recovery has to cope with: a published tessellation
+ * carries no winding to read.
+ */
+export function meshConnections(): Connection[] {
+  const edges = new Set<string>();
+  for (const [a, b, c] of meshTriangles()) {
+    for (const [start, end] of [
+      [a, b],
+      [a, c],
+      [b, c],
+    ]) {
+      edges.add(`${start},${end}`);
+    }
+  }
+  return [...edges].flatMap((edge) => {
+    const [start, end] = edge.split(',').map(Number) as [number, number];
+    return [
+      { start, end },
+      { start: end, end: start },
+    ];
+  });
+}
+
 export function makeFace({
   centre = { x: 0.5, y: 0.5 },
   width = 0.3,
@@ -76,16 +152,22 @@ export function makeFace({
 
   // The mesh, before the named contours are placed on top of it. The stages
   // that read outlines only ever touch the contour indices, but the normals are
-  // built from every point, and points left at the origin would put the whole
-  // head's worth of surface in the corner of the picture.
+  // built from the triangles between these, and points left at the origin would
+  // put the whole head's worth of surface in the corner of the picture.
   //
-  // A golden-angle spiral rather than a grid, because it fills an ellipse
-  // evenly at any count and leaves no rows for a derivative to align with.
-  for (let i = 0; i < 468; i++) {
-    const t = (i + 0.5) / 468;
-    const radius = Math.sqrt(t);
-    const angle = i * 2.39996;
-    put(i, Math.cos(angle) * radius * (width / 2), Math.sin(angle) * radius * (width * 0.7));
+  // The square grid is mapped onto the ellipse rather than clipped to it, so
+  // every cell stays a quad and the mesh has no ragged edge for the coverage to
+  // inherit.
+  for (let row = 0; row < MESH_ROWS; row++) {
+    for (let col = 0; col < MESH_COLS; col++) {
+      const u = (col / (MESH_COLS - 1)) * 2 - 1;
+      const v = (row / (MESH_ROWS - 1)) * 2 - 1;
+      put(
+        at(row, col),
+        u * Math.sqrt(1 - (v * v) / 2) * (width / 2),
+        v * Math.sqrt(1 - (u * u) / 2) * (width * 0.7),
+      );
+    }
   }
 
   const ellipse = (indices: readonly number[], cx: number, cy: number, rx: number, ry: number) => {
