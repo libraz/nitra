@@ -48,6 +48,11 @@ const MODELS: readonly Artefact[] = [
  * the JavaScript that drives it can never be two different releases. The
  * `module_internal` pair that ships alongside these is for a loader this app
  * does not use, and leaving it out keeps eleven megabytes out of the deploy.
+ *
+ * Taking them from the dependency tree is also why `build` installs before it
+ * runs this: the models come off the network and these do not, so a host that
+ * hands a checkout straight to the build command would otherwise get as far as
+ * a working model and no runtime to read it with.
  */
 const RUNTIME = [
   'vision_wasm_internal.js',

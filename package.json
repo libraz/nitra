@@ -6,7 +6,7 @@
   "packageManager": "bun@1.4.2",
   "scripts": {
     "dev": "bun run assets && vite",
-    "build": "bun run assets && tsc --noEmit && vite build",
+    "build": "bun install --frozen-lockfile && bun run assets && tsc --noEmit && vite build",
     "assets": "bun run models",
     "models": "bun run scripts/fetch-models.ts",
     "preview": "vite preview",
