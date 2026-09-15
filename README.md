@@ -19,17 +19,35 @@ Working after the fact removes the frame-rate budget. Passes can be as expensive
 - Scales saturation as Oklch chroma, with the gain attenuated inside the skin hue band. An HSV saturation multiplier rotates hue and drives skin into clipping ahead of everything else.
 - Adjusts hue, saturation and lightness per colour, across eight bands whose centres are derived from the primaries rather than typed in. Near-neutral pixels are left alone, because a grey sky has a hue only in the arithmetic sense.
 - Effects: split toning, monochrome with channel weights, matte fade, vignette, glow, sharpening, clarity, film grain, highlight rolloff, and dithering on the way down to eight bits.
+- Fills a blemish where you click it. Skin from around the mark is copied in rather than smoothed over, so the pores come with it.
+- Retouches the person: skin, eyes, lips, teeth, cheeks, hair, the background behind them, one added light, and the shape of the face within a bound it reports (see below).
 - Frames: flips, quarter turns, straightening, and a crop that can be locked to a shape. Straightening trims the frame to keep it filled, so no corner comes out empty.
 - Crops to what a destination actually publishes — Instagram, X, Facebook, YouTube, TikTok — taking the shape and the size as one decision.
 - Adds text. Type is rasterised by the browser, so Japanese composes correctly, and it is composited after the output transform because a caption is not light that was in the room.
 - Sets that text in any typeface on the machine: load a font file and it joins the picker, sampled in itself. A face that has no glyph for a character in the caption says so, rather than letting the substitution be discovered in the exported file.
 - Splits one picture across a grid of posts, in the order they have to be uploaded (see below).
 - Suggests a starting grade from the image itself, and offers finishes as thumbnails of your own photo rather than as names.
-- Measures the result — clipped highlights, blocked shadows, clipped chroma — and shows the numbers. Nothing is forbidden.
+- Measures the result — skin texture kept, how far the face was moved, clipped highlights, blocked shadows, clipped chroma — and shows the numbers. Nothing is forbidden.
 - Removes the metadata, keeps it, or writes it field by field — location, capture time, camera, credit (see below).
+- Offers the editor twice. Simple mode shows no numbers at all, which is what leaves showing the result as the only way to offer a choice; detail mode opens every parameter, and can list only the ones that have been changed.
 - Runs in light or dark, in English or Japanese.
 
-Face analysis, skin work and background defocus are the next stages. The pipeline is built to take them; they are not in this build.
+## Retouching a person
+
+The face analysis runs here. Its models are served by the app itself rather than fetched from somebody else's host when the page loads: the photo never leaves the device, and a request to a third party on load would still tell that third party the app is in use. They are pinned by URL and by digest, because a model that changes underneath the same URL changes what the app renders.
+
+None of it works without a face, and the panel says which of three things happened — a face was found, there is no face in this photo, or the analysis could not run. A photograph of a landscape leaves the skin controls off instead of live and inert.
+
+- **Skin.** Smoothing takes off fine texture and pushes down the slow unevenness that reads as blotchy, and a trim decides how much texture survives: the negative side is how plastic skin happens, the positive side is the repair for having gone too far without undoing the rest. Also shine on the forehead and nose, colour evened towards its own local average, and the shadow under the eyes lifted.
+- **Eyes, lips and cheeks.** The white of the eye is brightened without touching the iris, and the iris gains definition as local contrast, so a pale eye stays pale. The catchlight is the one the photograph already has, lifted rather than painted in — where a drawn highlight belongs is decided by a light nobody can see from the file, and in the wrong place it reads as a glass eye. Then yellow off the teeth, and colour on the lips and cheeks.
+- **Hair.** Sheen, grey strands taken back towards the colour around them, and a tint. It is keyed to the segmentation rather than to the landmarks, so it still holds on a head turned away from the camera. A strand that is only lighter than its surroundings is a highlight, and taking the colour out of a highlight is how hair comes out wet, so lightness alone is not enough to act on.
+- **Background.** The background goes out of focus while the person stays sharp, and the aperture is a choice — round, bladed or anamorphic — because the shape an out-of-focus highlight comes out as is what says a lens was involved. Highlights are lifted before the convolution: a real one is bright because the sensor saturated there, and convolving the recorded value spreads a dull grey disc. The background can also be darkened or desaturated to lift the person off it.
+- **Light.** One light, placed on the picture like a clock face, with how far round it stands towards the camera, how broad the source is, and its colour. It only ever adds. The lighting already in the photograph cannot be removed without separating reflectance from shading, so a light that is only added cannot contradict it — and it is added as a gain rather than a sum, which is what keeps the skin's texture instead of blowing out the dark half of a face.
+- **Shape.** Eight amounts: the outline, the jaw, the chin, the opening and tilt of the eyes, the width and bridge of the nose, and the width of the mouth.
+
+nitra retouches; it does not turn somebody into a different person. The outline, the body and a face swap are one mechanism, so where that line falls is a product decision rather than a technical limit, and it is easier to hold now than to draw back later.
+
+So the reshaping is bounded and says what it did. Every amount is a fraction of the face's own width, each displacement is clamped, and the reach of a control stops short of the frame, which is what keeps a doorway behind the face from bending. How far the face actually moved is measured and shown next to the other numbers, in the same units, and the reading passes its warning while a single slider is still at the top of its own track, rather than only once several are stacked.
 
 ## Splitting a picture across a grid
 
@@ -79,6 +97,8 @@ bun install
 bun run dev
 ```
 
+The first run downloads the face-analysis models and the runtime that drives them into `public/models` — around forty megabytes, pinned by digest, and not committed. Without them the app still runs; the face controls report that the analysis is unavailable.
+
 Requires a browser with WebGL2 and half-float render targets: current Chrome, Edge, Safari or Firefox.
 
 ```bash
@@ -100,7 +120,7 @@ The area immediately around the photo stays a neutral mid grey in either. Colour
 
 ## Non-goals
 
-- **No retouching that makes someone look like a different person.** Reshaping bone structure and swapping faces are out of scope. The line is a product decision, not a technical limit, and it is easier to hold now than to draw back later.
+- **No retouching that makes someone look like a different person.** Rebuilding bone structure, swapping faces, reshaping a body and filling anything in generatively are out of scope. So is replacing the background: a photograph that claims a place it was not taken in is over the same line.
 - **No server.** There is no upload path, and none will be added.
 - **No accounts.** Saving and sharing happen through files.
 - Video is out of scope for now. The pipeline is built so it can be extended to video later.
