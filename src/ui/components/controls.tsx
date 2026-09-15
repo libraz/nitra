@@ -9,11 +9,11 @@
 
 import { useCallback, useState } from 'react';
 import { useI18n } from '../../i18n';
-import type { ParamSpec } from '../params';
+import { granularity, type ParamSpec } from '../params';
 import { Menu } from './menu';
 
-function format(value: number, bipolar: boolean): string {
-  return `${bipolar && value > 0 ? '+' : ''}${value.toFixed(2)}`;
+function format(value: number, bipolar: boolean, decimals: number): string {
+  return `${bipolar && value > 0 ? '+' : ''}${value.toFixed(decimals)}`;
 }
 
 interface SliderProps {
@@ -45,6 +45,7 @@ export function Slider({ spec, value, onChange, disabled = false }: SliderProps)
   const [active, setActive] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const span = spec.max - spec.min;
+  const { step, decimals } = granularity(span);
   const neutralAt = ((spec.neutral - spec.min) / span) * 100;
   const valueAt = ((value - spec.min) / span) * 100;
   const left = Math.min(neutralAt, valueAt);
@@ -62,7 +63,7 @@ export function Slider({ spec, value, onChange, disabled = false }: SliderProps)
           type="text"
           inputMode="decimal"
           aria-label={`${t(spec.labelKey)} — ${spec.min} … ${spec.max}`}
-          value={draft ?? format(value, spec.bipolar)}
+          value={draft ?? format(value, spec.bipolar, decimals)}
           disabled={disabled}
           onFocus={(event) => event.currentTarget.select()}
           onBlur={() => setDraft(null)}
@@ -94,7 +95,7 @@ export function Slider({ spec, value, onChange, disabled = false }: SliderProps)
           type="range"
           min={spec.min}
           max={spec.max}
-          step={0.01}
+          step={step}
           value={value}
           disabled={disabled}
           onChange={(event) => onChange(Number.parseFloat(event.target.value))}

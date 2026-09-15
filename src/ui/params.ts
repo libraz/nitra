@@ -37,6 +37,24 @@ export interface ParamGroup {
   requiresFace?: boolean;
 }
 
+/**
+ * How finely a slider can be dragged, and how many decimals its readout needs.
+ *
+ * Both follow from the range rather than being fixed. A hundredth is the right
+ * step for an amount running from zero to one, and useless for a radius running
+ * from two thousandths to three hundredths: it would offer three positions on
+ * the whole track and round the default away from itself, which reads as a
+ * control that refuses to sit where it started.
+ *
+ * A hundred steps is what the amounts already had, so this changes nothing for
+ * them and only sharpens the narrow ranges — the fractions of an image, where
+ * the interesting part of the range is a long way inside a hundredth.
+ */
+export function granularity(span: number): { step: number; decimals: number } {
+  const step = 10 ** Math.floor(Math.log10(span / 100));
+  return { step, decimals: Math.max(0, Math.min(6, -Math.floor(Math.log10(step)))) };
+}
+
 export function spec(path: string, labelKey: MessageKey): ParamSpec {
   const def = paramDef(path);
   return {
