@@ -9,13 +9,14 @@
  * direction a declared-but-never-set uniform is a stage running on zero.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MAX_CONTROL_POINTS } from '../src/core/face/warp';
 import * as bokeh from '../src/core/render/shaders/bokeh';
 import { GLSL_COLOR } from '../src/core/render/shaders/common';
 import * as face from '../src/core/render/shaders/face';
 import * as hair from '../src/core/render/shaders/hair';
+import * as light from '../src/core/render/shaders/light';
 import * as passes from '../src/core/render/shaders/passes';
 
 const pipelineSource = readFileSync(
@@ -59,7 +60,11 @@ const PROGRAMS: Record<string, string> = {
   faceTexture: face.FACE_TEXTURE_FRAGMENT,
   faceProbe: face.FACE_PROBE_FRAGMENT,
   faceSpread: face.FACE_SPREAD_FRAGMENT,
+  relight: light.RELIGHT_FRAGMENT,
 };
+
+/** The shader modules, and the namespaces this file checks them through. */
+const MODULES = { bokeh, face, hair, light, passes };
 
 function declaredUniforms(source: string): Set<string> {
   const names = new Set<string>();
@@ -122,7 +127,7 @@ describe('the stage shaders and the calls that drive them', () => {
     // a `Program.create` naming one of their exports is a program this file is
     // responsible for, and a new shader is unchecked until it is added.
     const shaders = new Set(
-      [bokeh, face, hair, passes].flatMap((module) =>
+      Object.values(MODULES).flatMap((module) =>
         Object.keys(module).filter((name) => name.endsWith('_FRAGMENT')),
       ),
     );
@@ -131,6 +136,21 @@ describe('the stage shaders and the calls that drive them', () => {
       .filter(([, , source]) => shaders.has(source as string))
       .map(([, key]) => key as string);
     expect(new Set(fromShaders)).toEqual(new Set(Object.keys(PROGRAMS)));
+  });
+
+  it('reads every shader module there is', () => {
+    // The check above is only as complete as the list of modules it reads, and
+    // a shader in a module nobody imported is invisible to it — which is how
+    // the relighting arrived unchecked despite that list being the thing that
+    // had just been fixed. So the directory decides, not the imports.
+    const directory = new URL('../src/core/render/shaders/', import.meta.url);
+    const found = readdirSync(directory)
+      .filter((name) => name.endsWith('.ts'))
+      .map((name) => name.replace(/\.ts$/, ''))
+      // Shared GLSL rather than a shader: it exports no fragment program, and
+      // every module that uses it is here in its own right.
+      .filter((name) => name !== 'common');
+    expect(new Set(found)).toEqual(new Set(Object.keys(MODULES)));
   });
 
   for (const [program, source] of Object.entries(PROGRAMS)) {
@@ -388,12 +408,16 @@ describe('the stage shaders themselves', () => {
     expect(bokeh.BOKEH_GATHER_FRAGMENT).toMatch(/unit \*= hexReach\(angle\)/);
   });
 
-  it('puts the defocus before the grade', () => {
-    // Stage order is a statement about the picture. A lens is in front of the
-    // film, so raising the exposure and then defocusing is not a photograph
-    // anything could have taken — and the difference shows in the highlights,
-    // which is the one place the effect is judged.
-    expect(graphSource).toMatch(/id: 'grade',\s*inputs: \['bokeh'\]/);
+  it('defocuses, then lights, then grades', () => {
+    // Stage order is a statement about the picture, and this is the run of it
+    // the graph can be read for. A lens is in front of the film, so raising the
+    // exposure and then defocusing is not a photograph anything could have
+    // taken — and the difference shows in the highlights, which is the one place
+    // the effect is judged. Adding light is scene-referred and grading is
+    // display-referred, so a light added after the grade is one the exposure
+    // correction has already finished arguing with.
+    expect(graphSource).toMatch(/id: 'relight',\s*inputs: \['bokeh', 'warpField'\]/);
+    expect(graphSource).toMatch(/id: 'grade',\s*inputs: \['relight'\]/);
   });
 
   it('keeps the loop in the blur bounded by a constant', () => {

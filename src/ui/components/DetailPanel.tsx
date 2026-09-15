@@ -20,6 +20,7 @@ import { bandParams, GROUPS, groupTouched, type ParamSpec, readParam } from '../
 import type { FaceState } from '../useEditor';
 import { Segmented, Slider } from './controls';
 import { FaceStatus } from './FaceStatus';
+import { LightPad } from './LightPad';
 import { ToneCurve } from './ToneCurve';
 
 /** Swatches for the band buttons, in the order {@link HUE_BANDS} declares. */
@@ -258,6 +259,17 @@ export function DetailPanel({
                     )}
                     {group.special === 'bands' && (
                       <BandMixer recipe={recipe} changedOnly={changedOnly} onParam={onParam} />
+                    )}
+                    {group.special === 'light' && !changedOnly && (
+                      <LightPad
+                        angle={recipe.relight.angle}
+                        frontal={recipe.relight.frontal}
+                        disabled={inert}
+                        onChange={(angle, frontal) => {
+                          onParam('relight.angle', angle);
+                          onParam('relight.frontal', frontal);
+                        }}
+                      />
                     )}
                     {group.special === 'aperture' && !changedOnly && (
                       <AperturePicker

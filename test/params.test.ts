@@ -55,7 +55,18 @@ describe('the detail panel', () => {
    * address a value. The colour mixer draws its own bands, the framing and the
    * grid have their own tools, and the fields of a list are per entry.
    */
-  const ELSEWHERE = ['global.hsl.', 'geometry.', 'tiles.', 'text.', 'heal.'];
+  const ELSEWHERE = [
+    'global.hsl.',
+    'geometry.',
+    'tiles.',
+    'text.',
+    'heal.',
+    // Where the light stands is one decision written as two numbers, and the
+    // disc is how it is made. Two sliders for a direction is a control somebody
+    // has to read back and imagine the result of.
+    'relight.angle',
+    'relight.frontal',
+  ];
 
   it('offers every parameter the schema declares, once', () => {
     // A parameter nobody can reach is a parameter that silently does nothing,

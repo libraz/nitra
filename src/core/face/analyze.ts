@@ -16,6 +16,8 @@
 
 import { FaceLandmarker, FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
 import { type FaceRegions, faceRegions } from './geometry';
+import type { NormalBitmap } from './normals';
+import { rasteriseNormals } from './normals';
 import { type FaceMaskRegion, type MaskBitmap, rasteriseFaces } from './raster';
 import {
   SEGMENT_CHANNELS,
@@ -81,6 +83,14 @@ export interface FaceAnalysis {
   faces: FaceRegions[];
   /** Coverage bitmaps over {@link region}. See `FACE_MASK_CHANNELS`. */
   masks: readonly [MaskBitmap, MaskBitmap];
+  /**
+   * Which way the skin faces, over the same {@link region} as the masks.
+   *
+   * Built here rather than per render because it depends on the photograph and
+   * not on the recipe — the same reason the masks are. Direction in rgb, how
+   * much of the mesh reached the pixel in alpha.
+   */
+  normals: NormalBitmap;
   /**
    * The part of the photo the masks cover, in normalised image coordinates.
    *
@@ -351,12 +361,15 @@ export async function analyzeFace(image: ImageData): Promise<FaceAnalysis> {
   result.close();
 
   const rasterised = rasteriseFaces(faces, image.width, image.height, aspect);
+  // Over the same working area as the masks, so one rectangle addresses both.
+  const normals = rasteriseNormals(faces, image.width, image.height, aspect);
 
   revision += 1;
   return {
     revision,
     faces,
     masks: rasterised.maps,
+    normals: normals.map,
     region: rasterised.region,
     segmentation,
     segmentationWeight: segmentationWeight(skinConfidence(segmentation, faces, aspect)),

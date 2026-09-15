@@ -135,6 +135,7 @@ export const en = {
   'groups.parts': 'Eyes, lips and cheeks',
   'groups.hair': 'Hair',
   'groups.depth': 'Background',
+  'groups.light': 'Lighting',
   'groups.tone': 'Tone',
   'groups.color': 'Colour',
   'groups.hsl': 'Colour mixer',
@@ -176,6 +177,13 @@ export const en = {
   'params.depthEdgeRefine': 'Edge accuracy',
   'params.depthBgBrightness': 'Background brightness',
   'params.depthBgSaturation': 'Background saturation',
+  'params.relightIntensity': 'Add light',
+  'params.relightSoftness': 'Softness',
+  'params.relightWarmth': 'Warmth',
+
+  'light.place': 'Where the light comes from',
+  'light.placeNote':
+    'The middle is the camera itself, which casts no shadow to shape a face with; the edge is a light off to the side.',
 
   'aperture.label': 'Aperture shape',
   'aperture.circle': 'Round',

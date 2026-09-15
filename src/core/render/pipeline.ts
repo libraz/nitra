@@ -81,6 +81,7 @@ import {
   FACE_WARP_FRAGMENT,
 } from './shaders/face';
 import { HAIR_FRAGMENT, HAIR_RAW_FRAGMENT } from './shaders/hair';
+import { RELIGHT_FRAGMENT } from './shaders/light';
 import {
   BLUR_FRAGMENT,
   COPY_FRAGMENT,
@@ -181,6 +182,7 @@ export class Pipeline {
       faceTexture: Program.create(this.gl, FACE_TEXTURE_FRAGMENT),
       faceProbe: Program.create(this.gl, FACE_PROBE_FRAGMENT),
       faceSpread: Program.create(this.gl, FACE_SPREAD_FRAGMENT),
+      relight: Program.create(this.gl, RELIGHT_FRAGMENT),
     };
     this.dag = new Dag(buildNodes(), (target) => this.glctx.pool.release(target));
   }
@@ -325,6 +327,7 @@ export class Pipeline {
       this.glctx.pool.release(this.face.mask);
       this.gl.deleteTexture(this.face.polyA);
       this.gl.deleteTexture(this.face.polyB);
+      this.gl.deleteTexture(this.face.normals);
     }
     if (this.subject) this.gl.deleteTexture(this.subject.segment);
     this.face = null;
@@ -366,10 +369,19 @@ export class Pipeline {
       analysis.masks[1].height,
       analysis.masks[1].data,
     );
+    // The same kind of texture as the masks, and for the same reason: four
+    // channels of bytes over the working area, sampled bilinearly.
+    const normals = createMaskTexture(
+      this.gl,
+      analysis.normals.width,
+      analysis.normals.height,
+      analysis.normals.data,
+    );
     this.face = {
       mask: this.refineMask(polyA, this.subject.segment, analysis, maskWidth, maskHeight),
       polyA,
       polyB,
+      normals,
       faceWidth: analysis.faceWidth,
       faceCount: analysis.faces.length,
       faces: analysis.faces,

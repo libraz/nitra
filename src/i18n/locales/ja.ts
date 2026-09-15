@@ -132,6 +132,7 @@ export const ja: Messages = {
   'groups.parts': '目・唇・頬',
   'groups.hair': '髪',
   'groups.depth': '背景',
+  'groups.light': 'ライティング',
   'groups.tone': '階調',
   'groups.color': '色',
   'groups.hsl': '色別調整',
@@ -173,6 +174,13 @@ export const ja: Messages = {
   'params.depthEdgeRefine': '境界の精度',
   'params.depthBgBrightness': '背景の明るさ',
   'params.depthBgSaturation': '背景の彩度',
+  'params.relightIntensity': '光を足す',
+  'params.relightSoftness': '光のやわらかさ',
+  'params.relightWarmth': '光の色',
+
+  'light.place': '光の向き',
+  'light.placeNote':
+    '中央はカメラの位置で、影ができないので立体感も出ません。外側は横から当てる光です。',
 
   'aperture.label': '絞りの形',
   'aperture.circle': '円形',

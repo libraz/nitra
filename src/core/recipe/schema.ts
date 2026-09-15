@@ -440,6 +440,55 @@ const depthSchema = z
   .prefault({});
 
 /**
+ * One light, added to the one that was in the room.
+ *
+ * Held as angles rather than as a direction vector. A unit vector is two
+ * degrees of freedom written as three numbers with a constraint between them,
+ * and a schema cannot say "unit length" — so a recipe from a file could carry a
+ * direction of no length at all, and every stage reading it would have to
+ * defend itself. Angles have no invalid value.
+ *
+ * `angle` and `frontal` say where the light stands and `softness` says what
+ * kind of light it is, so none of the three defaults to zero and none is
+ * consulted by {@link isRelightNeutral} — the same arrangement as the aperture.
+ * What switches the stage off is `intensity`, which is the only one of them
+ * somebody is asking a question about when they move it.
+ */
+const relightSchema = z
+  .object({
+    /** How much light is added. Zero is the photograph. */
+    intensity: num('relight.intensity', 0, 1, 0),
+    /**
+     * Where it stands, as a clock face on the picture.
+     *
+     * Zero is from directly above and it runs clockwise as seen on screen, so
+     * a quarter turn is from the right of the frame. The default is the key
+     * light of every portrait ever lit: above and to one side.
+     */
+    angle: num('relight.angle', 0, 360, 330),
+    /**
+     * How far round towards the camera it stands, rather than out to the side.
+     *
+     * Zero rakes across the face from the edge of the frame and one sits on the
+     * lens. The interesting range is the middle: a light on the lens has no
+     * shadows to model a face with, and a light at the very edge draws one half
+     * of it and leaves the other black.
+     */
+    frontal: num('relight.frontal', 0, 1, 0.45),
+    /**
+     * How broad the source is, which is what decides the edge of its shadow.
+     *
+     * The exponent on the falloff is the reciprocal of this, so the range stops
+     * short of zero — at zero the exponent is not a number, and a shadow edge
+     * with no width is a hard line across a cheek that no real light makes.
+     */
+    softness: num('relight.softness', 0.2, 1, 0.6),
+    /** Colour of the light, from window-cool through neutral to lamp-warm. */
+    warmth: num('relight.warmth', -1, 1, 0),
+  })
+  .prefault({});
+
+/**
  * Framing: flips, rotation, straightening and the crop rectangle.
  *
  * The crop is normalised against the frame that rotation and straightening
@@ -622,6 +671,7 @@ export const recipeSchema = z.object({
   face: faceSchema,
   hair: hairSchema,
   depth: depthSchema,
+  relight: relightSchema,
   global: globalSchema.prefault({}),
   text: z.array(textLayerSchema).default([]),
   tiles: tilesSchema,
@@ -632,6 +682,7 @@ export type Recipe = z.infer<typeof recipeSchema>;
 export type FaceParams = Recipe['face'];
 export type HairParams = Recipe['hair'];
 export type DepthParams = Recipe['depth'];
+export type RelightParams = Recipe['relight'];
 export type GlobalParams = Recipe['global'];
 export type GeometryParams = Recipe['geometry'];
 export type TileParams = Recipe['tiles'];
@@ -732,6 +783,18 @@ export function isDepthNeutral(depth: DepthParams): boolean {
   return (
     depth.bokeh < 1e-4 && Math.abs(depth.bgBrightness) < 1e-4 && Math.abs(depth.bgSaturation) < 1e-4
   );
+}
+
+/**
+ * True when nothing in the relighting would change a pixel.
+ *
+ * Only the intensity is consulted. Where the light stands and how broad it is
+ * describe a light that is not being added, and the stage needs a face as well —
+ * which the renderer checks, because a photograph with nobody in it has no
+ * surface to shade and asking about the recipe would not say so.
+ */
+export function isRelightNeutral(relight: RelightParams): boolean {
+  return relight.intensity < 1e-4;
 }
 
 /** True when the whole face block is at its no-effect values. */

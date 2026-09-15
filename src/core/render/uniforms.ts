@@ -440,6 +440,45 @@ export function hairUniforms(recipe: Recipe, ctx: PassContext): HairUniforms {
   };
 }
 
+/** Everything the relight shader reads, on the same contract as the others. */
+export interface RelightUniforms {
+  /** Unit direction the light comes from, with y pointing up the picture. */
+  light: [number, number, number];
+  intensity: number;
+  /** Exponent on the falloff, which is the reciprocal of the softness. */
+  sharpness: number;
+  warmth: number;
+  /** Which face analysis the normals and the outline came from. */
+  face: string;
+  geometry: string;
+}
+
+/**
+ * Turn the two angles into the direction the shader dots against.
+ *
+ * Here rather than in the shader so the trigonometry is testable without a GPU,
+ * which is the same reason the framing collapses into a matrix in TypeScript.
+ *
+ * The clock runs from straight up and clockwise as seen on screen, and the tilt
+ * lifts the light out of the picture plane towards the lens. Both are in the
+ * frame where y points up, so this is also the one place that convention is
+ * written down for the light — the normal field carries the matching one.
+ */
+export function relightUniforms(recipe: Recipe, ctx: PassContext): RelightUniforms {
+  const r = recipe.relight;
+  const clock = (r.angle * Math.PI) / 180;
+  const tilt = (r.frontal * Math.PI) / 2;
+  const across = Math.cos(tilt);
+  return {
+    light: [Math.sin(clock) * across, Math.cos(clock) * across, Math.sin(tilt)],
+    intensity: r.intensity,
+    sharpness: 1 / r.softness,
+    warmth: r.warmth,
+    face: ctx.face?.key ?? 'none',
+    geometry: ctx.geometryKey,
+  };
+}
+
 /** Kernel radius, as a fraction of the rendered frame's width. */
 export function bokehReach(recipe: Recipe): number {
   return recipe.depth.bokeh * BOKEH_REACH;

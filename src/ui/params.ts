@@ -25,7 +25,7 @@ export interface ParamGroup {
   nameKey: MessageKey;
   params: ParamSpec[];
   /** Extra control drawn above the group's sliders. */
-  special?: 'curve' | 'bands' | 'aperture';
+  special?: 'curve' | 'bands' | 'aperture' | 'light';
   defaultOpen?: boolean;
   /**
    * True when the group does nothing without a face in the photo.
@@ -144,6 +144,20 @@ export const GROUPS: readonly ParamGroup[] = [
       spec('depth.edgeRefine', 'params.depthEdgeRefine'),
       spec('depth.bgBrightness', 'params.depthBgBrightness'),
       spec('depth.bgSaturation', 'params.depthBgSaturation'),
+    ],
+  },
+  // After the defocus and before the tone, which is where the stage runs: a
+  // light is something that was in the room, and grading is what happens to the
+  // picture of it afterwards.
+  {
+    id: 'light',
+    nameKey: 'groups.light',
+    special: 'light',
+    requiresFace: true,
+    params: [
+      spec('relight.intensity', 'params.relightIntensity'),
+      spec('relight.softness', 'params.relightSoftness'),
+      spec('relight.warmth', 'params.relightWarmth'),
     ],
   },
   {

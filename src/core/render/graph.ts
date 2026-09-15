@@ -8,7 +8,7 @@
 
 import { warpControlPoints } from '../face/warp';
 import type { DagNode } from '../graph/dag';
-import { isPartsNeutral, isSkinNeutral, type Recipe } from '../recipe/schema';
+import { isPartsNeutral, isRelightNeutral, isSkinNeutral, type Recipe } from '../recipe/schema';
 import type { FaceTextures, PassContext, Programs, SubjectTextures } from './context';
 import type { GlContext, RenderTarget } from './gl';
 import {
@@ -31,6 +31,7 @@ import {
   packControlPoints,
   partsUniforms,
   regionOf,
+  relightUniforms,
   skinRadius,
   skinUniforms,
   subjectRadius,
@@ -852,9 +853,50 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     },
   };
 
+  /**
+   * Relight: one light added to the one that was in the room.
+   *
+   * After the defocus and before the grade, which is what the design fixes and
+   * what the two neighbours are for. A lens is in front of the film, so the
+   * defocus happens first; adding light is scene-referred and grading is
+   * display-referred, so grading happens after.
+   *
+   * Needs a face, and says so rather than reading the recipe alone: what it
+   * shades is a surface, and the surface is the normal field the analysis left
+   * behind. A photograph with nobody in it has none, and a slider that moved
+   * something on a landscape would be shading a guess.
+   */
+  const relight: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'relight',
+    inputs: ['bokeh', 'warpField'],
+    active: (recipe, ctx) => ctx.face !== null && !isRelightNeutral(recipe.relight),
+    signature: (recipe, ctx) =>
+      `relight:${JSON.stringify(relightUniforms(recipe, ctx))}:${isWarping(recipe, ctx)}`,
+    evaluate: (ctx, [input, field], recipe) => {
+      const src = input as RenderTarget;
+      const face = ctx.face as FaceTextures;
+      const uniforms = relightUniforms(recipe, ctx);
+      const target = ctx.glctx.pool.acquire(ctx.width, ctx.height);
+      ctx.programs.relight
+        .bind()
+        .vec4('uRegion', ...regionOf(ctx))
+        .texture('uSource', src.texture)
+        .texture('uNormals', face.normals)
+        .texture('uWarp', (field as RenderTarget).texture)
+        .int('uWarped', isWarping(recipe, ctx) ? 1 : 0)
+        .mat3('uGeometry', ctx.geometry)
+        .vec3('uLight', ...uniforms.light)
+        .float('uIntensity', uniforms.intensity)
+        .float('uSharpness', uniforms.sharpness)
+        .float('uWarmth', uniforms.warmth);
+      ctx.glctx.draw(target, ctx.width, ctx.height);
+      return target;
+    },
+  };
+
   const grade: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'grade',
-    inputs: ['bokeh'],
+    inputs: ['relight'],
     signature: (recipe, ctx) =>
       `grade:${JSON.stringify(gradeUniforms(recipe, ctx.width / ctx.height, ctx.curveKey))}`,
     evaluate: (ctx, [input], recipe) => {
@@ -968,6 +1010,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     bokehReduce,
     bokehGather,
     bokeh,
+    relight,
     grade,
     lowSmall,
     lowH,

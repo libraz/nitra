@@ -68,6 +68,15 @@ export interface FaceTextures {
   polyA: WebGLTexture;
   /** Eye openings, under-eye bands, cheeks. */
   polyB: WebGLTexture;
+  /**
+   * Which way the skin faces, over the same working area as the masks.
+   *
+   * Direction in rgb and how much of the mesh reached the pixel in alpha. The
+   * second is not the outline: a head turned far enough leaves the mesh behind
+   * while the outline carries on, and shading a pixel the mesh never reached
+   * would be shading the field's fallback.
+   */
+  normals: WebGLTexture;
   /** The widest face's width, in source-image-width units. */
   faceWidth: number;
   faceCount: number;
@@ -156,6 +165,7 @@ export interface Programs {
   faceTexture: Program;
   faceProbe: Program;
   faceSpread: Program;
+  relight: Program;
 }
 
 /** Measured after the fact rather than predicted from the slider positions. */

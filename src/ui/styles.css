@@ -1234,6 +1234,80 @@ body::after {
 .seg :disabled {
   cursor: not-allowed;
 }
+
+/*
+ * Where the added light stands.
+ *
+ * The disc is the sphere of directions seen from the camera: the middle is the
+ * lens and the rim is the plane of the picture. The face drawn on it is what
+ * gives the direction a subject — a point on a sphere has no left until
+ * something in the picture faces the other way.
+ */
+.lightpad {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+.lightpad-d {
+  position: relative;
+  width: 132px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  cursor: crosshair;
+  touch-action: none;
+}
+.lightpad-d:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+.lightpad-d svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.lightpad-face {
+  fill: var(--raise);
+  stroke: var(--line-2);
+  stroke-width: 1;
+}
+.lightpad-eye {
+  fill: var(--ink-3);
+}
+.lightpad-mouth {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.lightpad-rim {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+/* The light itself. Drawn as what it is rather than as a handle. */
+.lightpad-dot {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 10px 3px color-mix(in oklab, var(--amber) 55%, transparent);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.lightpad-n {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--ink-3);
+  text-align: center;
+}
+.lightpad[data-off="true"] {
+  opacity: 0.42;
+}
 .mini {
   font-size: 10.5px;
   color: var(--ink-3);
