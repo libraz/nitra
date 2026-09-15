@@ -152,6 +152,8 @@ interface SegmentedProps<T extends string> {
   options: readonly { key: T; name: string }[];
   value: T;
   onChange: (value: T) => void;
+  /** Off because nothing downstream would act on it; the choice stays readable. */
+  disabled?: boolean;
 }
 
 /** Segmented control. Three or more options are always laid out equal width. */
@@ -160,15 +162,17 @@ export function Segmented<T extends string>({
   options,
   value,
   onChange,
+  disabled = false,
 }: SegmentedProps<T>) {
   return (
-    <div className="seg-w">
+    <div className="seg-w" data-off={disabled}>
       <span className="seg-l">{label}</span>
       <div className="seg">
         {options.map((option) => (
           <button
             key={option.key}
             type="button"
+            disabled={disabled}
             aria-pressed={option.key === value}
             onClick={() => onChange(option.key)}
           >

@@ -18,7 +18,7 @@ import { APERTURES, type DepthParams, HUE_BANDS, type Recipe } from '../../core/
 import { type MessageKey, useI18n } from '../../i18n';
 import { bandParams, GROUPS, groupTouched, type ParamSpec, readParam } from '../params';
 import type { FaceState } from '../useEditor';
-import { Slider } from './controls';
+import { Segmented, Slider } from './controls';
 import { FaceStatus } from './FaceStatus';
 import { ToneCurve } from './ToneCurve';
 
@@ -66,23 +66,16 @@ function AperturePicker({
 }) {
   const { t } = useI18n();
   return (
-    <div className="row">
-      <span className="mini">{t('aperture.label')}</span>
-      <div className="seg">
-        {APERTURES.map((aperture) => (
-          <button
-            key={aperture}
-            type="button"
-            className="chip"
-            disabled={disabled}
-            aria-pressed={value === aperture}
-            onClick={() => onChange(aperture)}
-          >
-            {t(`aperture.${aperture}` as MessageKey)}
-          </button>
-        ))}
-      </div>
-    </div>
+    <Segmented
+      label={t('aperture.label')}
+      value={value}
+      disabled={disabled}
+      options={APERTURES.map((aperture) => ({
+        key: aperture,
+        name: t(`aperture.${aperture}` as MessageKey),
+      }))}
+      onChange={onChange}
+    />
   );
 }
 
