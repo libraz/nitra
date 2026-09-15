@@ -29,6 +29,7 @@ import {
   REFERENCE_STRENGTH,
 } from '../core/recipe/presets';
 import {
+  type DepthParams,
   type FaceParams,
   type GeometryParams,
   type GlobalParams,
@@ -122,6 +123,7 @@ export interface Editor {
   setMode: (mode: 'simple' | 'detail') => void;
   setComparing: (on: boolean) => void;
   setParam: (path: string, value: number) => void;
+  setDepth: (patch: Partial<DepthParams>) => void;
   setOutput: (patch: Partial<Recipe['output']>) => void;
   setMetadata: (patch: MetadataPatch) => void;
   setLook: (key: string) => void;
@@ -355,6 +357,13 @@ export function useEditor(): Editor {
       commit(next);
     },
     [commit, strength],
+  );
+
+  const setDepth = useCallback(
+    (patch: Partial<DepthParams>) => {
+      commit({ ...recipeRef.current, depth: { ...recipeRef.current.depth, ...patch } });
+    },
+    [commit],
   );
 
   const setOutput = useCallback(
@@ -855,6 +864,7 @@ export function useEditor(): Editor {
       setMode,
       setComparing,
       setParam,
+      setDepth,
       setOutput,
       setMetadata,
       setLook,
@@ -903,6 +913,7 @@ export function useEditor(): Editor {
       setTool,
       setComparing,
       setParam,
+      setDepth,
       setOutput,
       setMetadata,
       setLook,

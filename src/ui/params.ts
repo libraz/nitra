@@ -25,7 +25,7 @@ export interface ParamGroup {
   nameKey: MessageKey;
   params: ParamSpec[];
   /** Extra control drawn above the group's sliders. */
-  special?: 'curve' | 'bands';
+  special?: 'curve' | 'bands' | 'aperture';
   defaultOpen?: boolean;
   /**
    * True when the group does nothing without a face in the photo.
@@ -95,6 +95,21 @@ export const GROUPS: readonly ParamGroup[] = [
       spec('face.lip.hue', 'params.faceLipHue'),
       spec('face.cheek.amount', 'params.faceCheekAmount'),
       spec('face.cheek.hue', 'params.faceCheekHue'),
+    ],
+  },
+  // After the face and before the grade, which is where the stage runs: a lens
+  // is in front of the film.
+  {
+    id: 'depth',
+    nameKey: 'groups.depth',
+    special: 'aperture',
+    params: [
+      spec('depth.bokeh', 'params.depthBokeh'),
+      spec('depth.bokehBloom', 'params.depthBokehBloom'),
+      spec('depth.catsEye', 'params.depthCatsEye'),
+      spec('depth.edgeRefine', 'params.depthEdgeRefine'),
+      spec('depth.bgBrightness', 'params.depthBgBrightness'),
+      spec('depth.bgSaturation', 'params.depthBgSaturation'),
     ],
   },
   {

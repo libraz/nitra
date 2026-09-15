@@ -148,6 +148,7 @@ function Workspace() {
               faceState={editor.faceState}
               faceCount={editor.faceCount}
               onParam={editor.setParam}
+              onDepth={editor.setDepth}
               onRetryFace={editor.retryFaceAnalysis}
               onSimple={() => editor.setMode('simple')}
             />

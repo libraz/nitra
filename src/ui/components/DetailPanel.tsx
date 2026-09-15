@@ -14,7 +14,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { HUE_BANDS, type Recipe } from '../../core/recipe/schema';
+import { APERTURES, type DepthParams, HUE_BANDS, type Recipe } from '../../core/recipe/schema';
 import { type MessageKey, useI18n } from '../../i18n';
 import { bandParams, GROUPS, groupTouched, type ParamSpec, readParam } from '../params';
 import type { FaceState } from '../useEditor';
@@ -40,12 +40,50 @@ interface DetailPanelProps {
   faceState: FaceState;
   faceCount: number;
   onParam: (path: string, value: number) => void;
+  onDepth: (patch: Partial<DepthParams>) => void;
   onRetryFace: () => void;
   onSimple: () => void;
 }
 
 function isTouched(recipe: Recipe, param: ParamSpec): boolean {
   return Math.abs(readParam(recipe, param.path) - param.neutral) > 1e-6;
+}
+
+/**
+ * The shape of the iris the defocus is convolved with.
+ *
+ * A picker rather than a slider because the three are not a range: a hexagon is
+ * not half way between a circle and an ellipse, it is a different lens.
+ */
+function AperturePicker({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: DepthParams['aperture'];
+  disabled: boolean;
+  onChange: (aperture: DepthParams['aperture']) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="row">
+      <span className="mini">{t('aperture.label')}</span>
+      <div className="seg">
+        {APERTURES.map((aperture) => (
+          <button
+            key={aperture}
+            type="button"
+            className="chip"
+            disabled={disabled}
+            aria-pressed={value === aperture}
+            onClick={() => onChange(aperture)}
+          >
+            {t(`aperture.${aperture}` as MessageKey)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** Every parameter in the panel, bands included, as one flat list. */
@@ -119,6 +157,7 @@ export function DetailPanel({
   faceState,
   faceCount,
   onParam,
+  onDepth,
   onRetryFace,
   onSimple,
 }: DetailPanelProps) {
@@ -226,6 +265,13 @@ export function DetailPanel({
                     )}
                     {group.special === 'bands' && (
                       <BandMixer recipe={recipe} changedOnly={changedOnly} onParam={onParam} />
+                    )}
+                    {group.special === 'aperture' && !changedOnly && (
+                      <AperturePicker
+                        value={recipe.depth.aperture}
+                        disabled={inert}
+                        onChange={(aperture) => onDepth({ aperture })}
+                      />
                     )}
                     {params.map((param) => (
                       <Slider
