@@ -41,30 +41,8 @@ jobs:
       - name: Test
         run: bun run test
 
+      # Built here to be checked, not to be shipped: what goes live is built
+      # where it is served. A bundling failure is one the other targets cannot
+      # see, so it is worth a step of its own.
       - name: Build
         run: bun run build
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist
-          path: dist
-          retention-days: 1
-
-  # The finished directory is uploaded rather than rebuilt where it is served,
-  # so the bytes that go live are the ones the job above tested rather than a
-  # second build of the same commit.
-  deploy:
-    needs: check
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist
-
-      - uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=nitra --branch=main
