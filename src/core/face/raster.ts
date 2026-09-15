@@ -116,9 +116,19 @@ export function faceRegion(
   };
 }
 
-/** The size the masks are rasterised at, for a working area of that many pixels. */
-export function maskSize(regionWidth: number, regionHeight: number): [number, number] {
-  const scale = Math.min(1, MASK_LONG_EDGE / Math.max(regionWidth, regionHeight));
+/**
+ * The size a bitmap over the working area is rasterised at.
+ *
+ * Shared with the normal map, which wants a smaller edge for something smooth
+ * but the same aspect and the same clamp — a working area smaller than the edge
+ * is never enlarged, so the bitmap's pixels stay at or below the photograph's.
+ */
+export function maskSize(
+  regionWidth: number,
+  regionHeight: number,
+  longEdge: number = MASK_LONG_EDGE,
+): [number, number] {
+  const scale = Math.min(1, longEdge / Math.max(regionWidth, regionHeight));
   return [
     Math.max(1, Math.round(regionWidth * scale)),
     Math.max(1, Math.round(regionHeight * scale)),

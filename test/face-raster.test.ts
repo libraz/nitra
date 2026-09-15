@@ -6,8 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CONTOURS } from '../src/core/face/contours';
-import { centroid, faceRegions, type NormalisedLandmark } from '../src/core/face/geometry';
+import { centroid, faceRegions } from '../src/core/face/geometry';
 import {
   FACE_MASK_CHANNELS,
   faceRegion,
@@ -17,6 +16,7 @@ import {
   maskSize,
   rasteriseFaces,
 } from '../src/core/face/raster';
+import { makeFace } from './helpers/face';
 
 function blank(width: number, height: number): MaskBitmap {
   return { width, height, data: new Uint8ClampedArray(width * height * 4) };
@@ -34,30 +34,6 @@ function rect(x0: number, y0: number, x1: number, y1: number) {
     { x: x1, y: y1 },
     { x: x0, y: y1 },
   ];
-}
-
-/** A face placed so every region lands well inside the frame. */
-function face(centre = { x: 0.5, y: 0.5 }, width = 0.3): NormalisedLandmark[] {
-  const landmarks: NormalisedLandmark[] = Array.from({ length: 478 }, () => ({ x: 0, y: 0 }));
-  const ellipse = (indices: readonly number[], cx: number, cy: number, rx: number, ry: number) => {
-    indices.forEach((index, i) => {
-      const angle = (i / indices.length) * Math.PI * 2;
-      landmarks[index] = {
-        x: centre.x + cx + Math.cos(angle) * rx,
-        y: centre.y + cy + Math.sin(angle) * ry,
-      };
-    });
-  };
-  ellipse(CONTOURS.faceOval, 0, 0, width / 2, width * 0.7);
-  ellipse(CONTOURS.leftEye, -width * 0.22, -width * 0.12, width * 0.09, width * 0.045);
-  ellipse(CONTOURS.rightEye, width * 0.22, -width * 0.12, width * 0.09, width * 0.045);
-  ellipse(CONTOURS.leftBrow, -width * 0.22, -width * 0.24, width * 0.11, width * 0.02);
-  ellipse(CONTOURS.rightBrow, width * 0.22, -width * 0.24, width * 0.11, width * 0.02);
-  ellipse(CONTOURS.leftIris, -width * 0.22, -width * 0.12, width * 0.05, width * 0.05);
-  ellipse(CONTOURS.rightIris, width * 0.22, -width * 0.12, width * 0.05, width * 0.05);
-  ellipse(CONTOURS.lips[0] ?? [], 0, width * 0.28, width * 0.14, width * 0.07);
-  ellipse(CONTOURS.lips[1] ?? [], 0, width * 0.28, width * 0.09, width * 0.03);
-  return landmarks;
 }
 
 describe('filling a region', () => {
@@ -182,7 +158,7 @@ describe('the size the masks are built at', () => {
  */
 describe('the working area', () => {
   it('covers the face with room around it', () => {
-    const regions = faceRegions(face({ x: 0.5, y: 0.5 }, 0.3), 1);
+    const regions = faceRegions(makeFace({ centre: { x: 0.5, y: 0.5 }, width: 0.3 }), 1);
     const box = faceRegion([regions], 1);
     const xs = regions.oval.map((p) => p.x);
     const ys = regions.oval.map((p) => p.y);
@@ -193,7 +169,10 @@ describe('the working area', () => {
   });
 
   it('is a small part of the frame when the face is', () => {
-    const small = faceRegion([faceRegions(face({ x: 0.5, y: 0.3 }, 0.06), 1)], 1);
+    const small = faceRegion(
+      [faceRegions(makeFace({ centre: { x: 0.5, y: 0.3 }, width: 0.06 }), 1)],
+      1,
+    );
     expect(small.width).toBeLessThan(0.25);
     expect(small.height).toBeLessThan(0.35);
   });
@@ -203,7 +182,7 @@ describe('the working area', () => {
     // than a ratio: a face has to arrive with enough mask pixels to be worked
     // on, however little of the photograph it occupies.
     const onFace = (width: number) => {
-      const regions = faceRegions(face({ x: 0.5, y: 0.4 }, width), 1);
+      const regions = faceRegions(makeFace({ centre: { x: 0.5, y: 0.4 }, width: width }), 1);
       const box = faceRegion([regions], 1);
       const [w] = maskSize(box.width * 4000, box.height * 4000);
       return (regions.width / box.width) * w;
@@ -217,7 +196,10 @@ describe('the working area', () => {
   });
 
   it('stays inside the frame when the face is against its edge', () => {
-    const box = faceRegion([faceRegions(face({ x: 0.08, y: 0.1 }, 0.14), 1)], 1);
+    const box = faceRegion(
+      [faceRegions(makeFace({ centre: { x: 0.08, y: 0.1 }, width: 0.14 }), 1)],
+      1,
+    );
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.y).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(1);
@@ -225,8 +207,8 @@ describe('the working area', () => {
   });
 
   it('spans every face when there are several', () => {
-    const left = faceRegions(face({ x: 0.2, y: 0.4 }, 0.12), 1);
-    const right = faceRegions(face({ x: 0.8, y: 0.5 }, 0.12), 1);
+    const left = faceRegions(makeFace({ centre: { x: 0.2, y: 0.4 }, width: 0.12 }), 1);
+    const right = faceRegions(makeFace({ centre: { x: 0.8, y: 0.5 }, width: 0.12 }), 1);
     const box = faceRegion([left, right], 1);
     expect(box.x).toBeLessThan(0.2);
     expect(box.x + box.width).toBeGreaterThan(0.8);
@@ -238,7 +220,7 @@ describe('the working area', () => {
 
   it('converts out of width units on a frame that is not square', () => {
     const aspect = 2;
-    const regions = faceRegions(face({ x: 0.5, y: 0.5 }, 0.2), aspect);
+    const regions = faceRegions(makeFace({ centre: { x: 0.5, y: 0.5 }, width: 0.2 }), aspect);
     const box = faceRegion([regions], aspect);
     // The outline is measured in width units, where the centre of a frame twice
     // as tall as it is wide sits at y = 1; the working area is normalised.
@@ -247,7 +229,7 @@ describe('the working area', () => {
 });
 
 describe('rasterising a face', () => {
-  const regions = faceRegions(face(), 1);
+  const regions = faceRegions(makeFace(), 1);
   const { maps, region } = rasteriseFaces([regions], 800, 800, 1);
   const [polyA, polyB] = maps;
 

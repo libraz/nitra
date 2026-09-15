@@ -23,6 +23,31 @@ export interface FaceShape {
   rotation?: number;
   /** Image height over image width. */
   aspect?: number;
+  /**
+   * How far the middle of the head comes towards the camera, in width units.
+   *
+   * Zero is a flat face, which is not a shape any head has and is exactly what
+   * a normal field should report as facing straight forward.
+   */
+  relief?: number;
+  /** How far the nose comes forward on top of that. */
+  nose?: number;
+}
+
+/**
+ * The model's depth at a point on the synthetic head.
+ *
+ * An ellipsoid bulging towards the camera, with a ridge down the middle. Signed
+ * the way the model signs it — towards the camera is *smaller* — so a test that
+ * gets the direction of the relief backwards fails here rather than agreeing
+ * with a shader that has the same mistake.
+ */
+function surfaceDepth(x: number, y: number, width: number, relief: number, nose: number): number {
+  const radial = Math.hypot(x / (width / 2), y / (width * 0.7));
+  const dome = radial < 1 ? Math.sqrt(1 - radial * radial) : 0;
+  // Narrow across and tapering away above the brow and below the tip.
+  const ridge = Math.exp(-((x / (width * 0.08)) ** 2)) * Math.exp(-((y / (width * 0.22)) ** 2));
+  return -(dome * relief + ridge * nose);
 }
 
 export function makeFace({
@@ -30,16 +55,38 @@ export function makeFace({
   width = 0.3,
   rotation = 0,
   aspect = 1,
+  relief = width * 0.25,
+  nose = width * 0.06,
 }: FaceShape = {}): NormalisedLandmark[] {
-  const landmarks: NormalisedLandmark[] = Array.from({ length: 478 }, () => ({ x: 0, y: 0 }));
+  const landmarks: NormalisedLandmark[] = Array.from({ length: 478 }, () => ({ x: 0, y: 0, z: 0 }));
   const cos = Math.cos(rotation);
   const sin = Math.sin(rotation);
 
   const put = (index: number, x: number, y: number) => {
     const rx = x * cos - y * sin;
     const ry = x * sin + y * cos;
-    landmarks[index] = { x: centre.x + rx, y: (centre.y + ry) / aspect };
+    landmarks[index] = {
+      x: centre.x + rx,
+      y: (centre.y + ry) / aspect,
+      // Depth is a property of the head, so it is taken before the tilt: a face
+      // leaning sideways has the same nose.
+      z: surfaceDepth(x, y, width, relief, nose),
+    };
   };
+
+  // The mesh, before the named contours are placed on top of it. The stages
+  // that read outlines only ever touch the contour indices, but the normals are
+  // built from every point, and points left at the origin would put the whole
+  // head's worth of surface in the corner of the picture.
+  //
+  // A golden-angle spiral rather than a grid, because it fills an ellipse
+  // evenly at any count and leaves no rows for a derivative to align with.
+  for (let i = 0; i < 468; i++) {
+    const t = (i + 0.5) / 468;
+    const radius = Math.sqrt(t);
+    const angle = i * 2.39996;
+    put(i, Math.cos(angle) * radius * (width / 2), Math.sin(angle) * radius * (width * 0.7));
+  }
 
   const ellipse = (indices: readonly number[], cx: number, cy: number, rx: number, ry: number) => {
     indices.forEach((index, i) => {

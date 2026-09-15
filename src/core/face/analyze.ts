@@ -312,6 +312,13 @@ export async function analyzeFace(image: ImageData): Promise<FaceAnalysis> {
           landmarks.map((point) => ({
             x: (region.x + point.x * region.width) / image.width,
             y: (region.y + point.y * region.height) / image.height,
+            // The depth is normalised to the width of the window it was found
+            // in, so it scales with that window and does not shift with it:
+            // it is measured from the middle of the head rather than from a
+            // corner of the picture. Scaled with the height instead, a face
+            // found in one tile of a wide photograph would come out with a
+            // nose several times too long.
+            z: (point.z * region.width) / image.width,
           })),
           aspect,
         ),

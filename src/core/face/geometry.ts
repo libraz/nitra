@@ -20,10 +20,25 @@ export interface Point {
   y: number;
 }
 
-/** A landmark as the model returns it: normalised against the image box. */
+/**
+ * A landmark as the model returns it: normalised against the image box.
+ *
+ * The depth shares the horizontal scale rather than the vertical one, which is
+ * the model's own convention and the reason it needs no aspect applied to it.
+ * It grows away from the camera, with the middle of the head at zero — so it is
+ * a distance, not a height, and whatever reads it has to say which.
+ */
 export interface NormalisedLandmark {
   x: number;
   y: number;
+  z: number;
+}
+
+/** A point on the face's surface, in the same width units as everything else. */
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
 }
 
 /** A soft-edged disc, which is what a blusher is and a polygon is not. */
@@ -64,6 +79,15 @@ export interface FaceRegions {
   width: number;
   /** Centre of the face outline. */
   centre: Point;
+  /**
+   * The mesh itself, for the one thing that needs a surface rather than an
+   * outline: the normals the relighting works from.
+   *
+   * The iris refinement is left out. Those ten points sit on the eyeball rather
+   * than on the skin over it, and a surface fitted through both has a dent in it
+   * where each eye is.
+   */
+  surface: readonly Vec3[];
   /**
    * The face's own axes: unit vectors along the eyes and down towards the mouth.
    *
@@ -170,6 +194,14 @@ export function convexHull(points: readonly Point[]): Point[] {
   const upper = half([...sorted].reverse());
   return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
+
+/**
+ * Points in the face mesh, before the iris refinement adds to it.
+ *
+ * The refinement is optional and appends, so slicing to this is also what makes
+ * the surface the same set of points whether or not it ran.
+ */
+const MESH_POINTS = 468;
 
 function pick(
   landmarks: readonly NormalisedLandmark[],
@@ -318,6 +350,7 @@ export function faceRegions(landmarks: readonly NormalisedLandmark[], aspect: nu
     irises,
     width,
     centre,
+    surface: landmarks.slice(0, MESH_POINTS).map((l) => ({ x: l.x, y: l.y * aspect, z: l.z })),
     axes: { right, down },
   };
 }
