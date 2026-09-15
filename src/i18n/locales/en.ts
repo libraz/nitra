@@ -418,6 +418,7 @@ export const en = {
   'curve.title': 'Tone curve',
 
   'gauges.texture': 'Skin texture kept',
+  'gauges.reshape': 'Reshaping',
   'gauges.blowout': 'Clipped highlights',
   'gauges.crush': 'Blocked shadows',
   'gauges.chroma': 'Clipped chroma',

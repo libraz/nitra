@@ -3,6 +3,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { RESHAPE_WARNING } from '../../core/face/warp';
 import type { RenderStats } from '../../core/render/pipeline';
 import { LOCALE_ORDER, LOCALES, type MessageKey, useI18n } from '../../i18n';
 import { THEME_CHOICES, useTheme } from '../theme';
@@ -302,6 +303,7 @@ export function StatusBar({ stats, scale, previewSize, workingSpace }: StatusBar
   // landscape has no skin texture to have kept, and a gauge sitting at a full
   // hundred per cent would be a reading of nothing at all — so on a photo with
   // no face in it, it is not there.
+  const reshape = stats?.reshapeMagnitude ?? null;
   const gauges = [
     ...(retention === null
       ? []
@@ -312,6 +314,20 @@ export function StatusBar({ stats, scale, previewSize, workingSpace }: StatusBar
             value: retention,
             limit: 0.5,
             inverted: true,
+          },
+        ]),
+    // Comes and goes for the same reason the texture reading does: a photo
+    // nobody is reshaping has no displacement to report, and a bar sitting at
+    // zero would claim to be measuring one.
+    ...(reshape === null
+      ? []
+      : [
+          {
+            id: 'reshape',
+            label: t('gauges.reshape'),
+            value: reshape,
+            limit: RESHAPE_WARNING,
+            inverted: false,
           },
         ]),
     {

@@ -33,6 +33,7 @@ function stats(partial: Partial<RenderStats> = {}): RenderStats {
     histogram: histogramAt(0.46),
     meanLuma: 0.46,
     textureRetention: null,
+    reshapeMagnitude: null,
     ...partial,
   };
 }

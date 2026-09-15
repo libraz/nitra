@@ -14,6 +14,7 @@
  */
 
 import type { FaceAnalysis } from '../face/analyze';
+import { warpControlPoints } from '../face/warp';
 import { planExport } from '../geometry/tiles';
 import {
   croppedSize,
@@ -521,7 +522,22 @@ export class Pipeline {
     return {
       ...summarise(pixels),
       textureRetention: this.measureTextureRetention(recipe),
+      reshapeMagnitude: this.measureReshape(recipe, ctx),
     };
+  }
+
+  /**
+   * How far the reshaping moves a face.
+   *
+   * The one guardrail that needs no pixels: the displacements are arithmetic
+   * over the landmarks, so the same function the field is built from answers
+   * it. Called again rather than carried out of the field pass, which cannot
+   * disagree — it is a pure function of the faces and the amounts, and the
+   * alternative is a second copy of the number in the pass context.
+   */
+  private measureReshape(recipe: Recipe, ctx: PassContext): number | null {
+    if (!isWarping(recipe, ctx) || !ctx.face) return null;
+    return warpControlPoints(ctx.face.faces, recipe.face.warp).magnitude;
   }
 
   /**
@@ -983,5 +999,6 @@ function summarise(pixels: Uint8Array): Omit<RenderStats, 'textureRetention'> {
     chromaClip: chroma / count,
     histogram,
     meanLuma: sum / count,
+    reshapeMagnitude: null,
   };
 }

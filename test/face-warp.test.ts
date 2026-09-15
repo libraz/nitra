@@ -19,6 +19,7 @@ import { centroid, type FaceRegions, faceRegions, type Point } from '../src/core
 import {
   type ControlPoint,
   MAX_CONTROL_POINTS,
+  RESHAPE_WARNING,
   warpBudget,
   warpControlPoints,
   warpMagnitude,
@@ -413,5 +414,53 @@ describe('the measured magnitude the guardrail reports', () => {
     expect(warpMagnitude([{ centre: { x: 0, y: 0 }, delta: { x: 1, y: 0 }, radius: 1 }], 0)).toBe(
       0,
     );
+  });
+
+  it('is not diluted by a larger face standing next to a small one', () => {
+    // The reading is a fraction of each face's own width, so putting a face four
+    // times the size in the frame does not change what the small one reports.
+    const warp = warpOf({ faceSlim: 1, chin: 1 });
+    const large = face({ width: 0.36 });
+    const small = face({ centre: { x: 0.85, y: 0.3 }, width: 0.09 });
+    const alone = warpControlPoints([small], warp).magnitude;
+    expect(warpControlPoints([large, small], warp).magnitude).toBeCloseTo(alone, 3);
+  });
+
+  it('reports nothing when there is nothing to reshape', () => {
+    expect(warpControlPoints([], warpOf({ faceSlim: 1 })).magnitude).toBe(0);
+    expect(warpControlPoints([face()], warpOf()).magnitude).toBe(0);
+  });
+
+  it('stops short of the sum when several sliders pull the same part', () => {
+    // Slimming and the jawline both draw the lower outline inwards, and nothing
+    // in the panel stops a person raising both. What the ceiling is there for is
+    // that the two together do not reach their own sum, so the reading cannot
+    // climb indefinitely by stacking controls.
+    const regions = face();
+    const slim = warpControlPoints([regions], warpOf({ faceSlim: 1 })).magnitude;
+    const jaw = warpControlPoints([regions], warpOf({ jawline: 1 })).magnitude;
+    const both = warpControlPoints([regions], warpOf({ faceSlim: 1, jawline: 1 })).magnitude;
+    expect(both).toBeGreaterThan(Math.max(slim, jaw));
+    expect(both).toBeLessThan(slim + jaw);
+  });
+
+  it('warns below the ceiling it is measuring against', () => {
+    // A warning that only appeared at the ceiling would never appear: the
+    // displacement is clamped there, so the reading cannot pass it.
+    const regions = face();
+    const everything = warpControlPoints(
+      [regions],
+      warpOf({
+        faceSlim: 1,
+        jawline: 1,
+        chin: 1,
+        eyeEnlarge: 1,
+        eyeTilt: 1,
+        noseNarrow: 1,
+        noseBridge: 1,
+        mouthWidth: 1,
+      }),
+    ).magnitude;
+    expect(RESHAPE_WARNING).toBeLessThan(everything);
   });
 });

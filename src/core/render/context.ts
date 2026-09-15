@@ -157,6 +157,19 @@ export interface RenderStats {
    * and showing the second for the first would put a gauge on a landscape.
    */
   textureRetention: number | null;
+  /**
+   * How far the reshaping moves a face, as a fraction of its own width.
+   *
+   * Null when nothing is being reshaped, for the reason the texture reading is:
+   * a gauge sitting at zero is a different statement from no gauge at all, and
+   * the second is the true one on a photo nobody is reshaping.
+   *
+   * A displacement is already capped where it is decided, so this cannot exceed
+   * that ceiling. What it adds is the other half of the design's position on
+   * overcorrection: the ceiling stops the worst of it silently, and this says
+   * how close to it somebody has come.
+   */
+  reshapeMagnitude: number | null;
 }
 
 /**

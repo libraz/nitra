@@ -415,6 +415,7 @@ export const ja: Messages = {
   'curve.title': 'トーンカーブ',
 
   'gauges.texture': '肌の質感残存率',
+  'gauges.reshape': '変形量',
   'gauges.blowout': '白飛び',
   'gauges.crush': '黒つぶれ',
   'gauges.chroma': '彩度クリップ',

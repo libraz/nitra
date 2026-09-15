@@ -363,6 +363,22 @@ export function warpBudget(faceCount: number): { faces: number; outline: number 
   return { faces, outline };
 }
 
+/**
+ * Displacement at which the reshaping is reported as too much.
+ *
+ * Taken from the reaches above rather than chosen beside them, so calibrating
+ * one cannot leave the other behind: it is the reach of the control that moves
+ * the face furthest. Measured on a photograph, slimming alone at the top of its
+ * slider comes out a little past this, which is the intent — the reaches are set
+ * so that the top of a slider is clearly too much, and the reading should say so
+ * there rather than only once two controls are stacked.
+ *
+ * Below {@link MAX_DISPLACEMENT} either way, because a warning that appeared
+ * only at the ceiling would never appear: the displacement is clamped there, so
+ * the reading cannot pass it.
+ */
+export const RESHAPE_WARNING = REACH.faceSlim;
+
 /** Every control point the current reshaping asks for, and what it covers. */
 export interface WarpField {
   points: ControlPoint[];
@@ -370,24 +386,37 @@ export interface WarpField {
   faces: number;
   /** How many were left out because the field could not describe them. */
   omitted: number;
+  /**
+   * The furthest any face is moved, as a fraction of that face's own width.
+   *
+   * Per face, because a face's parts are not all proportional to its width: the
+   * eye rings grow with the eye, so two faces under one set of amounts do not
+   * necessarily report the same fraction. Dividing every displacement by the
+   * widest face's width would then report the wrong one of them, and this is
+   * the only place that knows which face each displacement came from.
+   */
+  magnitude: number;
 }
 
 export function warpControlPoints(
   faces: readonly FaceRegions[],
   warp: FaceParams['warp'],
 ): WarpField {
-  if (faces.length === 0) return { points: [], faces: 0, omitted: 0 };
+  if (faces.length === 0) return { points: [], faces: 0, omitted: 0, magnitude: 0 };
   const budget = warpBudget(faces.length);
   const largest = [...faces].sort((a, b) => b.width - a.width).slice(0, budget.faces);
   const points: ControlPoint[] = [];
+  let magnitude = 0;
   for (const face of largest) {
-    points.push(
+    const own = [
       ...outlinePoints(face, warp, budget.outline),
       ...chinPoint(face, warp),
       ...eyePoints(face, warp, EYE_RING),
       ...nosePoints(face, warp),
       ...mouthPoints(face, warp),
-    );
+    ];
+    magnitude = Math.max(magnitude, warpMagnitude(own, face.width));
+    points.push(...own);
   }
   if (points.length > MAX_CONTROL_POINTS) {
     // The allocation above is what keeps this from happening. Reaching it means
@@ -395,7 +424,7 @@ export function warpControlPoints(
     // silently dropping the tail is the one outcome worth refusing.
     throw new Error(`reshaping asked for ${points.length} control points of ${MAX_CONTROL_POINTS}`);
   }
-  return { points, faces: largest.length, omitted: faces.length - largest.length };
+  return { points, faces: largest.length, omitted: faces.length - largest.length, magnitude };
 }
 
 /**
