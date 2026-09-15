@@ -90,6 +90,13 @@ export const en = {
   'guide.export.note':
     'The size limit is a ceiling rather than a target: a photo that cannot reach it is written at the size it has. A picture split across a grid arrives as one archive, numbered in the order the tiles go up.',
 
+  'about.open': 'About nitra',
+  'about.version': 'Version {version}',
+  'about.body':
+    'A personal project by libraz, open source under AGPL-3.0. No company behind it, no account, and no server that ever sees a photo.',
+  'about.linkRepo': 'Source code on GitHub',
+  'about.linkLicence': 'Licence — AGPL-3.0',
+
   'simple.auto': 'Finish it for me',
   'simple.looks': 'Finish',
   'simple.strength': 'Strength',
@@ -428,6 +435,7 @@ export const en = {
   'status.viewFull': 'Full size',
   'status.evaluated': 'Evaluated',
   'status.workingSpace': 'Working space',
+  'status.source': 'Source on GitHub',
 
   'toast.loaded': 'Opened {name} — {width}×{height}',
   'toast.loadedRotated': 'Opened {name} — {width}×{height} (EXIF rotation applied)',

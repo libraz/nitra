@@ -87,6 +87,13 @@ export const ja: Messages = {
   'guide.export.note':
     '長辺の上限は目標ではなく上限です。届かない写真は元のサイズのまま書き出します。グリッドに分割した写真は ZIP 1 つにまとまり、ファイル名の先頭に投稿順の番号が付きます。',
 
+  'about.open': 'nitra について',
+  'about.version': 'バージョン {version}',
+  'about.body':
+    'libraz の個人プロジェクトです。AGPL-3.0 のオープンソースで、運営会社もアカウントも、写真を受け取るサーバーもありません。',
+  'about.linkRepo': 'GitHub のソースコード',
+  'about.linkLicence': 'ライセンス（AGPL-3.0）',
+
   'simple.auto': 'おまかせで仕上げる',
   'simple.looks': '仕上がり',
   'simple.strength': '仕上がりの強さ',
@@ -425,6 +432,7 @@ export const ja: Messages = {
   'status.viewFull': '原寸',
   'status.evaluated': '評価',
   'status.workingSpace': '作業空間',
+  'status.source': 'GitHub のソースコード',
 
   'toast.loaded': '{name} を読み込みました — {width}×{height}',
   'toast.loadedRotated': '{name} を読み込みました — {width}×{height}（EXIF の回転を適用）',

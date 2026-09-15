@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { resolveAspect } from '../core/geometry/aspects';
 import { normalisedRatio } from '../core/geometry/transform';
 import { I18nProvider, useI18n } from '../i18n';
+import { About } from './components/About';
 import { CropPanel } from './components/CropPanel';
 import { StatusBar, Toast, ToolRail, TopBar } from './components/chrome';
 import { DetailPanel } from './components/DetailPanel';
@@ -42,6 +43,15 @@ function Workspace() {
     rememberGuideSeen();
   }, []);
   const openPhoto = useCallback(() => fileInput.current?.click(), []);
+
+  const [about, setAbout] = useState(false);
+  // The two sheets are alternatives, not layers: one asks what the app does and
+  // the other whose it is, and a person who moved from one to the other has
+  // finished with the first.
+  const openGuideFromAbout = useCallback(() => {
+    setAbout(false);
+    setGuide('asked');
+  }, []);
 
   const dimensions = editor.source
     ? `${editor.source.width} × ${editor.source.height} · ${
@@ -218,6 +228,7 @@ function Workspace() {
         scale={editor.scale}
         previewSize={editor.previewSize}
         workingSpace={editor.workingSpace}
+        onAbout={() => setAbout(true)}
       />
 
       <Toast
@@ -237,6 +248,8 @@ function Workspace() {
           onOpenPhoto={openPhoto}
         />
       )}
+
+      <About open={about} onClose={() => setAbout(false)} onHelp={openGuideFromAbout} />
 
       <input
         ref={fileInput}

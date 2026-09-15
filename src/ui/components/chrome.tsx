@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { RESHAPE_WARNING } from '../../core/face/warp';
 import type { RenderStats } from '../../core/render/pipeline';
 import { LOCALE_ORDER, LOCALES, type MessageKey, useI18n } from '../../i18n';
+import { REPO, VERSION } from '../project';
 import { THEME_CHOICES, useTheme } from '../theme';
 import type { Tool } from '../useEditor';
 import { Menu } from './menu';
@@ -88,7 +89,9 @@ export function TopBar({
         </div>
       )}
 
-      <button type="button" className="tbtn" onClick={onOpen}>
+      {/* Named on the button itself: the label beside the icon is dropped on a
+          narrow bar, and a button whose name went with it has no name at all. */}
+      <button type="button" className="tbtn" aria-label={t('topbar.open')} onClick={onOpen}>
         <svg
           width="14"
           height="14"
@@ -102,7 +105,8 @@ export function TopBar({
         >
           <path d="M3 7h6l2 2h10v10H3z" />
         </svg>
-        {t('topbar.open')}
+        {/* The label goes when the bar runs out of room; the icon carries it. */}
+        <span className="tbtn-l">{t('topbar.open')}</span>
       </button>
       <button
         type="button"
@@ -285,6 +289,43 @@ interface StatusBarProps {
   scale: 'proxy' | 'full';
   previewSize: string | null;
   workingSpace: string;
+  onAbout: () => void;
+}
+
+/**
+ * Whose editor this is.
+ *
+ * The wordmark sits at the end of the status bar, where a desktop application
+ * keeps its own name, and opens the about sheet the way a version string does
+ * everywhere else. The mark beside it is the repository — one click, no sheet in
+ * the way, because someone looking for the source is not looking for a dialog.
+ */
+function Identity({ onAbout }: { onAbout: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="ident">
+      <button type="button" className="ident-b" aria-label={t('about.open')} onClick={onAbout}>
+        <span className="wm">nitra</span>
+        <span className="ident-v mono">{VERSION}</span>
+      </button>
+      <a
+        className="ident-l"
+        href={REPO}
+        target="_blank"
+        rel="noreferrer"
+        data-tip={t('status.source')}
+        /* The tooltip is drawn as generated content, which the accessibility
+           tree appends to the link's own text. Naming the link outright is what
+           keeps it from being read out twice. */
+        aria-label={t('status.source')}
+      >
+        <span className="sr-only">{t('status.source')}</span>
+        <svg className="ident-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 1.3C6.1 1.3 1.3 6.1 1.3 12c0 4.7 3.1 8.7 7.3 10.1.5.1.7-.2.7-.5v-1.9c-3 .6-3.6-1.3-3.6-1.3-.5-1.2-1.2-1.6-1.2-1.6-1-.7.1-.7.1-.7 1.1.1 1.6 1.1 1.6 1.1 1 1.7 2.5 1.2 3.1.9.1-.7.4-1.2.7-1.5-2.5-.3-5.1-1.3-5.1-5.6 0-1.2.4-2.2 1.1-3-.1-.3-.5-1.4.1-2.9 0 0 .9-.3 3 1.1a10.2 10.2 0 0 1 5.4 0c2.1-1.4 3-1.1 3-1.1.6 1.5.2 2.6.1 2.9.7.8 1.1 1.8 1.1 3 0 4.3-2.6 5.3-5.1 5.6.4.4.8 1.1.8 2.2v3.2c0 .3.2.6.7.5 4.2-1.4 7.3-5.4 7.3-10.1 0-5.9-4.8-10.7-10.7-10.7z" />
+        </svg>
+      </a>
+    </div>
+  );
 }
 
 /**
@@ -294,7 +335,7 @@ interface StatusBarProps {
  * result and shown; a number saying the highlights are gone is enough for
  * someone to pull the slider back themselves.
  */
-export function StatusBar({ stats, scale, previewSize, workingSpace }: StatusBarProps) {
+export function StatusBar({ stats, scale, previewSize, workingSpace, onAbout }: StatusBarProps) {
   const { t } = useI18n();
   const retention = stats?.textureRetention ?? null;
   // Skin texture is the one gauge that reads the other way up: the others count
@@ -397,6 +438,7 @@ export function StatusBar({ stats, scale, previewSize, workingSpace }: StatusBar
           {t('status.workingSpace')} <b>{workingSpace}</b>
         </span>
       </div>
+      <Identity onAbout={onAbout} />
     </footer>
   );
 }

@@ -110,6 +110,11 @@
       .boot li {
         margin-left: 1.2em;
       }
+      .boot a {
+        color: #d9a05c;
+        text-decoration: none;
+        border-bottom: 1px solid rgba(217, 160, 92, 0.4);
+      }
       @media (prefers-color-scheme: light) {
         .boot {
           background: #e9e8e5;
@@ -121,6 +126,10 @@
         }
         .boot h1::first-letter {
           color: #9a6522;
+        }
+        .boot a {
+          color: #9a6522;
+          border-bottom-color: rgba(154, 101, 34, 0.4);
         }
       }
     </style>
@@ -148,8 +157,10 @@
           <li>Removes location, capture time and camera data on export.</li>
         </ul>
         <p>
-          Free and open source, under AGPL-3.0. Needs JavaScript and a browser with WebGL2: a
-          current Chrome, Edge, Safari or Firefox.
+          A personal project by <a href="https://github.com/libraz">libraz</a>, free and open source
+          under AGPL-3.0 — the source is at
+          <a href="https://github.com/libraz/nitra">github.com/libraz/nitra</a>. Needs JavaScript and
+          a browser with WebGL2: a current Chrome, Edge, Safari or Firefox.
         </p>
 
         <section lang="ja">
@@ -167,8 +178,9 @@
             <li>書き出しのたびに位置情報・撮影日時・カメラ情報を削除します。</li>
           </ul>
           <p>
-            画像はアップロードされません。読み込みも編集も書き出しもこの端末の中で終わります。AGPL-3.0
-            のオープンソースで、無料で使えます。
+            画像はアップロードされません。読み込みも編集も書き出しもこの端末の中で終わります。libraz
+            の個人プロジェクトで、AGPL-3.0 のオープンソースとして
+            <a href="https://github.com/libraz/nitra">GitHub</a> で公開しています。無料で使えます。
           </p>
         </section>
       </div>

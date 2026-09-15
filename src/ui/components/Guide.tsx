@@ -9,17 +9,14 @@
  * It opens by itself exactly once. A visit that has seen it is recorded, and
  * after that the guide is only ever opened from the bar — an editor that
  * explains itself again every morning is one that gets closed unread.
- *
- * The dialog is the platform's own: `showModal` takes care of the backdrop, the
- * focus trap, the inert background and Escape, and none of the four are worth
- * reimplementing badly.
  */
 
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { type MessageKey, useI18n } from '../../i18n';
+import { REPO } from '../project';
+import { useSheet } from './sheet';
 
 const STORAGE_KEY = 'nitra.guide';
-const REPO = 'https://github.com/libraz/nitra';
 
 export interface GuideStep {
   key: string;
@@ -115,36 +112,16 @@ interface GuideProps {
 export function Guide({ open, firstRun, onClose, onOpenPhoto }: GuideProps) {
   const { t } = useI18n();
   const [at, setAt] = useState(0);
-  const dialog = useRef<HTMLDialogElement | null>(null);
+  const dialog = useSheet(open, onClose);
   const primary = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
-    const node = dialog.current;
-    if (!node) return;
-    if (open && !node.open) {
-      setAt(0);
-      node.showModal();
-      // Opening a modal moves focus to the first thing in it, which here is a
-      // step marker. Focus belongs on the thing there is to do next.
-      primary.current?.focus();
-    } else if (!open && node.open) {
-      node.close();
-    }
+    if (!open) return;
+    setAt(0);
+    // Opening a modal moves focus to the first thing in it, which here is a step
+    // marker. Focus belongs on the thing there is to do next.
+    primary.current?.focus();
   }, [open]);
-
-  // Dismissing by clicking away is wired to the element rather than through a
-  // JSX prop: the backdrop is a region, not a control, and everything it does
-  // is also on a button inside the dialog. A click that reaches the dialog
-  // element itself came from the backdrop — the content is in children.
-  useEffect(() => {
-    const node = dialog.current;
-    if (!node) return;
-    const onClick = (event: MouseEvent) => {
-      if (event.target === node) onClose();
-    };
-    node.addEventListener('click', onClick);
-    return () => node.removeEventListener('click', onClick);
-  }, [onClose]);
 
   const finish = useCallback(() => {
     onClose();
@@ -155,7 +132,7 @@ export function Guide({ open, firstRun, onClose, onOpenPhoto }: GuideProps) {
   const last = at === GUIDE_STEPS.length - 1;
 
   return (
-    <dialog className="guide" ref={dialog} aria-label={t('topbar.help')} onClose={onClose}>
+    <dialog className="sheet guide" ref={dialog} aria-label={t('topbar.help')} onClose={onClose}>
       {/* Keyed on the step so the body plays its transition again on each one. */}
       <div className="guide-b" key={step.key}>
         <span className="sr-only">{t('guide.step', { n: at + 1, total: GUIDE_STEPS.length })}</span>
@@ -182,7 +159,7 @@ export function Guide({ open, firstRun, onClose, onOpenPhoto }: GuideProps) {
         )}
       </div>
 
-      <footer className="guide-f">
+      <footer className="sheet-f">
         <div className="guide-dots">
           {GUIDE_STEPS.map((entry, index) => (
             <button

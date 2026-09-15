@@ -11,6 +11,7 @@ import { LOOKS } from '../src/core/recipe/presets';
 import { detectLocale, interpolate, LOCALE_ORDER, LOCALES } from '../src/i18n';
 import { en } from '../src/i18n/locales/en';
 import { GUIDE_STEPS } from '../src/ui/components/Guide';
+import { PROJECT_LINKS } from '../src/ui/project';
 
 function placeholders(template: string): string[] {
   return [...template.matchAll(/\{(\w+)\}/g)].map((match) => match[1] as string).sort();
@@ -61,6 +62,16 @@ describe('catalogue', () => {
     }
     for (const shape of TILE_SHAPES) {
       expect(Object.keys(en), shape.key).toContain(`tileShape.${shape.key}`);
+    }
+  });
+
+  it('captions every link out of the about sheet', () => {
+    // The rows are built from the data, so a link added without its caption
+    // reaches the sheet as `about.linkRepo` — on the one screen whose whole job
+    // is to say that the claims made here can be checked.
+    for (const link of PROJECT_LINKS) {
+      expect(Object.keys(en), link.key).toContain(link.label);
+      expect(link.href.startsWith('https://github.com/libraz'), link.key).toBe(true);
     }
   });
 

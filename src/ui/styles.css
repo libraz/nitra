@@ -46,6 +46,17 @@
   --drop: rgba(0, 0, 0, 0.85);
   --grain: 0.035;
 
+  /*
+   * The three surface effects, as tokens rather than as literals at the point of
+   * use. A white tint is invisible on a near-white panel and a black shadow is
+   * heavy on one, so a hover that was written as `rgba(255,255,255,.02)` simply
+   * stops happening in the light appearance — which is how a control ends up
+   * feeling dead in one of the two and nobody can say why.
+   */
+  --hover: rgba(255, 255, 255, 0.045);
+  --sunk: rgba(255, 255, 255, 0.016);
+  --lift: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   color-scheme: dark;
@@ -93,6 +104,10 @@
   --drop: rgba(0, 0, 0, 0.3);
   --grain: 0.018;
 
+  --hover: rgba(0, 0, 0, 0.05);
+  --sunk: rgba(0, 0, 0, 0.022);
+  --lift: 0 1px 2px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+
   color-scheme: light;
 }
 
@@ -107,6 +122,20 @@ body,
 #root {
   height: 100%;
   overflow: hidden;
+}
+
+/*
+ * On a phone, `100%` is the height the window reports with the address bar
+ * retracted, so the status bar sits under it until the page is scrolled — and
+ * this page never scrolls. The dynamic unit is the one that tracks the chrome
+ * coming and going.
+ */
+@supports (height: 100dvh) {
+  html,
+  body,
+  #root {
+    height: 100dvh;
+  }
 }
 
 body {
@@ -132,6 +161,49 @@ button {
   background: none;
   border: 0;
   cursor: pointer;
+}
+
+/*
+ * One focus ring for everything.
+ *
+ * `:focus-visible` rather than `:focus`, so it appears for the keyboard and not
+ * under the pointer. It is drawn with an outline and an offset instead of a
+ * border or a shadow: an outline does not take part in layout, which is what lets
+ * the same rule sit on a 34px tool button and on a slider thumb without moving
+ * either of them.
+ */
+:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--amber) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.tool:focus-visible,
+.chip:focus-visible,
+.tbtn:focus-visible,
+.menu-t:focus-visible,
+.seg button:focus-visible,
+.modes button:focus-visible {
+  outline-offset: 1px;
+  border-radius: inherit;
+}
+
+/*
+ * Motion is a way of saying which thing became which. Asked to stop, everything
+ * still arrives at the same state — it just gets there without the journey.
+ */
+@media (prefers-reduced-motion: reduce) {
+  /* biome-ignore-start lint/complexity/noImportantStyles: a sweep of every
+     duration in the app is the point — it has to outrank each rule it covers,
+     and the alternative is remembering to opt every new transition in. */
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+  /* biome-ignore-end lint/complexity/noImportantStyles: as above. */
 }
 
 ::-webkit-scrollbar {
@@ -228,6 +300,9 @@ body::after {
 .modes {
   display: flex;
   position: relative;
+  /* Never the thing that gives way when the bar runs short: a mode switch that
+     has shrunk to two wrapped lines is the least readable control in the app. */
+  flex: none;
   background: var(--bg);
   border: 1px solid var(--line-2);
   border-radius: 8px;
@@ -241,9 +316,7 @@ body::after {
   width: calc(50% - 2px);
   background: var(--raise);
   border-radius: 6px;
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  box-shadow: var(--lift);
   transition: transform 0.32s var(--ease);
 }
 .modes[data-mode="detail"] .glide {
@@ -254,6 +327,7 @@ body::after {
   z-index: 1;
   flex: 1 1 0;
   min-width: 78px;
+  white-space: nowrap;
   padding: 5px 0;
   font-size: 12px;
   font-weight: 500;
@@ -321,6 +395,74 @@ body::after {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* ── tooltips ──
+ *
+ * One implementation, placed by the edge of the app the control sits on: the
+ * rail speaks to its right, the bar downwards, the status strip upwards. A
+ * tooltip on a button in a panel is not wanted at all — the name is already
+ * written next to it there — so the label is only drawn inside the chrome.
+ *
+ * A pointer that cannot hover gets none of them. A tap would open a label with
+ * nothing to close it, over the photo the tap was meant to be about.
+ */
+.rail [data-tip],
+.topbar [data-tip],
+.foot [data-tip] {
+  position: relative;
+}
+.rail [data-tip]::after,
+.topbar [data-tip]::after,
+.foot [data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  padding: 3px 8px;
+  background: var(--tip);
+  color: var(--tip-ink);
+  font-size: 11px;
+  letter-spacing: 0;
+  border-radius: 5px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 40;
+  opacity: 0;
+  box-shadow: 0 4px 14px var(--drop);
+  transition:
+    opacity 0.16s,
+    transform 0.16s;
+}
+
+.rail [data-tip]::after {
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-3px);
+}
+.rail [data-tip]:hover::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.topbar [data-tip]::after {
+  top: calc(100% + 7px);
+  right: 0;
+  transform: translateY(-3px);
+}
+.foot [data-tip]::after {
+  bottom: calc(100% + 9px);
+  right: 0;
+  transform: translateY(3px);
+}
+.topbar [data-tip]:hover::after,
+.foot [data-tip]:hover::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (hover: none) {
+  [data-tip]::after {
+    content: none;
+  }
 }
 
 /* ── icon menu ──
@@ -552,32 +694,16 @@ body::after {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.rail .gap {
-  height: 12px;
-}
-.tool::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: calc(100% + 10px);
-  top: 50%;
-  transform: translateY(-50%) translateX(-3px);
-  background: var(--tip);
-  color: var(--tip-ink);
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 5px;
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 40;
-  opacity: 0;
-  transition:
-    opacity 0.16s,
-    transform 0.16s;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
-}
-.tool:hover::after {
-  opacity: 1;
-  transform: translateY(-50%) translateX(0);
+/*
+ * The compare button is not a seventh tool: it is how the photo is looked at
+ * rather than what is being changed about it, so it sits at the far end of the
+ * rail with a rule between.
+ */
+.rail-gap {
+  margin-top: auto;
+  align-self: stretch;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--line);
 }
 
 /* ============================================================  stage  */
@@ -802,7 +928,7 @@ body::after {
 .look[aria-pressed="true"] .thumb {
   box-shadow:
     0 0 0 2px var(--amber),
-    0 7px 18px -7px rgba(0, 0, 0, 0.85);
+    0 7px 18px -7px var(--drop);
 }
 .look .ln {
   font-size: 10.5px;
@@ -876,7 +1002,7 @@ body::after {
   transition: background 0.16s;
 }
 .grp-b-t:hover {
-  background: rgba(255, 255, 255, 0.022);
+  background: var(--hover);
 }
 .grp-r {
   width: 26px;
@@ -1041,7 +1167,7 @@ body::after {
   border-radius: 50%;
   background: var(--thumb);
   border: 0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 1px 3px var(--drop);
   transition:
     transform 0.14s var(--ease),
     background 0.14s;
@@ -1095,9 +1221,18 @@ body::after {
 .seg button[aria-pressed="true"] {
   color: var(--ink);
   background: var(--raise);
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: var(--lift);
+}
+/*
+ * Off because nothing downstream would act on it. Dimmed rather than removed, on
+ * the same terms as a slider whose stage has nothing to act on: the choice is
+ * part of the edit and stays readable.
+ */
+.seg-w[data-off="true"] {
+  opacity: 0.42;
+}
+.seg :disabled {
+  cursor: not-allowed;
 }
 .mini {
   font-size: 10.5px;
@@ -1106,7 +1241,7 @@ body::after {
   padding: 9px 11px;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.016);
+  background: var(--sunk);
 }
 .mini b {
   color: var(--amber);
@@ -1144,7 +1279,7 @@ body::after {
   padding: 9px 11px;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.016);
+  background: var(--sunk);
 }
 .facenote b {
   font-weight: 500;
@@ -1346,6 +1481,74 @@ body::after {
   font-weight: 400;
 }
 
+/*
+ * Whose editor this is.
+ *
+ * The wordmark at the end of the status bar, where a desktop application keeps
+ * its own name. It is quiet on purpose — it is an answer to a question nobody has
+ * while they are working, and it must not compete with the readings to its left.
+ */
+.ident {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  margin-left: 16px;
+  padding-left: 15px;
+  border-left: 1px solid var(--line);
+}
+.ident-b {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  /* A shade larger than the readings: it is a name, not another number. */
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--ink-3);
+  transition:
+    color 0.16s,
+    background 0.16s;
+}
+.ident-b:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+.wm {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+/* The same amber initial as the mark in the bar: one name, drawn one way. */
+.wm::first-letter {
+  color: var(--amber);
+}
+.ident-v {
+  font-size: 10px;
+}
+.ident-l {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--ink-3);
+  transition:
+    color 0.16s,
+    background 0.16s;
+}
+.ident-l:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+/* The one filled mark in the app: a service is known by its logo, and a
+   line-drawn approximation of one reads as a mistake rather than as a style. */
+.ident-mark {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  stroke: none;
+}
+
 /* ── toast ── */
 
 .toast {
@@ -1359,7 +1562,7 @@ body::after {
   padding: 9px 16px;
   font-size: 12px;
   color: var(--toast-ink);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 12px 34px var(--drop);
   opacity: 0;
   pointer-events: none;
   z-index: 200;
@@ -1543,9 +1746,6 @@ body::after {
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-.rail .gap {
-  margin-top: auto;
 }
 
 .iconrow {
@@ -1905,9 +2105,154 @@ body::after {
   color: var(--alert);
 }
 
+/* ============================================================  narrow  */
+
+/*
+ * One editor, two shapes.
+ *
+ * The three columns are the shape of the work: the photo in the middle, what to
+ * do to it on the right, which kind of work on the left. Below about 860px there
+ * is no room for three of anything, so the same three regions stack — the rail
+ * becomes a bar between the photo and the panel, which is where a phone puts a
+ * row of tools anyway, and the photo keeps whatever height is left.
+ *
+ * What does not change is the order: photo, then tools, then controls. Nothing
+ * moves to the other side of anything else, so the layout is the same layout.
+ */
+
 @media (max-width: 1080px) {
   :root {
     --panelw: 300px;
+  }
+}
+
+@media (max-width: 860px) {
+  :root {
+    /* A finger, not a pointer: the tools grow and the bar grows with them. */
+    --rail: 58px;
+    --top: 46px;
+    --panelh: min(46vh, 380px);
+  }
+
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows:
+      var(--top) minmax(0, 1fr) var(--rail)
+      minmax(0, var(--panelh)) var(--foot);
+    grid-template-areas:
+      "top"
+      "stage"
+      "rail"
+      "panel"
+      "foot";
+  }
+
+  /* The wordmark moves to the status bar, which has room for it at any width. */
+  .topbar {
+    gap: 8px;
+    padding: 0 8px;
+    overflow: hidden;
+  }
+  .brand {
+    display: none;
+  }
+  .doc {
+    flex: 0 1 auto;
+    padding-left: 0;
+    border-left: 0;
+    overflow: hidden;
+  }
+  .doc .dim {
+    display: none;
+  }
+  .doc .fn {
+    max-width: 14ch;
+  }
+  .modes button {
+    min-width: 0;
+    padding: 5px 9px;
+  }
+
+  .rail {
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 5px;
+    padding: 0 8px;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .tool {
+    width: 40px;
+    height: 40px;
+  }
+  /* The rule turns with the bar, and the compare button stays at the far end. */
+  .rail-gap {
+    align-self: center;
+    height: 22px;
+    margin: 0 3px 0 auto;
+    border-bottom: 0;
+    border-left: 1px solid var(--line);
+  }
+
+  .stage {
+    padding: 14px;
+  }
+  /* Named affordances for a pointer that is not there. */
+  .hint {
+    display: none;
+  }
+
+  .panel {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .simple-body {
+    padding: 20px 16px 26px;
+  }
+  .tool-body {
+    padding: 16px 16px 26px;
+  }
+  .grp-b {
+    padding: 4px 16px 20px;
+  }
+  .grp-b-t {
+    padding: 13px 12px 13px 14px;
+  }
+
+  /*
+   * The readings stay and the telemetry goes. Which guardrail is over its limit
+   * is what the strip is for; the working space is a fact about the build.
+   */
+  .gauges {
+    overflow-x: auto;
+    scrollbar-width: none;
+    /* The cut at the end is deliberate rather than a clipped label: the strip
+       fades where it runs out of room, which is what says it scrolls. */
+    mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);
+  }
+  .gauges::-webkit-scrollbar {
+    display: none;
+  }
+  .g {
+    padding: 0 11px;
+  }
+  .foot .rt {
+    display: none;
+  }
+  .ident {
+    margin-left: 8px;
+    padding-left: 10px;
+  }
+}
+
+/* No room for both the icon and its label; the icon is the one that scales. */
+@media (max-width: 640px) {
+  .tbtn-l {
+    display: none;
+  }
+  .tbtn {
+    padding: 6px 10px;
   }
 }
 
@@ -2140,15 +2485,11 @@ body::after {
   white-space: nowrap;
 }
 
-/* ============================================================  guide  */
+/* ============================================================  sheets  */
 
 /*
- * The guide.
- *
- * A fixed body height, not one that follows the step: the four steps are not
- * the same length, and a dialog that resizes under the button being aimed at
- * reads as a layout fault. A translation longer than the tallest of them
- * scrolls rather than moving the footer.
+ * The guide and the about sheet share a surface, so they are recognisably the
+ * same kind of thing: a sheet over the editor, dismissed the same way.
  *
  * The scrim is a literal black rather than the token the rest of the app would
  * use, because `::backdrop` only started inheriting custom properties recently,
@@ -2156,7 +2497,7 @@ body::after {
  * behind a dialog that is trying to be the only thing on screen.
  */
 
-.guide {
+.sheet {
   position: relative;
   margin: auto;
   width: min(520px, calc(100vw - 32px));
@@ -2165,13 +2506,13 @@ body::after {
   color: var(--ink);
   border: 1px solid var(--line-2);
   border-radius: 13px;
-  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.55);
-  animation: guide-in 0.19s var(--ease);
+  box-shadow: 0 26px 70px var(--drop);
+  animation: sheet-in 0.19s var(--ease);
 }
-.guide::backdrop {
+.sheet::backdrop {
   background: rgba(0, 0, 0, 0.78);
 }
-:root[data-theme="light"] .guide::backdrop {
+:root[data-theme="light"] .sheet::backdrop {
   background: rgba(0, 0, 0, 0.5);
 }
 
@@ -2180,7 +2521,7 @@ body::after {
  * the chrome is sitting under. Without this it would be the one surface in the
  * app that is perfectly clean.
  */
-.guide::after {
+.sheet::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -2191,12 +2532,28 @@ body::after {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-@keyframes guide-in {
+@keyframes sheet-in {
   from {
     opacity: 0;
     transform: translateY(7px);
   }
 }
+
+.sheet-f {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px 14px 24px;
+  border-top: 1px solid var(--line);
+}
+
+/* ── the guide ──
+ *
+ * A fixed body height, not one that follows the step: the four steps are not the
+ * same length, and a dialog that resizes under the button being aimed at reads as
+ * a layout fault. A translation longer than the tallest of them scrolls rather
+ * than moving the footer.
+ */
 
 .guide-b {
   display: flex;
@@ -2216,7 +2573,7 @@ body::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .guide,
+  .sheet,
   .guide-b {
     animation: none;
   }
@@ -2284,14 +2641,6 @@ body::after {
   border-color: var(--amber-dim);
 }
 
-.guide-f {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 20px 14px 24px;
-  border-top: 1px solid var(--line);
-}
-
 .guide-dots {
   display: flex;
 }
@@ -2313,4 +2662,89 @@ body::after {
 }
 .guide-dots button[aria-current="true"]::after {
   background: var(--amber);
+}
+
+/* ── the about sheet ──
+ *
+ * Narrower than the guide, because it is one paragraph and two links rather than
+ * a sequence: a sheet as wide as its widest sibling would be mostly empty, and
+ * width is what tells them apart before either is read.
+ */
+
+.about {
+  width: min(410px, calc(100vw - 32px));
+}
+.about-b {
+  padding: 24px 26px 22px;
+}
+.about-h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.about-h .wm {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.about-v {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.about-tag {
+  margin-top: 9px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+.about-p {
+  margin-top: 16px;
+  color: var(--ink-2);
+  line-height: 1.85;
+}
+
+.about-links {
+  display: grid;
+  gap: 1px;
+  margin-top: 20px;
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+}
+.about-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Pulled out to the text edge, so the row's tint is wider than the sentence
+     above it rather than starting under it. */
+  margin: 0 -10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  text-decoration: none;
+  transition:
+    background 0.14s,
+    color 0.14s;
+}
+.about-link:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.about-link-n {
+  flex: 1;
+  min-width: 0;
+}
+.about-link-x {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--ink-3);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.about-link:hover .about-link-x {
+  color: var(--amber);
 }
