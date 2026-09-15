@@ -10,24 +10,33 @@
 import { describe, expect, it } from 'vitest';
 import type { Point } from '../src/core/face/geometry';
 import {
+  SEGMENT_CHANNELS,
   type Segmentation,
   segmentationWeight,
   skinConfidence,
 } from '../src/core/face/segmentation';
 
-/** A segmentation whose face-skin channel is `skin` inside the given box. */
+/**
+ * A segmentation whose face-skin and person channels fill the given box.
+ *
+ * One builder for both because they are the same bitmap: the mask reads the
+ * first channel and the separation reads the third, and a helper that packed
+ * them differently would let a wrong channel index pass.
+ */
 function segmentation(
   size: number,
   skin: number,
   box: { x0: number; y0: number; x1: number; y1: number } = { x0: 0, y0: 0, x1: 1, y1: 1 },
+  person = 0,
 ): Segmentation {
-  const data = new Uint8ClampedArray(size * size * 2);
+  const data = new Uint8ClampedArray(size * size * SEGMENT_CHANNELS);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = (x + 0.5) / size;
       const v = (y + 0.5) / size;
       const inBox = u >= box.x0 && u <= box.x1 && v >= box.y0 && v <= box.y1;
-      data[(y * size + x) * 2] = inBox ? skin * 255 : 0;
+      data[(y * size + x) * SEGMENT_CHANNELS] = inBox ? skin * 255 : 0;
+      data[(y * size + x) * SEGMENT_CHANNELS + 2] = inBox ? person * 255 : 0;
     }
   }
   return { width: size, height: size, data };

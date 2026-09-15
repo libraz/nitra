@@ -17,7 +17,12 @@
 import { FaceLandmarker, FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
 import { type FaceRegions, faceRegions } from './geometry';
 import { type FaceMaskRegion, type MaskBitmap, rasteriseFaces } from './raster';
-import { type Segmentation, segmentationWeight, skinConfidence } from './segmentation';
+import {
+  SEGMENT_CHANNELS,
+  type Segmentation,
+  segmentationWeight,
+  skinConfidence,
+} from './segmentation';
 
 export type { Segmentation };
 
@@ -58,10 +63,15 @@ const SEGMENT_EDGE = 256;
  * Class indices of the segmentation model.
  *
  * The skin mask is built from the face's own skin and has hair taken out of
- * it; the other classes are not consulted. Body skin is deliberately left out:
- * an arm is skin, and smoothing it because the face is being smoothed is not
- * what was asked for.
+ * it. Body skin is deliberately not part of that: an arm is skin, and smoothing
+ * it because the face is being smoothed is not what was asked for.
+ *
+ * The background class is read instead of adding up the other five. It is one
+ * fetch rather than five, and the classes are confidences that sum to one, so
+ * the complement of the background *is* the person — including the clothes and
+ * whatever they are carrying, which is what has to move out of focus together.
  */
+const CLASS_BACKGROUND = 0;
 const CLASS_HAIR = 1;
 const CLASS_FACE_SKIN = 3;
 
@@ -261,17 +271,19 @@ function merge(found: FaceRegions[]): FaceRegions[] {
   return kept;
 }
 
-/** Pack the two classes the skin mask needs into one two-channel bitmap. */
+/** Pack the classes the masks are built from into one bitmap. */
 function packSegmentation(
   faceSkin: Float32Array,
   hair: Float32Array,
+  background: Float32Array,
   width: number,
   height: number,
 ): Segmentation {
-  const data = new Uint8ClampedArray(width * height * 2);
+  const data = new Uint8ClampedArray(width * height * SEGMENT_CHANNELS);
   for (let i = 0; i < width * height; i++) {
-    data[i * 2] = (faceSkin[i] as number) * 255;
-    data[i * 2 + 1] = (hair[i] as number) * 255;
+    data[i * SEGMENT_CHANNELS] = (faceSkin[i] as number) * 255;
+    data[i * SEGMENT_CHANNELS + 1] = (hair[i] as number) * 255;
+    data[i * SEGMENT_CHANNELS + 2] = (1 - (background[i] as number)) * 255;
   }
   return { width, height, data };
 }
@@ -317,13 +329,15 @@ export async function analyzeFace(image: ImageData): Promise<FaceAnalysis> {
   const confidence = result.confidenceMasks;
   const faceSkin = confidence?.[CLASS_FACE_SKIN];
   const hair = confidence?.[CLASS_HAIR];
-  if (!faceSkin || !hair) {
+  const background = confidence?.[CLASS_BACKGROUND];
+  if (!faceSkin || !hair || !background) {
     result.close();
     throw new FaceAnalysisError('the segmentation model returned no confidence masks');
   }
   const segmentation = packSegmentation(
     faceSkin.getAsFloat32Array(),
     hair.getAsFloat32Array(),
+    background.getAsFloat32Array(),
     faceSkin.width,
     faceSkin.height,
   );

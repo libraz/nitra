@@ -413,12 +413,21 @@ export function createMaskTexture(
 }
 
 /**
- * Upload the two segmentation classes the skin mask is built from.
+ * Upload the segmentation classes the masks are built from.
  *
- * Two channels rather than four because that is what is used, and this is the
- * one texture in the chain whose size is set by a model rather than by the
- * photo. It is magnified a long way — 256 pixels across a whole frame — so it
- * is filtered rather than sampled, and its edges are put back afterwards by
+ * Face skin and hair in the first two channels, the whole person in the third:
+ * the skin mask reads the first two and the background separation reads the
+ * third, and the third is a different question rather than a combination of
+ * them. The channel count has to match what `packSegmentation` writes — a
+ * two-channel upload of four-channel data does not fail, it reads every other
+ * pair and scrambles all three.
+ *
+ * Four channels rather than three because a three-channel row needs an unpack
+ * alignment nothing else here sets. One unused byte per texel, on the one
+ * texture in the chain whose size is set by a model rather than by the photo.
+ *
+ * It is magnified a long way — 256 pixels across a whole frame — so it is
+ * filtered rather than sampled, and its edges are put back afterwards by
  * refining it against the photo itself.
  */
 export function createSegmentationTexture(
@@ -429,8 +438,11 @@ export function createSegmentationTexture(
 ): WebGLTexture {
   const texture = gl.createTexture();
   if (!texture) throw new GlError('could not create segmentation texture');
+  if (data.length !== width * height * 4) {
+    throw new GlError('the segmentation does not have four channels per texel');
+  }
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RG8, width, height);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
   gl.texSubImage2D(
     gl.TEXTURE_2D,
     0,
@@ -438,7 +450,7 @@ export function createSegmentationTexture(
     0,
     width,
     height,
-    gl.RG,
+    gl.RGBA,
     gl.UNSIGNED_BYTE,
     new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
   );

@@ -23,9 +23,35 @@ import { type Point, polygonArea } from './geometry';
 export interface Segmentation {
   width: number;
   height: number;
-  /** Two channels per texel: face-skin confidence, then hair confidence. */
+  /**
+   * Four channels per texel: face-skin, hair, person, and one unused.
+   *
+   * The first two are what the skin mask is built from. The third is the whole
+   * person — everything the model did not call background — which is what the
+   * defocus divides the frame along, and it is a different question from the
+   * first two rather than a combination of them: a sleeve is part of a person
+   * and is neither face skin nor hair.
+   *
+   * What the third channel cannot answer is whether there is anybody there.
+   * This model segments a person it assumes is present rather than detecting
+   * one, so on a photograph with nobody in it the division is confident and
+   * meaningless. Measured on a frame of pure gradient: a fifth of it comes back
+   * over the half-way mark, which is the same reading a portrait gives. Neither
+   * the mean confidence nor the count of decided texels separates the two —
+   * both were tried — so there is no guardrail here for defocusing the
+   * background of a landscape, and a threshold on this channel would be one
+   * that reports nothing wrong in exactly the case it exists to catch.
+   *
+   * The fourth channel exists because three-channel uploads need an unpack
+   * alignment nothing else here sets, and a row of 256 texels happens to be
+   * divisible by four either way. Paying one byte per texel is the cheaper of
+   * the two mistakes available.
+   */
   data: Uint8ClampedArray;
 }
+
+/** Channel order within {@link Segmentation.data}. */
+export const SEGMENT_CHANNELS = 4;
 
 /** Below this the segmentation is ignored; above the second, fully believed. */
 const DOUBTED = 0.15;
@@ -95,7 +121,8 @@ export function skinConfidence(
           Math.floor((point.y / aspect) * segmentation.height),
         );
         if (sx < 0 || sy < 0) continue;
-        total += (segmentation.data[(sy * segmentation.width + sx) * 2] as number) / 255;
+        total +=
+          (segmentation.data[(sy * segmentation.width + sx) * SEGMENT_CHANNELS] as number) / 255;
         counted += 1;
       }
     }
