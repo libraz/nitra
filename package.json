@@ -5,17 +5,19 @@
   "type": "module",
   "packageManager": "bun@1.4.2",
   "scripts": {
-    "dev": "bun run models && vite",
-    "build": "bun run models && tsc --noEmit && vite build",
+    "dev": "bun run assets && vite",
+    "build": "bun run assets && tsc --noEmit && vite build",
+    "assets": "bun run models && bun run wasm",
     "models": "bun run scripts/fetch-models.ts",
+    "wasm": "bun run scripts/build-wasm.ts",
     "preview": "vite preview",
-    "check": "biome check .",
-    "lint": "biome lint .",
-    "lint:fix": "biome check --write .",
-    "format": "biome format --write .",
+    "check": "biome check . && cargo fmt --manifest-path crates/heal/Cargo.toml --check",
+    "lint": "biome lint . && cargo clippy --manifest-path crates/heal/Cargo.toml --release --target wasm32-unknown-unknown -- -D warnings",
+    "lint:fix": "biome check --write . && cargo fmt --manifest-path crates/heal/Cargo.toml",
+    "format": "biome format --write . && cargo fmt --manifest-path crates/heal/Cargo.toml",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "bun run wasm && vitest run",
+    "test:watch": "bun run wasm && vitest"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
