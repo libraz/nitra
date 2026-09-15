@@ -32,6 +32,7 @@ export const ja: Messages = {
   'rail.compare': '原画と比較（長押し）',
 
   'tool.adjust': '調整',
+  'tool.heal': 'シミ・ニキビ消し',
   'tool.crop': 'トリミングと回転',
   'tool.text': '文字入れ',
   'tool.tiles': 'グリッド分割',
@@ -54,6 +55,10 @@ export const ja: Messages = {
   'stage.hintCropText': '切り抜き範囲を移動、角でサイズ変更',
   'stage.hintText': 'ドラッグ',
   'stage.hintTextText': '文字を移動',
+  'stage.hintHeal': 'クリック',
+  'stage.hintHealText': '気になる点を消す',
+  'stage.hintHealBack': '輪郭をクリック',
+  'stage.hintHealBackText': '元に戻す',
 
   'guide.step': '{total} ステップ中 {n} 番目',
   'guide.skip': 'スキップ',
@@ -217,6 +222,19 @@ export const ja: Messages = {
   'bands.blue': 'ブルー',
   'bands.purple': 'パープル',
   'bands.magenta': 'マゼンタ',
+
+  'heal.title': '気になる点',
+  'heal.how': '消したい点をクリックします。残った輪郭をクリックすると元に戻ります。',
+  'heal.noImage': '写真を開くと使えます。',
+  'heal.size': 'ブラシの大きさ',
+  'heal.sizeNote': '点そのものより少し大きめに。すぐ外側の肌が、埋めるときに写せる唯一の材料です。',
+  'heal.count': '消した点 — {count}',
+  'heal.full': '上限',
+  'heal.removeLast': '直前の1点を戻す',
+  'heal.clear': 'すべて戻す',
+  'heal.aboutTitle': '質感は残ります',
+  'heal.aboutBody':
+    'ぼかすのではなく、点のまわりの肌を写して埋めるので、毛穴もいっしょに移ります。処理は1点につき一度、開いたときの写真に対して走ります。',
 
   'crop.rotate': '回転',
   'crop.rotateLeft': '左に 90 度回転',
@@ -452,6 +470,7 @@ export const ja: Messages = {
   'toast.faceFound': '顔を {count} 件検出しました。肌の調整が有効になります',
   'toast.faceNone': '顔を検出しませんでした。肌の調整は無効のまま、他の調整はそのまま使えます',
   'toast.faceFailed': '顔解析を実行できませんでした',
+  'toast.healFailed': '点を埋める処理を実行できませんでした',
   'toast.fontLoaded': '{name} を読み込みました',
   'toast.fontFailed': 'このフォントファイルは読み込めませんでした',
   'toast.framingReset': '構図をリセットしました',

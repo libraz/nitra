@@ -11,11 +11,12 @@
  * are reading the same numbers out of the same recipe.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
+import { type Mat3, mat3Apply, mat3Inverse } from '../../core/color/matrix';
 import type { TileRect } from '../../core/geometry/tiles';
 import type { CropHandle } from '../../core/geometry/transform';
 import { resizeCrop } from '../../core/geometry/transform';
-import type { GeometryParams, TextLayer } from '../../core/recipe/schema';
+import type { GeometryParams, Recipe, TextLayer } from '../../core/recipe/schema';
 
 type CropRect = GeometryParams['crop'];
 
@@ -129,6 +130,121 @@ export function CropOverlay({ crop, ratio, onChange }: CropOverlayProps) {
           <i key={handle} className={`cropov-h h-${handle}`} data-handle={handle} />
         ))}
       </div>
+    </div>
+  );
+}
+
+interface HealOverlayProps {
+  spots: Recipe['heal'];
+  /** Radius the next spot gets, as a fraction of the image width. */
+  radius: number;
+  /** Output coordinate back to source coordinate, both normalised. */
+  toSource: Mat3;
+  /** Source height over width, which makes a radius in widths isotropic. */
+  aspect: number;
+  onPlace: (x: number, y: number) => void;
+  onRemove: (index: number) => void;
+}
+
+/**
+ * The spots that have been filled, and where the next one goes.
+ *
+ * The overlay is the one place the two coordinate systems meet. A spot is in the
+ * photograph's own frame, because a mark is on the photograph and a crop must not
+ * move it; the overlay is stretched over the cropped picture on screen. So a
+ * click is mapped one way and every existing spot the other, both through the
+ * renderer's own framing matrix rather than through a second copy of it.
+ *
+ * A filled spot stays visible as a ring, and clicking the ring takes it back.
+ * Nothing else in the app has to be undone to be judged — a slider goes back by
+ * moving it — so the fills are the one edit that needs somewhere to be seen.
+ */
+export function HealOverlay({
+  spots,
+  radius,
+  toSource,
+  aspect,
+  onPlace,
+  onRemove,
+}: HealOverlayProps) {
+  const host = useRef<HTMLDivElement | null>(null);
+  const brush = useRef<HTMLDivElement | null>(null);
+  const fromSource = useMemo(() => mat3Inverse(toSource), [toSource]);
+
+  // How much of the photograph one step across the picture covers, in image
+  // widths. It comes out of the matrix rather than out of the crop rectangle
+  // because a turned or straightened frame does not run along the source's axes.
+  const reach = Math.max(Math.hypot(toSource[0], (toSource[3] as number) * aspect), 1e-6);
+  // The true width of the fill, with no minimum: a ring wider than what it
+  // marks is a ring that says the wrong thing about the photograph. Being seen
+  // and being grabbable are handled in the stylesheet, where a floor belongs —
+  // both are properties of the screen rather than of the picture.
+  const across = (r: number) => (2 * r) / reach;
+
+  return (
+    // No label and no role: this is a pointer affordance. What it does is also
+    // said in the panel, which counts the spots and can take them all back.
+    <div
+      className="healov"
+      ref={host}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        const box = host.current?.getBoundingClientRect();
+        if (!box || box.width < 1 || box.height < 1) return;
+        const [x, y] = mat3Apply(toSource, [
+          (event.clientX - box.left) / box.width,
+          (event.clientY - box.top) / box.height,
+          1,
+        ]);
+        // A straightened frame maps its corners outside the photograph, and
+        // there is nothing there to fill.
+        if (x < 0 || x > 1 || y < 0 || y > 1) return;
+        onPlace(x, y);
+      }}
+      // The brush ring is moved by writing to the element rather than through
+      // state: a pointer move is a stream of events, and re-rendering the
+      // overlay on each one would rebuild every spot to move one ring.
+      onPointerMove={(event) => {
+        const box = host.current?.getBoundingClientRect();
+        const node = brush.current;
+        if (!box || !node || box.width < 1 || box.height < 1) return;
+        node.style.left = `${((event.clientX - box.left) / box.width) * 100}%`;
+        node.style.top = `${((event.clientY - box.top) / box.height) * 100}%`;
+        node.style.opacity = '1';
+      }}
+      onPointerLeave={() => {
+        if (brush.current) brush.current.style.opacity = '0';
+      }}
+    >
+      <div className="healov-brush" ref={brush} style={{ width: `${across(radius) * 100}%` }} />
+      {spots.map((spot, index) => {
+        const [u, v] = mat3Apply(fromSource, [spot.x, spot.y, 1]);
+        // Outside the crop the spot is still filled — the fill is on the whole
+        // photograph — but there is nowhere on screen to draw it.
+        if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+        return (
+          <button
+            // A spot carries no id of its own: the order is what makes two
+            // overlapping fills compose, and the same point can legitimately be
+            // filled twice, so the coordinates alone would collide. Nothing
+            // here holds state across a re-render, so a reused ring is a ring
+            // drawn somewhere else and nothing more.
+            // biome-ignore lint/suspicious/noArrayIndexKey: the position in the list is the identity
+            key={`${spot.x}-${spot.y}-${index}`}
+            type="button"
+            className="healov-spot"
+            style={{
+              left: `${u * 100}%`,
+              top: `${v * 100}%`,
+              width: `${across(spot.r) * 100}%`,
+            }}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              onRemove(index);
+            }}
+          />
+        );
+      })}
     </div>
   );
 }

@@ -63,8 +63,10 @@ function meanAt(pixels: Uint8ClampedArray, spot: HealSpot): number {
   return total / Math.max(count, 1);
 }
 
-const LEFT: HealSpot = { x: 0.3, y: 0.4, r: 0.05 };
-const RIGHT: HealSpot = { x: 0.7, y: 0.6, r: 0.05 };
+// The largest radius the recipe will hold, so the arithmetic under test is the
+// arithmetic a real spot goes through.
+const LEFT: HealSpot = { x: 0.3, y: 0.4, r: 0.03 };
+const RIGHT: HealSpot = { x: 0.7, y: 0.6, r: 0.03 };
 
 function plateOf(marks: readonly HealSpot[] = [LEFT, RIGHT]) {
   const pristine = photograph(marks);
@@ -174,7 +176,7 @@ describe('the plate', () => {
   });
 
   it('composes two spots that overlap', () => {
-    const near: HealSpot = { x: 0.34, y: 0.4, r: 0.05 };
+    const near: HealSpot = { x: 0.32, y: 0.4, r: 0.03 };
     const { pristine, plate } = plateOf([LEFT, near]);
     plate.apply(healer, [LEFT, near]);
     const pixels = plate.pixels as Uint8ClampedArray;

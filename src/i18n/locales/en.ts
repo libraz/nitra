@@ -35,6 +35,7 @@ export const en = {
   'rail.compare': 'Compare with original (hold)',
 
   'tool.adjust': 'Adjust',
+  'tool.heal': 'Remove blemishes',
   'tool.crop': 'Crop and rotate',
   'tool.text': 'Text',
   'tool.tiles': 'Split into a grid',
@@ -57,6 +58,10 @@ export const en = {
   'stage.hintCropText': 'Move the crop, or a corner to resize',
   'stage.hintText': 'drag',
   'stage.hintTextText': 'Move the caption',
+  'stage.hintHeal': 'click',
+  'stage.hintHealText': 'Fill a blemish',
+  'stage.hintHealBack': 'click a ring',
+  'stage.hintHealBackText': 'Put it back',
 
   'guide.step': 'Step {n} of {total}',
   'guide.skip': 'Skip',
@@ -220,6 +225,20 @@ export const en = {
   'bands.blue': 'Blue',
   'bands.purple': 'Purple',
   'bands.magenta': 'Magenta',
+
+  'heal.title': 'Blemishes',
+  'heal.how': 'Click a blemish to fill it. Click the ring it leaves to put it back.',
+  'heal.noImage': 'Open a photo to start filling.',
+  'heal.size': 'Brush size',
+  'heal.sizeNote':
+    'A little larger than the mark itself. The skin just outside it is the only place the fill has to copy from.',
+  'heal.count': 'Filled — {count}',
+  'heal.full': 'full',
+  'heal.removeLast': 'Undo the last fill',
+  'heal.clear': 'Remove every fill',
+  'heal.aboutTitle': 'Texture is kept',
+  'heal.aboutBody':
+    'The fill copies skin from around the mark rather than smoothing it over, so the pores come with it. It runs once per spot, on the photo as it was opened.',
 
   'crop.rotate': 'Rotate',
   'crop.rotateLeft': 'Rotate left',
@@ -456,6 +475,7 @@ export const en = {
   'toast.faceFound': 'Found {count} face(s) — the skin controls are live',
   'toast.faceNone': 'No face found — the skin controls stay off and the rest is unaffected',
   'toast.faceFailed': 'Face analysis could not run',
+  'toast.healFailed': 'The blemish filler could not run',
   'toast.fontLoaded': 'Loaded {name}',
   'toast.fontFailed': 'Could not read that font file',
   'toast.framingReset': 'Framing reset',

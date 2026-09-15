@@ -8,6 +8,7 @@
 
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type AutoNote, suggestGrade } from '../core/analysis/auto';
+import { MAT3_IDENTITY, type Mat3 } from '../core/color/matrix';
 import { analyzeFace, type FaceAnalysis } from '../core/face/analyze';
 import { aspectByKey, resolveAspect } from '../core/geometry/aspects';
 import { cropRatioForTiles, type ExportPlan, planExport } from '../core/geometry/tiles';
@@ -17,6 +18,7 @@ import {
   flipFieldFor,
   frameSize,
   geometrySignature,
+  outputToSource,
 } from '../core/geometry/transform';
 import { decodeSourceFile, type SourceImage } from '../core/io/decode';
 import { exportImage } from '../core/io/export';
@@ -33,9 +35,11 @@ import {
   type FaceParams,
   type GeometryParams,
   type GlobalParams,
+  HEAL_LIMIT,
   type MetadataParams,
   neutralRecipe,
   neutralTextLayer,
+  paramDef,
   type Recipe,
   type TextLayer,
 } from '../core/recipe/schema';
@@ -49,7 +53,7 @@ import { writeParam } from './params';
 const THUMBNAIL_EDGE = 220;
 
 /** The panels the tool rail switches between. */
-export type Tool = 'adjust' | 'crop' | 'text' | 'tiles' | 'metadata' | 'export';
+export type Tool = 'adjust' | 'heal' | 'crop' | 'text' | 'tiles' | 'metadata' | 'export';
 
 /** A change to the metadata block, one group at a time. */
 export interface MetadataPatch {
@@ -116,6 +120,17 @@ export interface Editor {
   plan: ExportPlan | null;
   /** Shape of the straightened frame the crop is dragged inside. */
   frameAspect: number;
+  /**
+   * Output coordinate back to source coordinate, both normalised.
+   *
+   * What the heal overlay places spots through. The spots are the photograph's
+   * own coordinates and the overlay sits on the cropped frame, so somebody has
+   * to map between them; this is the renderer's own matrix rather than a second
+   * copy of the framing maths.
+   */
+  toSource: Mat3;
+  /** Radius the next spot gets, as a fraction of the image width. */
+  healRadius: number;
   selectedText: string | null;
   /** Bumped when a supplied typeface finishes loading. */
   fontRevision: number;
@@ -136,6 +151,10 @@ export interface Editor {
   resetFraming: () => void;
   setTiles: (patch: Partial<Recipe['tiles']>) => void;
   matchCropToTiles: (tileRatio: number) => void;
+  setHealRadius: (value: number) => void;
+  addHealSpot: (x: number, y: number) => void;
+  removeHealSpot: (index: number) => void;
+  clearHeal: () => void;
   addText: () => void;
   updateText: (id: string, patch: Partial<TextLayer>) => void;
   removeText: (id: string) => void;
@@ -204,6 +223,11 @@ function newLayerId(): string {
 
 export function useEditor(): Editor {
   const { t } = useI18n();
+  // Read through a ref where something outside React reaches for a message: the
+  // GL context is built once, and naming `t` as a dependency of the effect that
+  // builds it would tear the context down to change the language.
+  const translateRef = useRef(t);
+  translateRef.current = t;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const pipelineRef = useRef<Pipeline | null>(null);
@@ -244,6 +268,9 @@ export function useEditor(): Editor {
   const [scale, setScale] = useState<'proxy' | 'full'>('proxy');
   const [previewSize, setPreviewSize] = useState<string | null>(null);
   const [workingSpace, setWorkingSpace] = useState('linear P3 / f16');
+  // The brush size is not part of the edit: it is the size the next spot gets,
+  // and each spot carries the size it was placed at.
+  const [healRadius, setHealRadius] = useState(() => paramDef('heal.r').neutral);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const selectedTextRef = useRef<string | null>(null);
   selectedTextRef.current = selectedText;
@@ -286,10 +313,11 @@ export function useEditor(): Editor {
         const [width, height] = pipeline.resolutionFor(recipeRef.current, next);
         setPreviewSize(`${width}×${height}`);
       },
-      // The module names what it could not fetch or run, and the spot stays in
-      // the picture rather than being reported as gone.
+      // The spots stay in the picture rather than being reported as gone, and
+      // the module's own message names what it could not fetch.
       healFailed: (error) => {
-        notify(error instanceof Error ? error.message : String(error), 'alert');
+        const detail = error instanceof Error ? ` — ${error.message}` : '';
+        notify(`${translateRef.current('toast.healFailed')}${detail}`, 'alert');
       },
     });
     schedulerRef.current = scheduler;
@@ -541,6 +569,38 @@ export function useEditor(): Editor {
   );
 
   const selectText = useCallback((id: string | null) => setSelectedText(id), []);
+
+  /**
+   * Fill a blemish at a point on the photograph.
+   *
+   * The coordinates are the source's, not the crop's, and the caller has already
+   * put them there — a spot is a mark on the photograph, so it has to survive
+   * the frame being tightened around it.
+   *
+   * The size comes from the brush rather than from the recipe, and is written
+   * into the spot: a spot placed at one size keeps it, which is what lets a
+   * large mark and a small one sit next to each other.
+   */
+  const addHealSpot = useCallback(
+    (x: number, y: number) => {
+      const current = recipeRef.current;
+      if (current.heal.length >= HEAL_LIMIT) return;
+      commit({ ...current, heal: [...current.heal, { x, y, r: healRadius }] });
+    },
+    [commit, healRadius],
+  );
+
+  const removeHealSpot = useCallback(
+    (index: number) => {
+      const current = recipeRef.current;
+      commit({ ...current, heal: current.heal.filter((_, at) => at !== index) });
+    },
+    [commit],
+  );
+
+  const clearHeal = useCallback(() => {
+    commit({ ...recipeRef.current, heal: [] });
+  }, [commit]);
 
   /**
    * Register a typeface from the user's own machine and set it on the caption.
@@ -845,6 +905,17 @@ export function useEditor(): Editor {
     return w / h;
   }, [source, recipe.geometry]);
 
+  // The same matrix the renderer frames the photo with, so an overlay placing
+  // something on the photograph and the shader reading it back agree by
+  // construction rather than by two implementations of the framing.
+  const outputToSourceMatrix = useMemo(
+    () =>
+      source
+        ? outputToSource(source.width, source.height, recipe.geometry)
+        : (MAT3_IDENTITY as Mat3),
+    [source, recipe.geometry],
+  );
+
   return useMemo(
     () => ({
       canvasRef,
@@ -869,6 +940,8 @@ export function useEditor(): Editor {
       toast,
       plan,
       frameAspect,
+      toSource: outputToSourceMatrix,
+      healRadius,
       selectedText,
       fontRevision,
       setTool,
@@ -888,6 +961,10 @@ export function useEditor(): Editor {
       resetFraming,
       setTiles,
       matchCropToTiles,
+      setHealRadius,
+      addHealSpot,
+      removeHealSpot,
+      clearHeal,
       addText,
       updateText,
       removeText,
@@ -919,6 +996,8 @@ export function useEditor(): Editor {
       toast,
       plan,
       frameAspect,
+      outputToSourceMatrix,
+      healRadius,
       selectedText,
       fontRevision,
       setTool,
@@ -937,6 +1016,9 @@ export function useEditor(): Editor {
       resetFraming,
       setTiles,
       matchCropToTiles,
+      addHealSpot,
+      removeHealSpot,
+      clearHeal,
       addText,
       updateText,
       removeText,

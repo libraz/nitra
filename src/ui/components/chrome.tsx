@@ -204,6 +204,12 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
       <circle cx="10" cy="17" r="2" />
     </>
   ),
+  heal: (
+    <>
+      <rect x="3" y="9" width="18" height="6" rx="3" transform="rotate(-45 12 12)" />
+      <circle cx="12" cy="12" r="1.4" />
+    </>
+  ),
   crop: (
     <>
       <path d="M7 2v15h15" />
@@ -240,7 +246,16 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
   ),
 };
 
-const TOOL_ORDER: readonly Tool[] = ['adjust', 'crop', 'text', 'tiles', 'metadata', 'export'];
+/** The order the rail reads in. The first entry is where the editor opens. */
+export const TOOL_ORDER: readonly Tool[] = [
+  'adjust',
+  'heal',
+  'crop',
+  'text',
+  'tiles',
+  'metadata',
+  'export',
+];
 
 export function ToolRail({ tool, comparing, onTool, onCompare, disabled }: ToolRailProps) {
   const { t } = useI18n();

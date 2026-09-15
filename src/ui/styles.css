@@ -1693,6 +1693,61 @@ body::after {
   cursor: ew-resize;
 }
 
+/* ── blemish spots ── */
+
+.healov {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  /* No crosshair: the ring under the pointer is already saying where the fill
+     will land and how large it will be, and a cursor drawn over it says it
+     again in a size that has nothing to do with the photograph. */
+  cursor: none;
+}
+.healov-brush,
+.healov-spot {
+  position: absolute;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  /* The ring is drawn at the size of the fill, which on a large photo shown
+     small is a few pixels across. This is the floor at which a dashed circle is
+     still a circle; below it the ring is a marker rather than an outline. */
+  min-width: 9px;
+}
+.healov-brush {
+  left: 50%;
+  top: 50%;
+  opacity: 0;
+  pointer-events: none;
+  border: 1px solid color-mix(in oklab, var(--amber) 80%, transparent);
+  background: color-mix(in oklab, var(--amber) 12%, transparent);
+}
+.healov-spot {
+  padding: 0;
+  background: none;
+  border: 1px dashed color-mix(in oklab, var(--amber) 55%, transparent);
+  cursor: pointer;
+  touch-action: none;
+}
+/* Something to aim at. A fill the size of a blemish is smaller than anyone can
+   reliably click, and inflating the ring to meet the pointer would overstate
+   what was filled; this keeps the two separate. */
+.healov-spot::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+}
+.healov-spot:hover {
+  border-style: solid;
+  border-color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 16%, transparent);
+}
+
 /* ── text handles ── */
 
 .textov {

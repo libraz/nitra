@@ -10,6 +10,7 @@ import { TILE_SHAPES } from '../src/core/geometry/tiles';
 import { LOOKS } from '../src/core/recipe/presets';
 import { detectLocale, interpolate, LOCALE_ORDER, LOCALES } from '../src/i18n';
 import { en } from '../src/i18n/locales/en';
+import { TOOL_ORDER } from '../src/ui/components/chrome';
 import { GUIDE_STEPS } from '../src/ui/components/Guide';
 import { PROJECT_LINKS } from '../src/ui/project';
 
@@ -62,6 +63,15 @@ describe('catalogue', () => {
     }
     for (const shape of TILE_SHAPES) {
       expect(Object.keys(en), shape.key).toContain(`tileShape.${shape.key}`);
+    }
+  });
+
+  it('names every tool in the rail', () => {
+    // The rail builds its labels from the tool key, so a tool added without its
+    // caption arrives as `tool.heal` — on a button whose tooltip is the only
+    // thing saying what it does.
+    for (const tool of TOOL_ORDER) {
+      expect(Object.keys(en), tool).toContain(`tool.${tool}`);
     }
   });
 

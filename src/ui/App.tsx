@@ -8,8 +8,9 @@ import { StatusBar, Toast, ToolRail, TopBar } from './components/chrome';
 import { DetailPanel } from './components/DetailPanel';
 import { ExportPanel } from './components/ExportPanel';
 import { Guide, guideSeen, rememberGuideSeen } from './components/Guide';
+import { HealPanel } from './components/HealPanel';
 import { MetadataPanel } from './components/MetadataPanel';
-import { CropOverlay, TextOverlay, TileOverlay } from './components/overlays';
+import { CropOverlay, HealOverlay, TextOverlay, TileOverlay } from './components/overlays';
 import { SimplePanel } from './components/SimplePanel';
 import { Stage } from './components/Stage';
 import { TextPanel } from './components/TextPanel';
@@ -110,6 +111,16 @@ function Workspace() {
                   onChange={editor.setCrop}
                 />
               )}
+              {editor.tool === 'heal' && editor.source && (
+                <HealOverlay
+                  spots={editor.recipe.heal}
+                  radius={editor.healRadius}
+                  toSource={editor.toSource}
+                  aspect={editor.source.height / editor.source.width}
+                  onPlace={editor.addHealSpot}
+                  onRemove={editor.removeHealSpot}
+                />
+              )}
               {editor.tool === 'text' && (
                 <TextOverlay
                   layers={editor.recipe.text}
@@ -163,6 +174,17 @@ function Workspace() {
               onSimple={() => editor.setMode('simple')}
             />
           ))}
+
+        {editor.tool === 'heal' && (
+          <HealPanel
+            spots={editor.recipe.heal}
+            radius={editor.healRadius}
+            hasImage={editor.source !== null}
+            onRadius={editor.setHealRadius}
+            onRemoveLast={() => editor.removeHealSpot(editor.recipe.heal.length - 1)}
+            onClear={editor.clearHeal}
+          />
+        )}
 
         {editor.tool === 'crop' && (
           <CropPanel

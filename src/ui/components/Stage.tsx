@@ -37,6 +37,11 @@ function hintsFor(tool: Tool): [MessageKey, MessageKey][] {
       return [['stage.hintCrop', 'stage.hintCropText']];
     case 'text':
       return [['stage.hintText', 'stage.hintTextText']];
+    case 'heal':
+      return [
+        ['stage.hintHeal', 'stage.hintHealText'],
+        ['stage.hintHealBack', 'stage.hintHealBackText'],
+      ];
     default:
       return [
         ['stage.hintHold', 'stage.hintHoldText'],
@@ -125,7 +130,8 @@ export function Stage({
               onPointerDown={(event) => {
                 // Holding to compare would fight a crop drag or a caption drag,
                 // so it belongs to the tools that are only looking at the photo.
-                if (event.button !== 0 || tool === 'crop' || tool === 'text') return;
+                if (event.button !== 0 || tool === 'crop' || tool === 'text' || tool === 'heal')
+                  return;
                 holding.current = true;
                 onCompare(true);
               }}

@@ -192,6 +192,16 @@ const globalSchema = z.object({
 });
 
 /**
+ * How many spots one edit may carry.
+ *
+ * Every entry is work that runs the moment the recipe is opened, so unlike a
+ * slider a list decides how much computation happens. The panel counts against
+ * this so that reaching it is a number somebody can see rather than a click that
+ * silently does nothing.
+ */
+export const HEAL_LIMIT = 200;
+
+/**
  * One blemish to fill.
  *
  * Relative like everything else, and normalised against the *source* frame
@@ -203,11 +213,17 @@ const globalSchema = z.object({
  * The radius is a fraction of the width on both axes, so a round spot stays
  * round; taken against the height, the vertical would make it an ellipse on
  * anything but a square photo.
+ *
+ * Its range is decided by what the fill costs rather than by what a brush could
+ * usefully be. The search is synchronous and its work grows with the area, so on
+ * a twelve-megapixel photo the top of this range comes back in a third of a
+ * second and twice that radius takes five: a click that stops the tab. The
+ * largest thing anybody calls a blemish is inside what is offered here.
  */
 const healSpotSchema = z.object({
   x: num('heal.x', 0, 1, 0.5),
   y: num('heal.y', 0, 1, 0.5),
-  r: num('heal.r', 0.002, 0.08, 0.012),
+  r: num('heal.r', 0.002, 0.03, 0.006),
 });
 
 /**
@@ -600,11 +616,9 @@ export const recipeSchema = z.object({
    * The spots to fill, in the order they were placed.
    *
    * The order is part of the edit: two overlapping spots compose, and the second
-   * one fills from what the first one left behind. Capped because every entry is
-   * work that runs the moment the recipe is opened — unlike a slider, a list
-   * arriving from elsewhere decides how much computation happens.
+   * one fills from what the first one left behind.
    */
-  heal: z.array(healSpotSchema).max(200).default([]),
+  heal: z.array(healSpotSchema).max(HEAL_LIMIT).default([]),
   face: faceSchema,
   hair: hairSchema,
   depth: depthSchema,
