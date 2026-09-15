@@ -293,6 +293,61 @@ const faceSchema = z
   .prefault({});
 
 /**
+ * The apertures the convolution kernel can take the shape of.
+ *
+ * A round iris, a bladed one, and the vertically squeezed pupil of an
+ * anamorphic lens. The shape is what an out-of-focus highlight comes out as,
+ * which is the whole reason it is offered: a hexagonal catchlight is a
+ * photograph taken at f/8 on a lens with six blades, and a Gaussian is not a
+ * photograph of anything.
+ */
+export const APERTURES = ['circle', 'hex', 'anamorphic'] as const;
+export type Aperture = (typeof APERTURES)[number];
+
+/**
+ * Background separation: the defocus, and the two adjustments that ride on it.
+ *
+ * Outside `face` because it is not a face adjustment. What it acts on is the
+ * whole frame, divided into the person and everything behind them, and it stays
+ * correct on a photograph where the face was never found — a head turned away
+ * is still a person to the segmentation.
+ *
+ * `aperture` and `edgeRefine` describe the shape of the effect rather than how
+ * much of it there is, so neither one defaults to zero, and neither is
+ * consulted by {@link isDepthNeutral} — the same arrangement as `face.radius`.
+ */
+const depthSchema = z
+  .object({
+    /** How far out of focus the background is taken. */
+    bokeh: num('depth.bokeh', 0, 1, 0),
+    aperture: z.enum(APERTURES).default('circle'),
+    /**
+     * How far highlights are lifted before the convolution.
+     *
+     * A real out-of-focus highlight is bright because the sensor saturated
+     * there: the file says 1.0 and the scene was several times that. Convolving
+     * the recorded value spreads a dull grey disc, and lifting what is over the
+     * threshold first is the single step that makes the result read as a lens
+     * rather than as a blur.
+     */
+    bokehBloom: num('depth.bokehBloom', 0, 1, 0),
+    /** How much the discs are clipped towards the corners of the frame. */
+    catsEye: num('depth.catsEye', 0, 1, 0),
+    /** Lifts the person off the background without touching the person. */
+    bgBrightness: num('depth.bgBrightness', -1, 1, 0),
+    bgSaturation: num('depth.bgSaturation', -1, 1, 0),
+    /**
+     * How hard the separation is snapped onto the photo's own edges.
+     *
+     * The segmentation arrives 256 pixels across, and magnified to a frame its
+     * boundary sits a long way from the shoulder it is meant to follow. This is
+     * the radius the guided filter gets to move it, as a fraction of the frame.
+     */
+    edgeRefine: num('depth.edgeRefine', 0, 1, 0.5),
+  })
+  .prefault({});
+
+/**
  * Framing: flips, rotation, straightening and the crop rectangle.
  *
  * The crop is normalised against the frame that rotation and straightening
@@ -466,6 +521,7 @@ export const recipeSchema = z.object({
     .optional(),
   geometry: geometrySchema,
   face: faceSchema,
+  depth: depthSchema,
   global: globalSchema.prefault({}),
   text: z.array(textLayerSchema).default([]),
   tiles: tilesSchema,
@@ -474,6 +530,7 @@ export const recipeSchema = z.object({
 
 export type Recipe = z.infer<typeof recipeSchema>;
 export type FaceParams = Recipe['face'];
+export type DepthParams = Recipe['depth'];
 export type GlobalParams = Recipe['global'];
 export type GeometryParams = Recipe['geometry'];
 export type TileParams = Recipe['tiles'];
@@ -543,6 +600,23 @@ export function isWarpNeutral(face: FaceParams): boolean {
     w.noseNarrow < 1e-4 &&
     Math.abs(w.noseBridge) < 1e-4 &&
     Math.abs(w.mouthWidth) < 1e-4
+  );
+}
+
+/**
+ * True when nothing in the background separation would change a pixel.
+ *
+ * The renderer asks this before it refines the separation, and the refinement
+ * is a nine-pass guided filter over the whole frame — by far the most expensive
+ * thing in the block, and worth nothing at all if the background is neither
+ * defocused nor adjusted.
+ *
+ * `bokehBloom` and `catsEye` are not consulted. Both describe what the defocus
+ * looks like, so with `bokeh` at zero there is nothing for either to change.
+ */
+export function isDepthNeutral(depth: DepthParams): boolean {
+  return (
+    depth.bokeh < 1e-4 && Math.abs(depth.bgBrightness) < 1e-4 && Math.abs(depth.bgSaturation) < 1e-4
   );
 }
 
