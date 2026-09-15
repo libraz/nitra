@@ -43,6 +43,48 @@ function normalAt(
   };
 }
 
+/**
+ * The largest angle between the normals of two neighbouring pixels, in degrees,
+ * over the pixels a predicate picks out.
+ *
+ * An angle rather than a difference per channel, because what a fold in the
+ * field is is a turn: two directions can differ in every channel and describe
+ * the same surface turning smoothly.
+ */
+function worstTurn(
+  { map }: { map: NormalBitmap },
+  pick: (x: number, y: number) => boolean,
+): number {
+  const unit = (index: number) => {
+    const at = index * 4;
+    const x = ((map.data[at] as number) / 255) * 2 - 1;
+    const y = ((map.data[at + 1] as number) / 255) * 2 - 1;
+    const z = ((map.data[at + 2] as number) / 255) * 2 - 1;
+    const length = Math.hypot(x, y, z) || 1;
+    return [x / length, y / length, z / length, (map.data[at + 3] as number) / 255] as const;
+  };
+  let worst = 0;
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      if (!pick(x, y)) continue;
+      const here = unit(y * map.width + x);
+      if (here[3] < 0.5) continue;
+      for (const [dx, dy] of [
+        [1, 0],
+        [0, 1],
+      ] as [number, number][]) {
+        if (x + dx >= map.width || y + dy >= map.height) continue;
+        if (!pick(x + dx, y + dy)) continue;
+        const next = unit((y + dy) * map.width + x + dx);
+        if (next[3] < 0.5) continue;
+        const dot = here[0] * next[0] + here[1] * next[1] + here[2] * next[2];
+        worst = Math.max(worst, Math.acos(Math.min(1, Math.max(-1, dot))));
+      }
+    }
+  }
+  return (worst * 180) / Math.PI;
+}
+
 describe('the face normal field', () => {
   it('addresses the same working area as the coverage masks', () => {
     // One rectangle for both, so a stage that samples a mask and a normal at the
@@ -149,6 +191,42 @@ describe('the face normal field', () => {
     // Filled from the inside, not by growing the field: what is outside the mesh
     // is still outside it.
     expect(normalAt(map, region, { x: region.x, y: region.y }).coverage).toBe(0);
+  });
+
+  it('fills a gap more smoothly than the surface around it', () => {
+    // A gap is filled from coarser copies of the field rather than by carrying
+    // the nearest direction outwards, and this is the difference between the
+    // two: where two fronts of a nearest-neighbour fill meet, the direction
+    // steps from one side's to the other's with nothing in between, and the
+    // line that leaves runs through the middle of the gap. Nothing about the
+    // field's smoothness, its length or its signs can see that — it is a fold
+    // in something that is unit length and correctly signed either side of it.
+    //
+    // So what is asserted is that the gap is the *calmest* part of the field:
+    // an interpolation has nothing in it to be steeper than the surface it was
+    // interpolated from, while a seam is steeper than anything the mesh does.
+    const regions = faceRegions(makeFace(), 1);
+    const { centre, width } = regions;
+    const punched = new Set<number>();
+    regions.surface.forEach((point, index) => {
+      if (Math.hypot(point.x - centre.x, point.y - centre.y) < width * 0.3) punched.add(index);
+    });
+    const whole = meshTriangles();
+    const holed = whole.filter((triangle) => !triangle.some((vertex) => punched.has(vertex)));
+    expect(holed.length).toBeLessThan(whole.length);
+
+    const intact = rasteriseNormals([regions], whole, SOURCE, SOURCE, 1);
+    const gapped = rasteriseNormals([regions], holed, SOURCE, SOURCE, 1);
+    const inside = (built: typeof gapped) => {
+      const scale = built.map.width / built.region.width;
+      const cx = (centre.x - built.region.x) * scale;
+      const cy = (centre.y - built.region.y) * scale;
+      // Inside the gap and clear of its rim, so what is measured is the fill
+      // rather than the triangles it was filled from.
+      const radius = width * 0.3 * scale * 0.8;
+      return (x: number, y: number) => Math.hypot(x - cx, y - cy) < radius;
+    };
+    expect(worstTurn(gapped, inside(gapped))).toBeLessThan(worstTurn(intact, () => true));
   });
 
   it('holds the shape still when the head is somewhere else in the frame', () => {

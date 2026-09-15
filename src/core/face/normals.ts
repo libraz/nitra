@@ -57,21 +57,72 @@ const NORMAL_LONG_EDGE = 256;
  * because that scale is the part of the landmark output with the least behind
  * it: the points are fitted to an image, and how far the nose comes forward is
  * the component of that fit the image constrains least.
+ *
+ * It stays at one because a photograph cannot settle it, and both ways of asking
+ * were tried. Fitting a light and an ambient term to the photograph's own
+ * luminance over its skin — which has a closed form, since a correlation does
+ * not care about the scale or the offset of what it is correlated with — leaves
+ * the fit flat: across six photographs, twelve times as much relief moves how
+ * much of the luminance the field explains by a few per cent of itself, and that
+ * is against a fit that explains well under half of it to begin with and that
+ * puts the light behind the head on three of the six. What it is keying on is
+ * where the skin is darker, not which way it faces. And symmetry, which would be
+ * free of reflectance altogether, cannot do it either: scaling depth maps a
+ * mirror-symmetric shape to another one, so no amount of turn in the head makes
+ * the scale show up in it.
+ *
+ * What bounds the risk of leaving it is that the error is mostly absorbed
+ * downstream. Doubling it moves the shading by an eighth of the field's own
+ * range on average, and almost all of that is the range itself widening —
+ * which is what the intensity slider already is. Settling it needs a face whose
+ * shape was measured rather than a photograph of one.
  */
 const SURFACE_RELIEF = 1;
 
 /**
- * How far the field fades out past the mesh, as a fraction of a face width.
+ * How far the coverage fades out past the mesh, as a fraction of a face width.
  *
  * The mesh has a definite edge and a light does not. Left as it comes off the
  * rasteriser the coverage is one triangle-deep and then nothing, which is a step
  * in brightness along the jaw — the same fault as confining the effect to the
  * face outline, arrived at from the other side.
  *
- * Small enough that it is a feather rather than a smoothing: the nose ridge is
- * around three times this across and survives it.
+ * What sets the width is that the ramp must not be the steepest thing the stage
+ * draws. The steepest it draws on a face is the ridge of a nose, and measured
+ * across six photographs that is a change in brightness of 0.036 per hundredth
+ * of a face width; a ramp this wide comes in at 0.029 on every one of them. Half
+ * as wide is 0.052, which is half again steeper than a nose and is a line around
+ * the face rather than a light falling off. The smallest width that clears the
+ * nose at all is 0.08 and it clears it by less than the spread between the
+ * photographs, which is not a margin.
+ *
+ * What it costs is reach: the light touches 39% of the working area rather than
+ * 35%, and the extra is hair, neck and a little background — which is where a
+ * light in a room does fall.
  */
-const FEATHER = 0.05;
+const FEATHER = 0.09;
+
+/**
+ * How far the directions are smoothed, as a fraction of a face width.
+ *
+ * Separate from the feather because the two are measured against different
+ * things, and one number could not satisfy both: the coverage needs a ramp wide
+ * enough not to read as an edge, and the directions need exactly as much
+ * smoothing as it takes to hide the mesh's own faceting and no more.
+ *
+ * Interpolating a direction across a triangle is continuous but its slope is
+ * not, so every edge of the mesh is a line where the brightness changes slope.
+ * Inside the cheek discs, where the surface is smooth by construction and there
+ * is no feature for a gradient to belong to, the steepest change in brightness
+ * moves with this number rather than with anything about the face — which is
+ * what says the faceting is there and that the smoothing is what covers it.
+ *
+ * Wider is not free: a nose ridge is around three times this across, and the
+ * curvature across one measured on the four photographs of six that have a
+ * ridge the field can see falls by a fifth going from half this width to this
+ * one, and by half again at twice it.
+ */
+const DIRECTION_SMOOTHING = 0.05;
 
 /**
  * Separable box blur, run once per axis, over an interleaved field.
@@ -277,9 +328,99 @@ function shade(
   }
 }
 
+/** One resolution of the field, with how much of each pixel is known. */
+interface Level {
+  value: Float32Array;
+  /** Fraction of the pixel that came from the mesh, 0 to 1. */
+  weight: Float32Array;
+  width: number;
+  height: number;
+}
+
+/** Half-resolution, averaging each 2x2 by how much of it was known. */
+function coarser({ value, weight, width, height }: Level): Level {
+  const half = { width: Math.max(1, width >> 1), height: Math.max(1, height >> 1) };
+  const out: Level = {
+    value: new Float32Array(half.width * half.height * 3),
+    weight: new Float32Array(half.width * half.height),
+    ...half,
+  };
+  for (let y = 0; y < half.height; y++) {
+    for (let x = 0; x < half.width; x++) {
+      let sum = 0;
+      const total = [0, 0, 0];
+      for (const [dy, dx] of [
+        [0, 0],
+        [0, 1],
+        [1, 0],
+        [1, 1],
+      ]) {
+        const fy = y * 2 + (dy as number);
+        const fx = x * 2 + (dx as number);
+        if (fy >= height || fx >= width) continue;
+        const from = fy * width + fx;
+        const w = weight[from] as number;
+        if (w <= 0) continue;
+        sum += w;
+        for (let channel = 0; channel < 3; channel++) {
+          total[channel] = (total[channel] as number) + (value[from * 3 + channel] as number) * w;
+        }
+      }
+      const at = y * half.width + x;
+      out.weight[at] = sum / 4;
+      if (sum > 0) {
+        for (let channel = 0; channel < 3; channel++) {
+          out.value[at * 3 + channel] = (total[channel] as number) / sum;
+        }
+      }
+    }
+  }
+  return out;
+}
+
 /**
- * Give every pixel a direction, carried out from the nearest one the mesh
- * reached.
+ * The coarser level's value at a finer level's pixel, interpolated.
+ *
+ * Weighted, so a coarse pixel nothing reached contributes nothing rather than a
+ * zero — which would otherwise pull the fill towards no direction at all.
+ */
+function sampled(level: Level, fx: number, fy: number, into: Float32Array): number {
+  const x = fx / 2 - 0.25;
+  const y = fy / 2 - 0.25;
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const tx = x - x0;
+  const ty = y - y0;
+  let sum = 0;
+  into[0] = 0;
+  into[1] = 0;
+  into[2] = 0;
+  for (const [dy, dx, share] of [
+    [0, 0, (1 - tx) * (1 - ty)],
+    [0, 1, tx * (1 - ty)],
+    [1, 0, (1 - tx) * ty],
+    [1, 1, tx * ty],
+  ] as [number, number, number][]) {
+    const cy = Math.min(level.height - 1, Math.max(0, y0 + dy));
+    const cx = Math.min(level.width - 1, Math.max(0, x0 + dx));
+    const at = cy * level.width + cx;
+    const w = share * (level.weight[at] as number);
+    if (w <= 0) continue;
+    sum += w;
+    for (let channel = 0; channel < 3; channel++) {
+      into[channel] = (into[channel] as number) + (level.value[at * 3 + channel] as number) * w;
+    }
+  }
+  if (sum > 0) {
+    for (let channel = 0; channel < 3; channel++) {
+      into[channel] = (into[channel] as number) / sum;
+    }
+  }
+  return sum;
+}
+
+/**
+ * Give every pixel a direction, carried outwards from the ones the mesh reached.
  *
  * Without this the feather is what fills the gaps, and a blur fills a gap with a
  * fade towards nothing rather than with a direction — which the byte writer then
@@ -288,34 +429,55 @@ function shade(
  * sharpest change in brightness anywhere in the field ran along the line of
  * them, and it was above anything at the border.
  *
- * Nearest by steps between neighbours rather than in a straight line, which
- * leaves a diagonal seam where two fronts meet. Those are outside the mesh or
- * inside a hole, they are level either side, and the feather passes over them.
+ * Carrying the nearest direction outwards is what this replaces, and what was
+ * wrong with it is where two fronts meet: on either side of that line the
+ * nearest landmark is a different part of the face, so the fill steps from one
+ * direction to another with nothing in between. Measured on six photographs,
+ * changing nothing but the fill left the steepest change in brightness anywhere
+ * in the field lower on four of them, by a tenth to a third, and untouched on
+ * the two where the steepest was already a nose — so on four of six the field's
+ * worst gradient was the fill's own and not the face's. It moved with the width
+ * of the smoothing rather than with anything about the face as well, which is
+ * what says a blur was hiding a step rather than a surface producing a slope.
+ *
+ * So the gaps are filled from coarser copies of the field instead: each halving
+ * averages what is known, and each step back up fills a pixel by how much of it
+ * is still missing. Far from the mesh that settles towards the whole field's
+ * average and near it towards the neighbours, smoothly and with no seam, because
+ * a pixel's value is a weighted average of everything that reached its level
+ * rather than of whichever front arrived first. Nothing the mesh reached is
+ * touched: a known pixel keeps its own direction exactly.
  */
-function spread(field: Float32Array, cover: Float32Array, width: number): void {
-  const known = new Uint8Array(cover.length);
-  const queue: number[] = [];
-  for (let i = 0; i < cover.length; i++) {
-    if ((cover[i] as number) > 0) {
-      known[i] = 1;
-      queue.push(i);
-    }
+function spread(field: Float32Array, cover: Float32Array, width: number, height: number): void {
+  // The coverage is read, never written: what the fill marks as known is its own
+  // bookkeeping, and writing it back would hand the feather a working area that
+  // is covered everywhere.
+  const levels: Level[] = [{ value: field, weight: Float32Array.from(cover), width, height }];
+  while (true) {
+    const last = levels[levels.length - 1] as Level;
+    if (last.width <= 1 && last.height <= 1) break;
+    levels.push(coarser(last));
   }
-  for (let head = 0; head < queue.length; head++) {
-    const from = queue[head] as number;
-    const carry = (to: number) => {
-      if (known[to] === 1) return;
-      known[to] = 1;
-      for (let channel = 0; channel < 3; channel++) {
-        field[to * 3 + channel] = field[from * 3 + channel] as number;
+  const from = new Float32Array(3);
+  for (let level = levels.length - 2; level >= 0; level--) {
+    const fine = levels[level] as Level;
+    const coarse = levels[level + 1] as Level;
+    for (let y = 0; y < fine.height; y++) {
+      for (let x = 0; x < fine.width; x++) {
+        const at = y * fine.width + x;
+        const known = Math.min(1, fine.weight[at] as number);
+        if (known >= 1) continue;
+        if (sampled(coarse, x, y, from) <= 0) continue;
+        for (let channel = 0; channel < 3; channel++) {
+          fine.value[at * 3 + channel] =
+            (fine.value[at * 3 + channel] as number) * known +
+            (from[channel] as number) * (1 - known);
+        }
+        // Filled counts as known to the level below, which is what stops the
+        // next step up from averaging a gap in again.
+        fine.weight[at] = 1;
       }
-      queue.push(to);
-    };
-    const x = from % width;
-    if (x > 0) carry(from - 1);
-    if (x < width - 1) carry(from + 1);
-    if (from >= width) carry(from - width);
-    if (from < cover.length - width) carry(from + width);
+    }
   }
 }
 
@@ -402,14 +564,15 @@ export function rasteriseNormals(
   }
   // Before the holes are covered, so what seeds the directions is where the mesh
   // actually is rather than where the coverage ends up.
-  spread(field, cover, width);
+  spread(field, cover, width, height);
   fillHoles(cover, width, height);
 
+  // Both in bitmap pixels, from the largest face in the frame: the field is one
+  // bitmap however many faces are in it, and a feather set by the smallest of
+  // them would be a hard edge around the largest.
+  const smoothing = Math.max(1, Math.round(widest * DIRECTION_SMOOTHING * scale));
   const feather = Math.max(1, Math.round(widest * FEATHER * scale));
-  // The directions are eased by the same amount as the coverage, which takes the
-  // kinks out of the interpolation across a triangle's edges and the seams out
-  // of the fill above.
-  const eased = blur(blur(field, width, height, 3, feather), width, height, 3, feather);
+  const eased = blur(blur(field, width, height, 3, smoothing), width, height, 3, smoothing);
   const reached = blur(blur(cover, width, height, 1, feather), width, height, 1, feather);
 
   const data = new Uint8ClampedArray(count * 4);
