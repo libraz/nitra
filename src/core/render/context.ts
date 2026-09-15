@@ -128,6 +128,8 @@ export interface Programs {
   warp: Program;
   skin: Program;
   parts: Program;
+  hairRaw: Program;
+  hair: Program;
   subjectRaw: Program;
   bokehLift: Program;
   bokehGather: Program;

@@ -35,8 +35,11 @@ import { GLSL_COLOR, GLSL_HEADER } from './common';
  * reads a mask goes through `toRegion` and checks the result is inside: outside
  * the working area there is no mask, which is a different thing from the
  * nearest edge of one.
+ *
+ * Exported because the hair stage reads the skin mask too — it works over the
+ * whole frame but has to know where the face is, so it needs both mappings.
  */
-const GLSL_REGION = `
+export const GLSL_REGION = `
 uniform vec4 uRegion;
 
 vec2 toRegion(vec2 frame) {
@@ -486,7 +489,8 @@ void main() {
 `;
 
 /**
- * Parts: the eyes, the teeth, the lips, the cheeks and the shadow under an eye.
+ * Parts: the eyes, the iris, the teeth, the lips, the cheeks and the shadow
+ * under an eye.
  *
  * Each one is a coverage channel from the landmark outlines, narrowed by what
  * the pixel actually is. The outline of an eye contains the iris as well as the
@@ -506,11 +510,14 @@ uniform sampler2D uSource;
 uniform sampler2D uPolyA;
 uniform sampler2D uPolyB;
 uniform sampler2D uMask;
+uniform sampler2D uMean;
 uniform sampler2D uWideMean;
 uniform mat3 uGeometry;
 
 uniform float uUndereye;
 uniform float uEyes;
+uniform float uIris;
+uniform float uCatchlight;
 uniform float uTeeth;
 uniform float uLip;
 uniform float uLipHue;
@@ -528,7 +535,7 @@ void main() {
   vec4 polyB = texture(uPolyB, region);
   float skin = texture(uMask, region).r;
 
-  float anywhere = polyA.b + polyA.a + polyB.r + polyB.g + polyB.b;
+  float anywhere = polyA.b + polyA.a + polyB.r + polyB.g + polyB.b + polyB.a;
   if (anywhere <= 0.001) {
     fragColor = vec4(c, 1.0);
     return;
@@ -558,6 +565,22 @@ void main() {
   if (whiten > 1e-4) {
     ab *= 1.0 - whiten * 0.75;
     L += (1.0 - L) * whiten * 0.12;
+  }
+
+  // The iris, where the fitted circle and the eye opening agree. Both are
+  // needed: the circle reaches under the eyelid, and the opening contains the
+  // white of the eye as well.
+  float iris = polyB.a * polyB.r;
+  if (iris > 1e-3 && max(uIris, uCatchlight) > 1e-4) {
+    // Against a local average of the photograph rather than a fixed pivot, so
+    // what is expanded is the pattern in this iris and the ring at its edge,
+    // and a light eye does not come out darker than it was.
+    float detail = L - texture(uMean, region).x;
+    L += detail * iris * (1.0 - pale) * uIris * 0.9;
+    // The catchlight is the one thing in an iris far above its own average, so
+    // it needs no mask of its own — and it must not be excluded as the white of
+    // the eye is, which is the one place the pale test would be wrong here.
+    L += (1.0 - L) * smoothstep(0.05, 0.16, detail) * iris * uCatchlight * 0.5;
   }
 
   if (uLip > 1e-4) {

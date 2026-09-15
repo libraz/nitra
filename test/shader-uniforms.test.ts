@@ -15,6 +15,7 @@ import { MAX_CONTROL_POINTS } from '../src/core/face/warp';
 import * as bokeh from '../src/core/render/shaders/bokeh';
 import { GLSL_COLOR } from '../src/core/render/shaders/common';
 import * as face from '../src/core/render/shaders/face';
+import * as hair from '../src/core/render/shaders/hair';
 import * as passes from '../src/core/render/shaders/passes';
 
 const pipelineSource = readFileSync(
@@ -47,6 +48,8 @@ const PROGRAMS: Record<string, string> = {
   faceMaskApply: face.FACE_MASK_APPLY_FRAGMENT,
   skin: face.FACE_SKIN_FRAGMENT,
   parts: face.FACE_PARTS_FRAGMENT,
+  hairRaw: hair.HAIR_RAW_FRAGMENT,
+  hair: hair.HAIR_FRAGMENT,
   faceTexture: face.FACE_TEXTURE_FRAGMENT,
   faceProbe: face.FACE_PROBE_FRAGMENT,
 };
@@ -139,19 +142,39 @@ describe('the stage shaders themselves', () => {
   /** The stages that go from the rendered frame into the masks' own space. */
   const MASK_READERS = ['skin', 'parts', 'faceTexture', 'faceProbe'];
 
-  /** The stages whose mask is the whole frame rather than a working area. */
-  const FRAME_MASK_READERS = ['bokehLift', 'bokeh'];
+  /** The stages that read a mask covering the whole frame. */
+  const FRAME_MASK_READERS = ['bokehLift', 'bokeh', 'hair'];
 
-  it('reads the separation through the framing and the displacement', () => {
-    // The separation covers the frame, so there is no working area to map into
-    // and no `toRegion` — but it was still built before the photo was cropped
-    // and before the face was reshaped, so both of those still have to be
-    // composed or the boundary sits a displacement away from the shoulder.
+  it('reads a frame-wide mask through the framing and the displacement', () => {
+    // These masks were built before the photo was cropped and before the face
+    // was reshaped, so both have to be composed or the boundary sits a
+    // displacement away from the shoulder it is meant to follow.
     for (const program of FRAME_MASK_READERS) {
       const source = PROGRAMS[program] as string;
       expect(source.includes('warped((uGeometry * vec3(vUv, 1.0)).xy)'), program).toBe(true);
-      expect(source.includes('toRegion('), program).toBe(false);
     }
+  });
+
+  it('leaves the separation unconfined to a working area', () => {
+    // What it divides is the picture, so there is no rectangle around the faces
+    // to map into. The hair stage is the one that reads both: a frame-wide mask
+    // for the hair and the working area for the skin it must not reach.
+    for (const program of ['bokehLift', 'bokeh']) {
+      expect((PROGRAMS[program] as string).includes('toRegion('), program).toBe(false);
+    }
+    expect(hair.HAIR_FRAGMENT).toMatch(/toRegion\(frame\)/);
+  });
+
+  it('keeps the hair off the face by the landmarks rather than by the model', () => {
+    // Both halves, and each covers what the other cannot. The skin mask has the
+    // features subtracted from it by construction, so on its own it leaves the
+    // eyes and the lips open to a hair tint; the features on their own say
+    // nothing about a cheek. Measured on a face six per cent of the frame, the
+    // segmentation's own face-skin class moved the leak by almost nothing.
+    expect(hair.HAIR_FRAGMENT).toMatch(
+      /max\(texture\(uSkin, region\)\.r, texture\(uPoly, region\)\.g\)/,
+    );
+    expect(hair.HAIR_FRAGMENT).toMatch(/hair \*= 1\.0 - face/);
   });
 
   it('samples the masks through the framing matrix', () => {
@@ -228,6 +251,39 @@ describe('the stage shaders themselves', () => {
     // a rim of light, which is the artefact that gives the whole effect away.
     expect(bokeh.BOKEH_LIFT_FRAGMENT).toMatch(/colour \* lift \* background, background\)/);
     expect(bokeh.BOKEH_GATHER_FRAGMENT).toMatch(/total\.rgb \/ max\(total\.a/);
+  });
+
+  it('asks two questions of a grey strand and one of a sheen', () => {
+    // A strand that is only lighter than the hair around it is a highlight, and
+    // desaturating a highlight is how hair comes out looking wet. The grey work
+    // runs first for the other direction: a strand put back to the hair's own
+    // colour is no longer a candidate for being brightened as a band of light.
+    expect(hair.HAIR_FRAGMENT).toMatch(/float weight = lighter \* washed \* hair \* uGrey/);
+    expect(hair.HAIR_FRAGMENT.indexOf('uGrey >')).toBeLessThan(
+      hair.HAIR_FRAGMENT.indexOf('uSheen >'),
+    );
+  });
+
+  it('measures the hair against a local average rather than a threshold', () => {
+    // Hair is the darkest large thing in most portraits and the brightest in
+    // some. An absolute lightness would find the highlight on dark hair and the
+    // whole head on light hair.
+    for (const expression of ['L - mean.x', 'length(mean.yz)']) {
+      expect(hair.HAIR_FRAGMENT.includes(expression), expression).toBe(true);
+    }
+  });
+
+  it('narrows the iris to where the circle and the opening agree', () => {
+    // Either channel alone is the wrong region. The fitted circle reaches under
+    // the eyelid, so on its own the work lands on skin; the opening contains the
+    // white of the eye, so on its own it puts iris contrast on the sclera.
+    expect(face.FACE_PARTS_FRAGMENT).toMatch(/float iris = polyB\.a \* polyB\.r/);
+  });
+
+  it('expands the iris about a local average rather than a fixed pivot', () => {
+    // A pivot would darken a pale eye and lighten a dark one, which is a change
+    // of eye colour wearing a contrast slider's label.
+    expect(face.FACE_PARTS_FRAGMENT).toMatch(/float detail = L - texture\(uMean, region\)\.x/);
   });
 
   it('bounds the gather by a constant and spends every tap on the aperture', () => {

@@ -74,6 +74,7 @@ import {
   FACE_WARP_FIELD_FRAGMENT,
   FACE_WARP_FRAGMENT,
 } from './shaders/face';
+import { HAIR_FRAGMENT, HAIR_RAW_FRAGMENT } from './shaders/hair';
 import {
   BLUR_FRAGMENT,
   COPY_FRAGMENT,
@@ -152,6 +153,8 @@ export class Pipeline {
       warp: Program.create(this.gl, FACE_WARP_FRAGMENT),
       skin: Program.create(this.gl, FACE_SKIN_FRAGMENT),
       parts: Program.create(this.gl, FACE_PARTS_FRAGMENT),
+      hairRaw: Program.create(this.gl, HAIR_RAW_FRAGMENT),
+      hair: Program.create(this.gl, HAIR_FRAGMENT),
       subjectRaw: Program.create(this.gl, SUBJECT_RAW_FRAGMENT),
       bokehLift: Program.create(this.gl, BOKEH_LIFT_FRAGMENT),
       bokehGather: Program.create(this.gl, BOKEH_GATHER_FRAGMENT),

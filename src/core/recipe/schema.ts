@@ -236,6 +236,24 @@ const faceSchema = z
     undereye: num('face.undereye', 0, 1, 0),
     /** Brightens the white of the eye without touching the iris. */
     eyes: num('face.eyes', 0, 1, 0),
+    /**
+     * Definition in the iris: its pattern, and the ring at its edge.
+     *
+     * Local contrast rather than a darkening, so a pale eye stays pale. The
+     * counterpart of `texture` on the skin, and the same reasoning — what is
+     * being adjusted is how much of the detail the photograph has is visible,
+     * not how dark the part is.
+     */
+    iris: num('face.iris', 0, 1, 0),
+    /**
+     * Strength of the reflection in the eye.
+     *
+     * It lifts the catchlight the photograph already has rather than painting
+     * one in. A drawn highlight has to be put somewhere, and where it belongs
+     * is decided by a light nobody can see from the file — put in the wrong
+     * place it reads as a glass eye.
+     */
+    catchlight: num('face.catchlight', 0, 1, 0),
     /** Takes the yellow out of teeth, when the mouth is open. */
     teeth: num('face.teeth', 0, 1, 0),
     /**
@@ -287,6 +305,45 @@ const faceSchema = z
         noseBridge: num('face.warp.noseBridge', -1, 1, 0),
         /** Widens the mouth, or narrows it. */
         mouthWidth: num('face.warp.mouthWidth', -1, 1, 0),
+      })
+      .prefault({}),
+  })
+  .prefault({});
+
+/**
+ * Hair: the sheen, the grey strands, and colour.
+ *
+ * Outside `face` for the same reason `depth` is: what it acts on comes from the
+ * segmentation rather than from the landmarks, so it is correct on a head turned
+ * away from the camera, where there are no landmarks at all.
+ *
+ * Everything here is relative to a local average of the photograph rather than
+ * to a threshold. Hair is the darkest large thing in most portraits and the
+ * brightest in some, so a sheen keyed to an absolute lightness would find the
+ * highlight on dark hair and the whole head on light hair.
+ */
+const hairSchema = z
+  .object({
+    /** Strengthens the band of reflected light running along the hair. */
+    sheen: num('hair.sheen', 0, 1, 0),
+    /**
+     * Takes grey strands back towards the colour of the hair around them.
+     *
+     * It asks two questions of a pixel, not one: lighter than its surroundings
+     * and less coloured than them. A strand that is only lighter is a highlight,
+     * and taking the colour out of a highlight is how hair comes out wet.
+     */
+    grey: num('hair.grey', 0, 1, 0),
+    /**
+     * Colour on the hair.
+     *
+     * The hue is an absolute angle, like the lip and split-toning hues: a colour
+     * is chosen by the colour it is. The amount around it is relative as usual.
+     */
+    tint: z
+      .object({
+        amount: num('hair.tint.amount', 0, 1, 0),
+        hue: num('hair.tint.hue', 0, 360, 30),
       })
       .prefault({}),
   })
@@ -521,6 +578,7 @@ export const recipeSchema = z.object({
     .optional(),
   geometry: geometrySchema,
   face: faceSchema,
+  hair: hairSchema,
   depth: depthSchema,
   global: globalSchema.prefault({}),
   text: z.array(textLayerSchema).default([]),
@@ -530,6 +588,7 @@ export const recipeSchema = z.object({
 
 export type Recipe = z.infer<typeof recipeSchema>;
 export type FaceParams = Recipe['face'];
+export type HairParams = Recipe['hair'];
 export type DepthParams = Recipe['depth'];
 export type GlobalParams = Recipe['global'];
 export type GeometryParams = Recipe['geometry'];
@@ -574,6 +633,8 @@ export function isPartsNeutral(face: FaceParams): boolean {
   return (
     face.undereye < 1e-4 &&
     face.eyes < 1e-4 &&
+    face.iris < 1e-4 &&
+    face.catchlight < 1e-4 &&
     face.teeth < 1e-4 &&
     face.lip.amount < 1e-4 &&
     face.cheek.amount < 1e-4
@@ -601,6 +662,17 @@ export function isWarpNeutral(face: FaceParams): boolean {
     Math.abs(w.noseBridge) < 1e-4 &&
     Math.abs(w.mouthWidth) < 1e-4
   );
+}
+
+/**
+ * True when nothing in the hair stage would change a pixel.
+ *
+ * The renderer asks this before it refines the hair mask, which is a nine-pass
+ * guided filter over the frame plus the local average the three amounts are
+ * measured against. A recipe that only grades must answer true.
+ */
+export function isHairNeutral(hair: HairParams): boolean {
+  return hair.sheen < 1e-4 && hair.grey < 1e-4 && hair.tint.amount < 1e-4;
 }
 
 /**

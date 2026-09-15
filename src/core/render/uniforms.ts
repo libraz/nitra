@@ -14,6 +14,7 @@ import {
   type FaceParams,
   HUE_BANDS,
   isDepthNeutral,
+  isHairNeutral,
   isWarpNeutral,
   type Recipe,
 } from '../recipe/schema';
@@ -268,6 +269,8 @@ export function skinUniforms(recipe: Recipe, ctx: PassContext): SkinUniforms {
 export interface PartsUniforms {
   undereye: number;
   eyes: number;
+  iris: number;
+  catchlight: number;
   teeth: number;
   lip: number;
   lipHue: number;
@@ -282,6 +285,8 @@ export function partsUniforms(recipe: Recipe, ctx: PassContext): PartsUniforms {
   return {
     undereye: f.undereye,
     eyes: f.eyes,
+    iris: f.iris,
+    catchlight: f.catchlight,
     teeth: f.teeth,
     lip: f.lip.amount,
     lipHue: f.lip.hue,
@@ -297,13 +302,13 @@ export function lowSize(ctx: PassContext): [number, number] {
 }
 
 /**
- * Longest edge the background separation is refined at.
+ * Longest edge the masks that divide the whole picture are built at.
  *
- * Over the whole frame, unlike the skin mask, because what it divides is the
- * picture. Read out of the source rather than the framed render, for the same
- * reason the skin filter is: a separation computed from a proxy while
- * previewing and from twelve megapixels while exporting is a preview that lies
- * about where the shoulder is.
+ * Both of them: the background separation and the hair. Over the whole frame,
+ * unlike the skin mask, because what they divide is the picture. Read out of the
+ * source rather than the framed render, for the same reason the skin filter is:
+ * a mask computed from a proxy while previewing and from twelve megapixels while
+ * exporting is a preview that lies about where the shoulder is.
  */
 export const SUBJECT_EDGE = 512;
 
@@ -360,6 +365,79 @@ export function subjectSize(ctx: PassContext): [number, number] {
 export function subjectRadius(recipe: Recipe, ctx: PassContext): number {
   const [width] = subjectSize(ctx);
   return clampRadius(recipe.depth.edgeRefine * SUBJECT_REFINE_RADIUS * width, 1);
+}
+
+/**
+ * How far the hair mask's refinement may move its boundary.
+ *
+ * A fraction of the frame, and tighter than the separation's: the separation
+ * follows a shoulder, while this follows a hairline, and a hairline is the
+ * finest boundary in a portrait. Not a slider, because there is no setting of it
+ * that improves a picture — it is the width of the structure being followed.
+ */
+const HAIR_REFINE_RADIUS = 0.012;
+
+/**
+ * The window the hair amounts are measured against, as a fraction of a face.
+ *
+ * Keyed to the face rather than to the frame wherever there is one, because what
+ * "the hair around this pixel" means is a fraction of a head: a fixed fraction
+ * of the frame is several times too wide on a portrait and too narrow on a full
+ * length shot, and both readings put the sheen in the wrong place.
+ */
+const HAIR_MEAN_FACES = 0.3;
+
+/** The same window with no face to key it to, as a fraction of the frame. */
+const HAIR_MEAN_FRAME = 0.05;
+
+/**
+ * Whether the hair stage would change a pixel.
+ *
+ * A missing segmentation answers false. There is no hair to find without one,
+ * and a recipe carrying a tint has to render such a photo unchanged rather than
+ * tint a rectangle of it.
+ */
+export function isHairing(recipe: Recipe, ctx: PassContext): boolean {
+  return ctx.subject !== null && !isHairNeutral(recipe.hair);
+}
+
+/** How far the hair mask's refinement may move the boundary, in its own texels. */
+export function hairRadius(ctx: PassContext): number {
+  const [width] = subjectSize(ctx);
+  return clampRadius(HAIR_REFINE_RADIUS * width, 1);
+}
+
+/** Radius of the local average the hair amounts are measured against. */
+export function hairMeanRadius(ctx: PassContext): number {
+  const [width] = subjectSize(ctx);
+  const faceWidth = ctx.face?.faceWidth ?? 0;
+  const fraction = faceWidth > 0 ? faceWidth * HAIR_MEAN_FACES : HAIR_MEAN_FRAME;
+  return clampRadius(fraction * width, 2);
+}
+
+/** Everything the hair shader reads, on the same contract as the others. */
+export interface HairUniforms {
+  sheen: number;
+  grey: number;
+  tint: number;
+  tintHue: number;
+  subject: string;
+  /** Which face analysis the skin mask came from, or that there is none. */
+  face: string;
+  geometry: string;
+}
+
+export function hairUniforms(recipe: Recipe, ctx: PassContext): HairUniforms {
+  const h = recipe.hair;
+  return {
+    sheen: h.sheen,
+    grey: h.grey,
+    tint: h.tint.amount,
+    tintHue: h.tint.hue,
+    subject: ctx.subject?.key ?? 'none',
+    face: ctx.face?.key ?? 'none',
+    geometry: ctx.geometryKey,
+  };
 }
 
 /** Kernel radius, as a fraction of the rendered frame's width. */

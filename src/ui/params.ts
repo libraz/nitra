@@ -90,11 +90,27 @@ export const GROUPS: readonly ParamGroup[] = [
     params: [
       spec('face.undereye', 'params.faceUndereye'),
       spec('face.eyes', 'params.faceEyes'),
+      spec('face.iris', 'params.faceIris'),
+      spec('face.catchlight', 'params.faceCatchlight'),
       spec('face.teeth', 'params.faceTeeth'),
       spec('face.lip.amount', 'params.faceLipAmount'),
       spec('face.lip.hue', 'params.faceLipHue'),
       spec('face.cheek.amount', 'params.faceCheekAmount'),
       spec('face.cheek.hue', 'params.faceCheekHue'),
+    ],
+  },
+  // Hair is not part of the face group because it is not keyed to the
+  // landmarks: what finds it is the segmentation, the same thing that finds the
+  // person for the background. So it works on a head turned away, and the group
+  // says nothing about needing a face.
+  {
+    id: 'hair',
+    nameKey: 'groups.hair',
+    params: [
+      spec('hair.sheen', 'params.hairSheen'),
+      spec('hair.grey', 'params.hairGrey'),
+      spec('hair.tint.amount', 'params.hairTintAmount'),
+      spec('hair.tint.hue', 'params.hairTintHue'),
     ],
   },
   // After the face and before the grade, which is where the stage runs: a lens

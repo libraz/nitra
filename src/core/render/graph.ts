@@ -20,7 +20,11 @@ import {
   fitLongEdge,
   type GradeUniforms,
   gradeUniforms,
+  hairMeanRadius,
+  hairRadius,
+  hairUniforms,
   isDefocusing,
+  isHairing,
   isWarping,
   lowSize,
   MASK_EPSILON,
@@ -289,6 +293,8 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   const wideRadius = (recipe: Recipe, ctx: PassContext) =>
     clampRadius(skinRadius(recipe.face, ctx) * 3, 2);
   const subjectBoundary = (recipe: Recipe, ctx: PassContext) => subjectRadius(recipe, ctx);
+  const hairBoundary = (_recipe: Recipe, ctx: PassContext) => hairRadius(ctx);
+  const hairWindow = (_recipe: Recipe, ctx: PassContext) => hairMeanRadius(ctx);
 
   const faceCoeffRaw: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'faceCoeffRaw',
@@ -346,14 +352,23 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     },
   };
 
-  /** Parts: the eyes, the teeth, the lips, the cheeks, the shadow under an eye. */
+  /**
+   * Parts: the eyes and irises, the teeth, the lips, the cheeks, the shadow
+   * under an eye.
+   *
+   * Both averages are read, and they answer different questions. The wide one
+   * is the skin an under-eye shadow is lifted towards; the narrow one is the
+   * local average the iris's own contrast is expanded about, and its window is
+   * the filter's radius, which is a few per cent of a face — about a third of
+   * an iris, which is the scale its pattern lives at.
+   */
   const parts: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'parts',
-    inputs: ['skin', 'faceWideMean', 'warpField'],
+    inputs: ['skin', 'faceMeanV', 'faceWideMean', 'warpField'],
     active: (recipe, ctx) => ctx.face !== null && !isPartsNeutral(recipe.face),
     signature: (recipe, ctx) =>
       `parts:${JSON.stringify(partsUniforms(recipe, ctx))}:${isWarping(recipe, ctx)}`,
-    evaluate: (ctx, [source, wide, field], recipe) => {
+    evaluate: (ctx, [source, mean, wide, field], recipe) => {
       const src = source as RenderTarget;
       const face = ctx.face as FaceTextures;
       const uniforms = partsUniforms(recipe, ctx);
@@ -365,17 +380,164 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
         .texture('uPolyA', face.polyA)
         .texture('uPolyB', face.polyB)
         .texture('uMask', face.mask.texture)
+        .texture('uMean', (mean as RenderTarget).texture)
         .texture('uWideMean', (wide as RenderTarget).texture)
         .texture('uWarp', (field as RenderTarget).texture)
         .int('uWarped', isWarping(recipe, ctx) ? 1 : 0)
         .mat3('uGeometry', ctx.geometry)
         .float('uUndereye', uniforms.undereye)
         .float('uEyes', uniforms.eyes)
+        .float('uIris', uniforms.iris)
+        .float('uCatchlight', uniforms.catchlight)
         .float('uTeeth', uniforms.teeth)
         .float('uLip', uniforms.lip)
         .float('uLipHue', uniforms.lipHue)
         .float('uCheek', uniforms.cheek)
         .float('uCheekHue', uniforms.cheekHue);
+      ctx.glctx.draw(target, ctx.width, ctx.height);
+      return target;
+    },
+  };
+
+  /**
+   * The hair class, before it is refined, and a guide to snap it to.
+   *
+   * No graph input, for the reason `faceMean` has none: it reads the source
+   * photograph rather than the framed render, so the hairline lands in the same
+   * place on the proxy and on the export.
+   */
+  const hairRaw: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'hairRaw',
+    inputs: [],
+    signature: (_recipe, ctx) =>
+      `hairRaw:${ctx.subject?.key ?? 'none'}:${subjectSize(ctx).join('x')}`,
+    evaluate: (ctx) => {
+      const subject = ctx.subject as SubjectTextures;
+      const [width, height] = subjectSize(ctx);
+      const target = ctx.glctx.pool.acquire(width, height);
+      ctx.programs.hairRaw
+        .bind()
+        .texture('uSegment', subject.segment)
+        .texture('uImage', ctx.source.texture);
+      ctx.glctx.draw(target, width, height);
+      return target;
+    },
+  };
+
+  /** The hair boundary, moved onto the photograph by the same guided filter. */
+  const hairDeviation: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'hairDeviation',
+    inputs: ['hairRaw', 'hairMean'],
+    signature: (_recipe, ctx) => `hairDeviation:${subjectSize(ctx).join('x')}`,
+    evaluate: (ctx, [raw, mean]) => {
+      const src = raw as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceMaskDeviation
+        .bind()
+        .texture('uSource', src.texture)
+        .texture('uMean', (mean as RenderTarget).texture);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  const hairCoeff: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'hairCoeff',
+    inputs: ['hairMean', 'hairDeviationV'],
+    signature: () => `hairCoeff:${MASK_EPSILON}`,
+    evaluate: (ctx, [mean, deviation]) => {
+      const src = mean as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceMaskCoeff
+        .bind()
+        .texture('uMean', src.texture)
+        .texture('uDeviation', (deviation as RenderTarget).texture)
+        .float('uEpsilon', MASK_EPSILON);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  const hairMask: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'hairMask',
+    inputs: ['hairCoeffV'],
+    signature: (_recipe, ctx) => `hairMask:${subjectSize(ctx).join('x')}`,
+    evaluate: (ctx, [coeff]) => {
+      const src = coeff as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceMaskApply
+        .bind()
+        .vec4('uRegion', 0, 0, 1, 1)
+        .texture('uCoeff', src.texture)
+        .texture('uImage', ctx.source.texture);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  /**
+   * Lightness and chroma over the whole frame, for the hair to be measured
+   * against.
+   *
+   * The skin stage's own mean pass, given the frame instead of a working area
+   * around the faces. Averaged below over a window keyed to the face, which is
+   * what makes "the hair around this pixel" mean a fraction of a head rather
+   * than a fraction of the photograph.
+   */
+  const hairTone: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'hairTone',
+    inputs: [],
+    signature: (_recipe, ctx) => `hairTone:${ctx.source.generation}:${subjectSize(ctx).join('x')}`,
+    evaluate: (ctx) => {
+      const [width, height] = subjectSize(ctx);
+      const target = ctx.glctx.pool.acquire(width, height);
+      ctx.programs.faceMean
+        .bind()
+        .texture('uSource', ctx.source.texture)
+        .int('uFromSrgb', ctx.source.fromSrgb ? 1 : 0)
+        .vec4('uRegion', 0, 0, 1, 1);
+      ctx.glctx.draw(target, width, height);
+      return target;
+    },
+  };
+
+  /**
+   * Hair: the grey strands, the sheen and the colour.
+   *
+   * With the other per-part work and before the grade, because what it adjusts
+   * is the surface the light fell on rather than the light. `parts` is its first
+   * input so a recipe that leaves the hair alone passes the frame straight
+   * through and none of the refinement above is evaluated.
+   */
+  const hair: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'hair',
+    inputs: ['parts', 'hairMask', 'hairLocalV', 'warpField'],
+    active: isHairing,
+    signature: (recipe, ctx) =>
+      `hair:${ctx.width}x${ctx.height}:${JSON.stringify(hairUniforms(recipe, ctx))}:${isWarping(recipe, ctx)}`,
+    evaluate: (ctx, [source, mask, local, field], recipe) => {
+      const src = source as RenderTarget;
+      const uniforms = hairUniforms(recipe, ctx);
+      const target = ctx.glctx.pool.acquire(ctx.width, ctx.height);
+      ctx.programs.hair
+        .bind()
+        .vec4('uRegion', ...regionOf(ctx))
+        .texture('uSource', src.texture)
+        .texture('uHair', (mask as RenderTarget).texture)
+        .texture('uMean', (local as RenderTarget).texture)
+        // With no face there is no skin mask to bind, and the stage is told so
+        // rather than being handed a stand-in: a sampler that is never bound
+        // still reads, and what it reads is not zero.
+        .texture('uSkin', (ctx.face?.mask ?? (mask as RenderTarget)).texture)
+        .texture('uPoly', ctx.face?.polyA ?? (mask as RenderTarget).texture)
+        .int('uHasFace', ctx.face !== null ? 1 : 0)
+        .texture('uWarp', (field as RenderTarget).texture)
+        .int('uWarped', isWarping(recipe, ctx) ? 1 : 0)
+        .mat3('uGeometry', ctx.geometry)
+        .float('uSheen', uniforms.sheen)
+        .float('uGrey', uniforms.grey)
+        .float('uTint', uniforms.tint)
+        .float('uTintHue', uniforms.tintHue);
       ctx.glctx.draw(target, ctx.width, ctx.height);
       return target;
     },
@@ -486,7 +648,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
    */
   const bokehLift: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'bokehLift',
-    inputs: ['parts', 'subjectMask', 'warpField'],
+    inputs: ['hair', 'subjectMask', 'warpField'],
     active: isDefocusing,
     signature: (recipe, ctx) =>
       `bokehLift:${ctx.width}x${ctx.height}:${recipe.depth.bokehBloom}:${ctx.geometryKey}:${isWarping(recipe, ctx)}`,
@@ -576,7 +738,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
    */
   const bokeh: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'bokeh',
-    inputs: ['parts', 'bokehGather', 'subjectMask', 'warpField'],
+    inputs: ['hair', 'bokehGather', 'subjectMask', 'warpField'],
     active: isDefocusing,
     signature: (recipe, ctx) =>
       `bokeh:${ctx.width}x${ctx.height}:${recipe.depth.bgBrightness}:${recipe.depth.bgSaturation}:${ctx.geometryKey}:${isWarping(recipe, ctx)}`,
@@ -683,6 +845,20 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     box('faceWideMean', 'faceWideMeanH', 'y', wideRadius),
     skin,
     parts,
+    hairRaw,
+    box('hairMeanH', 'hairRaw', 'x', hairBoundary),
+    box('hairMean', 'hairMeanH', 'y', hairBoundary),
+    hairDeviation,
+    box('hairDeviationH', 'hairDeviation', 'x', hairBoundary),
+    box('hairDeviationV', 'hairDeviationH', 'y', hairBoundary),
+    hairCoeff,
+    box('hairCoeffH', 'hairCoeff', 'x', hairBoundary),
+    box('hairCoeffV', 'hairCoeffH', 'y', hairBoundary),
+    hairMask,
+    hairTone,
+    box('hairLocalH', 'hairTone', 'x', hairWindow),
+    box('hairLocalV', 'hairLocalH', 'y', hairWindow),
+    hair,
     subjectRaw,
     box('subjectMeanH', 'subjectRaw', 'x', subjectBoundary),
     box('subjectMean', 'subjectMeanH', 'y', subjectBoundary),
