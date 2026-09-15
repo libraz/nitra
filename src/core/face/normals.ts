@@ -84,6 +84,48 @@ function falloff(squared: number): number {
 }
 
 /**
+ * How far the height field is smoothed, as a fraction of a landmark's reach.
+ *
+ * Enough to even out the spacing between contributions and not enough to take
+ * the nose with it: the ridge is about three times a reach across, so a window
+ * of this fraction of one leaves it while the lumps between landmarks go.
+ */
+const SMOOTHING = 0.6;
+
+/** The widest face's landmark reach, in width units. */
+function reachOf(faces: readonly FaceRegions[]): number {
+  return Math.max(...faces.map((face) => face.width), 0) * LANDMARK_REACH;
+}
+
+/** Separable box blur over a scalar field, run once per axis. */
+function blur(field: Float32Array, width: number, height: number, radius: number): Float32Array {
+  const out = new Float32Array(field.length);
+  const pass = (from: Float32Array, to: Float32Array, alongX: boolean) => {
+    const outer = alongX ? height : width;
+    const inner = alongX ? width : height;
+    const step = alongX ? 1 : width;
+    for (let o = 0; o < outer; o++) {
+      const base = alongX ? o * width : o;
+      for (let i = 0; i < inner; i++) {
+        let sum = 0;
+        let count = 0;
+        for (let k = -radius; k <= radius; k++) {
+          const at = i + k;
+          if (at < 0 || at >= inner) continue;
+          sum += from[base + at * step] as number;
+          count += 1;
+        }
+        to[base + i * step] = sum / Math.max(count, 1);
+      }
+    }
+  };
+  const middle = new Float32Array(field.length);
+  pass(field, middle, true);
+  pass(middle, out, false);
+  return out;
+}
+
+/**
  * Rasterise every face's normals over the same working area as the masks.
  *
  * The area comes from {@link faceRegion}, so one rectangle addresses the masks
@@ -148,12 +190,37 @@ export function rasteriseNormals(
   // alpha fades the result out there anyway, and a hole in the field would put
   // a cliff — and so a ring of sideways normals — around the edge of the mesh.
   const mean = depthCount > 0 ? depthSum / depthCount : 0;
-  const rise = new Float32Array(count);
+  let rise: Float32Array = new Float32Array(count);
   for (let i = 0; i < count; i++) {
     const w = weight[i] as number;
     const z = w > 0 ? (depth[i] as number) / w : mean;
     rise[i] = -(z - mean) * SURFACE_RELIEF;
   }
+
+  // Smoothed before it is differentiated, and this is not optional.
+  //
+  // The mesh is not evenly spread: it crowds around the eyes and the mouth and
+  // thins out over the forehead and the cheeks, so out there the height comes
+  // from a handful of contributions and carries their shape. That shows up in
+  // the field as gentle lumps, which a derivative turns into patches of normal
+  // pointing in unrelated directions — invisible in the numbers, since the field
+  // is still smooth and still unit length, and plainly visible the moment a
+  // light is put on it as mottling across a forehead that has none.
+  //
+  // Twice, because one box leaves its own corners in the result and a second
+  // pass over the first is a smooth kernel. The radius is a fraction of the
+  // reach rather than of the face: what is being evened out is the spacing of
+  // the contributions, and the reach is already a fraction of the face.
+  const smoothing = Math.max(1, Math.round(reachOf(faces) * scale * SMOOTHING));
+  rise = blur(blur(rise, width, height, smoothing), width, height, smoothing);
+
+  // And the coverage with it, which is a separate defect with the same cause.
+  // Out at the rim of the mesh the points have skin on one side of them only,
+  // so each one's contribution stops on its own and the edge of the field comes
+  // out scalloped — a row of discs rather than a boundary. Confinement is what
+  // that channel is for, so the scallops are what the light stops at, and a
+  // scalloped edge to a lit area reads as a shape laid over the photograph.
+  const reached = blur(blur(weight, width, height, smoothing), width, height, smoothing);
 
   // The gradient of the height field is the surface's tilt, and the normal is
   // its opposite. Written in a frame where y points up, because the light
@@ -183,7 +250,7 @@ export function rasteriseNormals(
       data[at] = Math.round(((nx / length) * 0.5 + 0.5) * 255);
       data[at + 1] = Math.round(((ny / length) * 0.5 + 0.5) * 255);
       data[at + 2] = Math.round((1 / length) * 0.5 * 255 + 0.5 * 255);
-      data[at + 3] = Math.round(Math.min(1, weight[index] as number) * 255);
+      data[at + 3] = Math.round(Math.min(1, reached[index] as number) * 255);
     }
   }
 
