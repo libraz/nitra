@@ -201,6 +201,9 @@ const globalSchema = z.object({
  */
 export const HEAL_LIMIT = 200;
 
+/** How many reflection circles one edit may carry. Same reasoning as {@link HEAL_LIMIT}. */
+export const CONCEAL_LIMIT = 64;
+
 /**
  * One blemish to fill.
  *
@@ -224,6 +227,16 @@ const healSpotSchema = z.object({
   x: num('heal.x', 0, 1, 0.5),
   y: num('heal.y', 0, 1, 0.5),
   r: num('heal.r', 0.002, 0.03, 0.006),
+});
+
+/**
+ * One circle marking a reflection to conceal. Same shape and normalisation as
+ * {@link healSpotSchema}: x/y and r are fractions of the source frame.
+ */
+const concealSpotSchema = z.object({
+  x: num('conceal.x', 0, 1, 0.5),
+  y: num('conceal.y', 0, 1, 0.5),
+  r: num('conceal.r', 0.004, 0.2, 0.02),
 });
 
 /**
@@ -720,6 +733,8 @@ export const recipeSchema = z.object({
    * one fills from what the first one left behind.
    */
   heal: z.array(healSpotSchema).max(HEAL_LIMIT).default([]),
+  /** Circles marking reflections to conceal. Order does not matter: each reads the same pristine source. */
+  conceal: z.array(concealSpotSchema).max(CONCEAL_LIMIT).default([]),
   face: faceSchema,
   hair: hairSchema,
   depth: depthSchema,

@@ -78,8 +78,11 @@ export function loadRecipe(input: unknown): LoadResult {
   for (const issue of first.error.issues) {
     const bound = boundOf(issue);
     if (bound === undefined) continue;
-    const from = readAtPath(migrated, issue.path as PropertyKey[]);
-    setAtPath(migrated, issue.path as PropertyKey[], bound);
+    const path = issue.path as PropertyKey[];
+    const from = readAtPath(migrated, path);
+    // A `too_big` array issue carries a count, not a replacement value: truncate rather than overwrite.
+    const to = Array.isArray(from) ? from.slice(0, bound) : bound;
+    setAtPath(migrated, path, to);
     repairs.push({ path: issue.path.join('.'), from, to: bound });
   }
 

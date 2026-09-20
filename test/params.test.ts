@@ -61,6 +61,9 @@ describe('the detail panel', () => {
     'tiles.',
     'text.',
     'heal.',
+    // A circle is placed on the photograph, not dialed in from a list of
+    // numbers; the conceal tool has its own panel, the same way heal does.
+    'conceal.',
     // Both amounts describe a patch taken from a second photograph, and that
     // photograph is opened in the tool rather than named by a path. A slider for
     // the edge of a patch that does not exist is a control with nothing under

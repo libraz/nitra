@@ -4,7 +4,9 @@ import { buildCurveLut } from '../src/core/recipe/curve';
 import { loadRecipe, serializeRecipe } from '../src/core/recipe/load';
 import { migrateRecipe } from '../src/core/recipe/migrate';
 import {
+  CONCEAL_LIMIT,
   CURRENT_RECIPE_VERSION,
+  HEAL_LIMIT,
   isIdentityCurve,
   neutralRecipe,
   neutralTextLayer,
@@ -22,7 +24,12 @@ describe('defaults', () => {
       // the field rather than once per entry, because entries are addressed by
       // index and a range belongs to the field. A list's own no-effect value is
       // that it is empty, which is asserted separately.
-      if (def.path.startsWith('text.') || def.path.startsWith('heal.')) continue;
+      if (
+        def.path.startsWith('text.') ||
+        def.path.startsWith('heal.') ||
+        def.path.startsWith('conceal.')
+      )
+        continue;
       const value = def.path
         .split('.')
         .reduce<unknown>((cursor, key) => (cursor as Record<string, unknown>)?.[key], recipe);
@@ -49,6 +56,8 @@ describe('defaults', () => {
     // Nothing is filled until somebody points at something: an empty list is
     // what makes the Heal stage cost nothing rather than cost a copy.
     expect(recipe.heal).toEqual([]);
+    // Same reasoning: no circle is placed until somebody marks a reflection.
+    expect(recipe.conceal).toEqual([]);
     // Zero means "the size it already is", so an untouched recipe never resizes.
     expect(recipe.output.longEdge).toBe(0);
   });
@@ -78,6 +87,22 @@ describe('defaults', () => {
   it('starts with an identity curve', () => {
     expect(isIdentityCurve(neutralRecipe().global.curve)).toBe(true);
   });
+
+  it('bounds a conceal circle the way a heal spot is bounded', () => {
+    const spec = paramDefs();
+    expect(spec.get('conceal.x')).toEqual({ path: 'conceal.x', min: 0, max: 1, neutral: 0.5 });
+    expect(spec.get('conceal.y')).toEqual({ path: 'conceal.y', min: 0, max: 1, neutral: 0.5 });
+    expect(spec.get('conceal.r')).toEqual({
+      path: 'conceal.r',
+      min: 0.004,
+      max: 0.2,
+      neutral: 0.02,
+    });
+  });
+
+  it('caps how many reflections one recipe can carry', () => {
+    expect(CONCEAL_LIMIT).toBe(64);
+  });
 });
 
 describe('loading', () => {
@@ -95,6 +120,22 @@ describe('loading', () => {
     if (!loaded.ok) return;
     expect(loaded.recipe.global.exposure).toBe(1);
     expect(loaded.repairs).toEqual([{ path: 'global.exposure', from: 4.2, to: 1 }]);
+  });
+
+  it('truncates an over-limit conceal list instead of rejecting the whole recipe', () => {
+    // A too-long list fails schema validation as `too_big` on the array itself,
+    // whose bound is a count rather than a replacement value for the array.
+    const spots = Array.from({ length: CONCEAL_LIMIT + 6 }, () => ({ x: 0.5, y: 0.5, r: 0.02 }));
+    const loaded = loadRecipe({ version: 1, conceal: spots });
+    expect(loaded.ok).toBe(true);
+    if (loaded.ok) expect(loaded.recipe.conceal.length).toBe(CONCEAL_LIMIT);
+  });
+
+  it('truncates an over-limit heal list the same way', () => {
+    const spots = Array.from({ length: HEAL_LIMIT + 6 }, () => ({ x: 0.5, y: 0.5, r: 0.006 }));
+    const loaded = loadRecipe({ version: 1, heal: spots });
+    expect(loaded.ok).toBe(true);
+    if (loaded.ok) expect(loaded.recipe.heal.length).toBe(HEAL_LIMIT);
   });
 
   it('rejects a value that is not a number at all', () => {
