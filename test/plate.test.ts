@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { HealSpot } from '../src/core/heal/inpaint';
-import { HealPlate } from '../src/core/heal/plate';
+import { SourcePlate } from '../src/core/plate/plate';
 
 const SIZE = 192;
 
@@ -61,7 +61,7 @@ const RIGHT: HealSpot = { x: 0.7, y: 0.6, r: 0.03 };
 
 function plateOf(marks: readonly HealSpot[] = [LEFT, RIGHT]) {
   const pristine = photograph(marks);
-  return { pristine, plate: new HealPlate(pristine, SIZE, SIZE) };
+  return { pristine, plate: new SourcePlate(pristine, SIZE, SIZE) };
 }
 
 describe('the plate', () => {

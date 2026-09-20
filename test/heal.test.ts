@@ -14,15 +14,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  cutOut,
-  type HealSpot,
-  healSpot,
-  pasteInto,
-  type Region,
-  regionFor,
-} from '../src/core/heal/inpaint';
+import { type HealSpot, healSpot, regionFor } from '../src/core/heal/inpaint';
 import { inpaint } from '../src/core/heal/patchmatch';
+import { cutOut, pasteInto, type Region } from '../src/core/plate/region';
 
 /**
  * A patch of synthetic skin with a dark blemish in the middle of it.

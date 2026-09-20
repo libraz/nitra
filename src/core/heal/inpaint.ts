@@ -12,6 +12,7 @@
  * as it was decoded, and what the renderer samples afterwards is the result.
  */
 
+import { cutOut, pasteInto, type Region } from '../plate/region';
 import { inpaint } from './patchmatch';
 
 /**
@@ -35,14 +36,6 @@ export interface HealSpot {
   x: number;
   y: number;
   r: number;
-}
-
-/** A rectangle of the photograph, in whole pixels. */
-export interface Region {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 /**
@@ -70,33 +63,6 @@ export function regionFor(
     centre: [cx - x, cy - y],
     radius,
   };
-}
-
-/** Copy one rectangle out of an RGBA image. */
-export function cutOut(
-  pixels: Uint8ClampedArray,
-  imageWidth: number,
-  region: Region,
-): Uint8ClampedArray {
-  const out = new Uint8ClampedArray(region.width * region.height * 4);
-  for (let row = 0; row < region.height; row++) {
-    const from = ((region.y + row) * imageWidth + region.x) * 4;
-    out.set(pixels.subarray(from, from + region.width * 4), row * region.width * 4);
-  }
-  return out;
-}
-
-/** Write one rectangle back into an RGBA image. */
-export function pasteInto(
-  pixels: Uint8ClampedArray,
-  imageWidth: number,
-  region: Region,
-  patch: Uint8ClampedArray,
-): void {
-  for (let row = 0; row < region.height; row++) {
-    const to = ((region.y + row) * imageWidth + region.x) * 4;
-    pixels.set(patch.subarray(row * region.width * 4, (row + 1) * region.width * 4), to);
-  }
 }
 
 /**

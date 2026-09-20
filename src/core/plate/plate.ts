@@ -15,7 +15,8 @@
  * plate is as large as the decoded image.
  */
 
-import { type HealSpot, healSpot, type Region, regionFor } from './inpaint';
+import { type HealSpot, healSpot, regionFor } from '../heal/inpaint';
+import type { Region } from './region';
 
 /** What changed in the plate, for whoever has to get it onto the GPU. */
 export interface PlateUpdate {
@@ -35,7 +36,7 @@ function same(a: HealSpot, b: HealSpot): boolean {
   return a.x === b.x && a.y === b.y && a.r === b.r;
 }
 
-export class HealPlate {
+export class SourcePlate {
   /** Null until the first spot: the plate is the photograph until then. */
   private plate: Uint8ClampedArray | null = null;
   private applied: HealSpot[] = [];

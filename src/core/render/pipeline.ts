@@ -24,9 +24,9 @@ import {
   outputToSource,
 } from '../geometry/transform';
 import { Dag } from '../graph/dag';
-import { cutOut } from '../heal/inpaint';
-import { HealPlate } from '../heal/plate';
 import type { SourceImage } from '../io/decode';
+import { SourcePlate } from '../plate/plate';
+import { cutOut } from '../plate/region';
 import { buildCurveLut } from '../recipe/curve';
 import {
   isIdentityCurve,
@@ -149,7 +149,7 @@ export class Pipeline {
   private readonly dag: Dag<PassContext, RenderTarget, Recipe>;
   private source: SourceTexture | null = null;
   private decoded: GraftImage | null = null;
-  private plate: HealPlate | null = null;
+  private plate: SourcePlate | null = null;
   private healed: SourceTexture | null = null;
   private reference: RestoreReference | null = null;
   /** The frame with the photographed faces in it, while there are any. */
@@ -254,7 +254,7 @@ export class Pipeline {
     this.restoreReport = null;
     // The decoded pixels are held, not copied: they are the only record of what
     // is under a fill, and a copy is made only once something is filled.
-    this.plate = new HealPlate(image.data, image.width, image.height);
+    this.plate = new SourcePlate(image.data, image.width, image.height);
   }
 
   /**
@@ -365,7 +365,7 @@ export class Pipeline {
     // every spot is filled again, since there is no fill to keep once what was
     // underneath it has changed.
     this.generation += 1;
-    this.plate = new HealPlate(this.restored ?? decoded.data, decoded.width, decoded.height);
+    this.plate = new SourcePlate(this.restored ?? decoded.data, decoded.width, decoded.height);
     // The texture is left to the fills to build, even though the pixels are
     // already here. Uploading them now would be uploading them twice whenever a
     // spot exists, because rebuilding the plate makes the next step a rebuild
