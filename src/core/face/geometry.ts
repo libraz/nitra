@@ -152,11 +152,17 @@ export function centroid(points: readonly Point[]): Point {
 }
 
 /**
- * Grow a polygon outwards from its own centre.
+ * Grow a polygon outwards from its own centre, or inwards for a negative amount.
  *
  * Offsetting an outline properly means mitring every corner and dealing with
  * the ones that cross; pushing each vertex along its radius does the same job
  * for the shapes this is used on, all of which are blobs seen from inside.
+ *
+ * Shrinking stops at the centre. A vertex taken further in than its own radius
+ * would come out on the opposite side, and the outline would cross itself — a
+ * scanline fill then reads the crossings in the wrong order and returns the
+ * shape inside out, which is a patch appearing where it was being kept away
+ * from. Collapsing is the honest answer to being asked for a negative shape.
  */
 export function dilate(points: readonly Point[], amount: number): Point[] {
   const c = centroid(points);
@@ -165,7 +171,8 @@ export function dilate(points: readonly Point[], amount: number): Point[] {
     const dy = p.y - c.y;
     const len = Math.hypot(dx, dy);
     if (len < 1e-9) return { x: p.x, y: p.y };
-    return { x: p.x + (dx / len) * amount, y: p.y + (dy / len) * amount };
+    const moved = Math.max(amount, -len);
+    return { x: p.x + (dx / len) * moved, y: p.y + (dy / len) * moved };
   });
 }
 
