@@ -142,6 +142,33 @@ const MASK_FEATHER = 0.01;
 /** Radius the mask is refined over, as a fraction of the face width. */
 const MASK_REFINE_RADIUS = 0.02;
 
+/**
+ * Pixels the on-screen canvas may cover.
+ *
+ * Magnifying the view raises the canvas's own resolution rather than the size of
+ * its box, so without a ceiling a zoomed look at a twelve-megapixel photo would
+ * ask for a drawing buffer several times the size of the file. The number is a
+ * limit on the browser's side as much as on the GPU's: mobile Safari refuses a
+ * canvas past about sixteen million pixels outright, and a refusal is a blank
+ * stage rather than a slow one.
+ */
+const CANVAS_PIXEL_BUDGET = 16_000_000;
+
+/**
+ * Device pixels per CSS pixel the canvas is drawn at.
+ *
+ * Two ceilings, and each says something different. Past the picture's own
+ * resolution there are no more pixels to show, so asking for them buys nothing
+ * and the magnification goes on in the compositor — which is the honest picture
+ * of what looking at a photograph past its own pixels is. The budget is the
+ * separate question of what the browser will allocate at all.
+ */
+function canvasDensity(wanted: number, cssWidth: number, cssHeight: number, limit: number): number {
+  const density = Math.min(wanted, Math.max(1, limit) / Math.max(cssWidth, 1));
+  const area = cssWidth * cssHeight * density * density;
+  return area > CANVAS_PIXEL_BUDGET ? density * Math.sqrt(CANVAS_PIXEL_BUDGET / area) : density;
+}
+
 export class Pipeline {
   private readonly glctx: GlContext & { wideGamut: boolean };
   private readonly gl: WebGL2RenderingContext;
@@ -165,6 +192,20 @@ export class Pipeline {
   private ramp: WebGLTexture | null = null;
   private face: FaceTextures | null = null;
   private subject: SubjectTextures | null = null;
+  private fitScaleValue: number | null = null;
+
+  /**
+   * CSS pixels the fitted picture occupies per pixel of the exported one.
+   *
+   * It is what turns the view's multiple of the fit size into the magnification
+   * a photographer reads — a hundred per cent being one pixel of the file on one
+   * pixel of the page — and it is measured here because the fit is measured
+   * here. Null until a render has happened, since until then nothing has been
+   * fitted to anything.
+   */
+  get fitScale(): number | null {
+    return this.fitScaleValue;
+  }
 
   /**
    * @param measureViewport The box the image is allowed to occupy, in CSS pixels. It has
@@ -775,8 +816,14 @@ export class Pipeline {
       cssHeight = box.height;
       cssWidth = box.height * aspect;
     }
-    const bufferWidth = Math.max(1, Math.round(cssWidth * dpr));
-    const bufferHeight = Math.max(1, Math.round(cssHeight * dpr));
+    // The full-resolution size rather than this render's, so the canvas does not
+    // resize between the proxy and the settled render: a backing store that grew
+    // and shrank on every drag would reallocate the drawing buffer and pop.
+    const limit = this.frameSpec(recipe, 'full', fullFrame).width;
+    this.fitScaleValue = cssWidth / limit;
+    const density = canvasDensity(dpr * Math.max(1, options.zoom ?? 1), cssWidth, cssHeight, limit);
+    const bufferWidth = Math.max(1, Math.round(cssWidth * density));
+    const bufferHeight = Math.max(1, Math.round(cssHeight * density));
     if (this.canvas.width !== bufferWidth || this.canvas.height !== bufferHeight) {
       this.canvas.width = bufferWidth;
       this.canvas.height = bufferHeight;

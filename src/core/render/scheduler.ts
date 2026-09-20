@@ -38,6 +38,7 @@ export class RenderScheduler {
   private showOriginal = false;
   private fullFrame = false;
   private atFullResolution = false;
+  private zoom = 1;
   private disposed = false;
 
   constructor(
@@ -54,6 +55,20 @@ export class RenderScheduler {
 
   /** Redraw at whatever resolution is already current, e.g. after a resize. */
   refresh(): void {
+    this.schedulePreview();
+  }
+
+  /**
+   * Magnify the view.
+   *
+   * A redraw at the resolution already current, never a new settle: the recipe
+   * has not moved, so the fills and the restore have nothing to redo and the
+   * measurement would come back with the numbers it already has. What changes is
+   * how many pixels the canvas is given.
+   */
+  setZoom(zoom: number): void {
+    if (this.zoom === zoom) return;
+    this.zoom = zoom;
     this.schedulePreview();
   }
 
@@ -95,6 +110,7 @@ export class RenderScheduler {
       this.pipeline.renderToCanvas(this.hooks.recipe(), scale, {
         original: this.showOriginal,
         fullFrame: this.fullFrame,
+        zoom: this.zoom,
       });
       this.hooks.scaleChanged?.(scale);
     });
@@ -134,6 +150,7 @@ export class RenderScheduler {
     this.pipeline.renderToCanvas(recipe, 'full', {
       original: this.showOriginal,
       fullFrame: this.fullFrame,
+      zoom: this.zoom,
     });
     this.hooks.scaleChanged?.('full');
     if (this.hooks.stats) this.hooks.stats(this.pipeline.measure(recipe));

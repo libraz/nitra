@@ -25,6 +25,16 @@ export interface RenderOptions {
    * discard, so they have to keep rendering while it is being placed.
    */
   fullFrame?: boolean;
+  /**
+   * How much larger than the fit size the picture is being shown at.
+   *
+   * The canvas keeps its fit-sized box and the page magnifies that box, so this
+   * changes nothing about what is drawn — only how many pixels it is drawn
+   * into, which is what makes a magnified view a look at the photograph rather
+   * than a magnified copy of the fitted picture. 1 is fit, and it is what every
+   * path but the stage passes.
+   */
+  zoom?: number;
 }
 
 export interface SourceTexture {
