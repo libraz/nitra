@@ -16,11 +16,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { transferToLinear } from '../src/core/color/spaces';
+import { transferFromLinear, transferToLinear } from '../src/core/color/spaces';
 import {
   CONCEAL_FEATHER,
   CONCEAL_REACH,
   type ConcealSpot,
+  concealDecimation,
   concealRegion,
   concealSpot,
 } from '../src/core/conceal/conceal';
@@ -149,12 +150,24 @@ function maskOf(width: number, height: number, cx: number, cy: number, radius: n
   return mask;
 }
 
-/** Conceal one circle with the transfer left out: the mean of the code values. */
-function concealInGamma(
+/** Left in place of a transfer, for the counterfactual that does without one. */
+const identity = (value: number) => value;
+
+/**
+ * Conceal one circle with every average taken per pixel.
+ *
+ * Two claims read this. It is the arithmetic the shipped path decimates, so it
+ * is the answer that path is approximating; and with the transfer replaced by
+ * {@link identity} it is the gamma-space counterfactual, which then differs from
+ * the reference in the one step being argued about and in nothing else.
+ */
+function concealPerPixel(
   pristine: Uint8ClampedArray,
   imageWidth: number,
   imageHeight: number,
   spot: ConcealSpot,
+  toLinear: (code: number) => number = transferToLinear,
+  fromLinear: (light: number) => number = transferFromLinear,
 ): Uint8ClampedArray {
   const out = new Uint8ClampedArray(pristine);
   const { region, centre, radius } = concealRegion(spot, imageWidth, imageHeight);
@@ -168,21 +181,40 @@ function concealInGamma(
   const carried = new Float32Array(count);
   for (let c = 0; c < 3; c++) {
     for (let i = 0; i < count; i++) {
-      carried[i] = ((patch[i * 4 + c] as number) / 255) * (mask[i] as number);
+      carried[i] = toLinear((patch[i * 4 + c] as number) / 255) * (mask[i] as number);
     }
     boxBlur(carried, region.width, region.height, box, scratch);
     for (let i = 0; i < count; i++) {
       const m = mask[i] as number;
       const w = weight[i] as number;
       if (m <= 0 || w <= 0) continue;
-      const v = (patch[i * 4 + c] as number) / 255;
+      const v = toLinear((patch[i * 4 + c] as number) / 255);
       const mixed = m * ((carried[i] as number) / w) + (1 - m) * v;
       const x = (i % region.width) + region.x;
       const y = Math.floor(i / region.width) + region.y;
-      out[(y * imageWidth + x) * 4 + c] = Math.round(Math.min(1, Math.max(0, mixed)) * 255);
+      out[(y * imageWidth + x) * 4 + c] = Math.round(
+        Math.min(1, Math.max(0, fromLinear(mixed))) * 255,
+      );
     }
   }
   return out;
+}
+
+/** Worst difference between two frames inside the ring, per channel. */
+function widestGap(
+  a: Uint8ClampedArray,
+  b: Uint8ClampedArray,
+  width: number,
+  height: number,
+  spot: ConcealSpot,
+): number {
+  let worst = 0;
+  insideDisc(width, height, spot.x * width, spot.y * height, spot.r * width, (i) => {
+    for (let c = 0; c < 3; c++) {
+      worst = Math.max(worst, Math.abs((a[i + c] as number) - (b[i + c] as number)));
+    }
+  });
+  return worst;
 }
 
 /** Mean light inside the ring after a plain blur: no mask, so no normalisation. */
@@ -258,6 +290,78 @@ describe('the band a conceal has to take out', () => {
       }
     }
   });
+
+  it('leaves nothing at the period the decimated average samples at', () => {
+    // The average is built one sample per `step` pixels and read back between
+    // those samples, so anything the grid folded down, or any seam left where
+    // the reconstruction crosses from one sample to the next, would come back at
+    // that period or a multiple of it. The sweep is over the lattice rather than
+    // over fractions of the radius because it is the lattice being asked about;
+    // every wavelength here is under r and so under the same bound.
+    const radius = SPOT.r * WIDTH;
+    const step = concealDecimation(radius);
+    expect(step).toBeGreaterThan(1);
+    for (const multiple of [1, 1.5, 2, 3, 4, 6]) {
+      const lambda = step * multiple;
+      expect(lambda).toBeLessThanOrEqual(radius);
+      const pristine = frame(WIDTH, HEIGHT, grating(lambda));
+      const plate = new Uint8ClampedArray(pristine);
+      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT);
+      for (const left of residual(plate, WIDTH, HEIGHT, SPOT)) {
+        expect.soft(left, `lambda = ${multiple} steps`).toBeLessThanOrEqual(BAND_LIMIT);
+      }
+    }
+  });
+});
+
+describe('the average the decimated grid stands in for', () => {
+  const WIDTH = 512;
+  const HEIGHT = 512;
+
+  /**
+   * Difference the decimation is allowed against the same average taken per
+   * pixel, in code values. What it bounds is the approximation rather than the
+   * concealing, and it is what decides how far the grid may be thinned: the
+   * reconstruction's error falls as the square of the samples left across the
+   * blur's own radius, so this is the number the reach the grid is thinned to
+   * answers to.
+   */
+  const GRID_LIMIT = 2;
+
+  /** A cliff in each channel, in three directions, at the extreme of contrast. */
+  const cliff = (x: number, y: number, c: number) => {
+    const u = c === 0 ? x : c === 1 ? y : x + y;
+    return u > (c === 2 ? 320 : 200) ? 250 : 8;
+  };
+
+  /** A catchlight: the whole range inside an eighth of the circle. */
+  const point = (x: number, y: number, c: number) => {
+    const d = Math.hypot(x + 0.5 - WIDTH / 2, y + 0.5 - HEIGHT / 2);
+    return d < 12 ? ([255, 250, 245][c] as number) : ([10, 14, 20][c] as number);
+  };
+
+  it('lands within two code values of the same average taken per pixel', () => {
+    // A cliff and a point rather than a grating: what a decimated average risks
+    // is what happens between its samples, and the field a grating leaves inside
+    // the ring is flat enough to agree for the wrong reason. Across a cliff the
+    // blurred field runs its whole range over about one reach, and a point is
+    // the one input whose every sample of the grid but one is empty.
+    for (const paint of [cliff, point]) {
+      for (const spot of [
+        { x: 0.5, y: 0.5, r: 0.15 },
+        { x: 0.5, y: 0.5, r: 0.2 },
+        { x: 0.12, y: 0.5, r: 0.1 },
+      ]) {
+        expect(concealDecimation(spot.r * WIDTH)).toBeGreaterThan(1);
+        const pristine = frame(WIDTH, HEIGHT, paint);
+        const plate = new Uint8ClampedArray(pristine);
+        concealSpot(plate, pristine, WIDTH, HEIGHT, spot);
+        const perPixel = concealPerPixel(pristine, WIDTH, HEIGHT, spot);
+        const gap = widestGap(plate, perPixel, WIDTH, HEIGHT, spot);
+        expect.soft(gap, `r = ${spot.r} at ${spot.x}`).toBeLessThanOrEqual(GRID_LIMIT);
+      }
+    }
+  });
 });
 
 describe('where the colour inside the circle comes from', () => {
@@ -327,7 +431,12 @@ describe('what the average is taken in', () => {
     // What the transfer is worth: averaging the code values instead sinks the
     // ring by 57%, leaving 43% of the light — the mean of gamma-encoded values
     // is not the mean of the light, and the error grows with the contrast.
-    const gamma = linearMean(concealInGamma(pristine, WIDTH, HEIGHT, SPOT), WIDTH, HEIGHT, SPOT);
+    const gamma = linearMean(
+      concealPerPixel(pristine, WIDTH, HEIGHT, SPOT, identity, identity),
+      WIDTH,
+      HEIGHT,
+      SPOT,
+    );
     expect((before - gamma) / before).toBeGreaterThan(0.5);
   });
 });
@@ -445,6 +554,72 @@ describe('a circle at the edge of the frame', () => {
         }
       }
     }
+  });
+});
+
+describe('the part of the plate a circle writes', () => {
+  const WIDTH = 256;
+  const HEIGHT = 256;
+  const SPOT: ConcealSpot = { x: 0.5, y: 0.5, r: 0.1 };
+
+  /** A plate whose every colour byte differs from the source it was made from. */
+  function dirtied(pristine: Uint8ClampedArray): Uint8ClampedArray {
+    const out = new Uint8ClampedArray(pristine);
+    for (let i = 0; i < out.length; i += 4) {
+      for (let c = 0; c < 3; c++) out[i + c] = ((out[i + c] as number) + 128) % 256;
+    }
+    return out;
+  }
+
+  it('writes no pixel the mask does not reach', () => {
+    // The region is as wide as three box passes reach, which at the shipped
+    // reach is some twenty times the mask's own area. Everything in it that the
+    // mask does not touch is somebody else's work — the fills the stage under
+    // this one left — and writing the source back over it would take them out.
+    const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * 0.5));
+    const plate = dirtied(pristine);
+    const before = plate.slice();
+    const written = concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT);
+
+    const cx = SPOT.x * WIDTH;
+    const cy = SPOT.y * HEIGHT;
+    const radius = SPOT.r * WIDTH;
+    const outer = radius * (1 + CONCEAL_FEATHER);
+    let changed = 0;
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        const i = (y * WIDTH + x) * 4;
+        const touched = [0, 1, 2, 3].some((c) => plate[i + c] !== before[i + c]);
+        if (!touched) continue;
+        changed++;
+        expect
+          .soft(Math.hypot(x + 0.5 - cx, y + 0.5 - cy), `written at ${x}, ${y}`)
+          .toBeLessThan(outer);
+        // And the rectangle the caller re-uploads holds every one of them.
+        expect.soft(x, `column ${x} against the rectangle`).toBeGreaterThanOrEqual(written.x);
+        expect.soft(x, `column ${x} against the rectangle`).toBeLessThan(written.x + written.width);
+        expect.soft(y, `row ${y} against the rectangle`).toBeGreaterThanOrEqual(written.y);
+        expect.soft(y, `row ${y} against the rectangle`).toBeLessThan(written.y + written.height);
+      }
+    }
+    // The circle did its work: a measurement that wrote nothing would pass every
+    // assertion above.
+    expect(changed).toBeGreaterThan(Math.PI * radius * radius * 0.5);
+  });
+
+  it('reports the mask around the circle rather than the region the blur needed', () => {
+    const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * 0.5));
+    const written = concealSpot(dirtied(pristine), pristine, WIDTH, HEIGHT, SPOT);
+    const { region } = concealRegion(SPOT, WIDTH, HEIGHT);
+
+    // The region has to hold what the blur reads; the rectangle only has to hold
+    // what was laid down, and uploading the difference is uploading bytes that
+    // did not change.
+    expect(written.width * written.height).toBeLessThan((region.width * region.height) / 4);
+    expect(written.x).toBeGreaterThanOrEqual(region.x);
+    expect(written.y).toBeGreaterThanOrEqual(region.y);
+    expect(written.x + written.width).toBeLessThanOrEqual(region.x + region.width);
+    expect(written.y + written.height).toBeLessThanOrEqual(region.y + region.height);
   });
 });
 
