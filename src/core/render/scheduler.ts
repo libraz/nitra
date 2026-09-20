@@ -19,8 +19,14 @@ export interface SchedulerHooks {
   stats?(stats: RenderStats): void;
   /** Called whenever the displayed resolution changes. */
   scaleChanged?(scale: 'proxy' | 'full'): void;
-  /** Called when the fill, or the texture it has to go into, could not be made. */
-  healFailed?(error: unknown): void;
+  /**
+   * Called when the plate, or the texture it has to go into, could not be made.
+   *
+   * Named for the plate rather than for the fill because every CPU stage
+   * accumulates in it: a circle that failed to conceal a reflection reported as
+   * a brush that did not work would send somebody looking in the wrong place.
+   */
+  plateFailed?(error: unknown): void;
 }
 
 /** How long the recipe has to stay still before the full render is worth it. */
@@ -119,7 +125,7 @@ export class RenderScheduler {
     try {
       await this.pipeline.syncPlate(recipe);
     } catch (error) {
-      this.hooks.healFailed?.(error);
+      this.hooks.plateFailed?.(error);
     }
     // Something moved while the fill was running, and there is a settle of its
     // own on the way for whatever it was.

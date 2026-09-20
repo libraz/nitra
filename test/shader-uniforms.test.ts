@@ -192,6 +192,130 @@ describe('the stage shaders and the calls that drive them', () => {
   });
 });
 
+/**
+ * The body of every method of the `Pipeline` class, by name.
+ *
+ * Crude on purpose, in the same way the uniform attribution above is: the
+ * methods are the only things declared at that indentation inside the class, so
+ * cutting between one header and the next is enough to attribute a line to a
+ * method without parsing TypeScript. Only the class is read, since the helpers
+ * below it have their own bodies at the same indentation.
+ */
+function pipelineMethods(): Map<string, string> {
+  const from = pipelineSource.indexOf('export class Pipeline {');
+  const to = pipelineSource.indexOf('\n}\n', from);
+  const body = pipelineSource.slice(from, to);
+  const starts: [string, number][] = [];
+  for (const match of body.matchAll(
+    /^ {2}(?:private |protected |public )?(?:async )?(?:get )?(\w+)(?=\s*[(<])/gm,
+  )) {
+    starts.push([match[1] as string, match.index]);
+  }
+  const out = new Map<string, string>();
+  for (const [index, [name, at]] of starts.entries()) {
+    out.set(name, body.slice(at, starts[index + 1]?.[1] ?? body.length));
+  }
+  return out;
+}
+
+/**
+ * Everything that draws or measures the picture, and so samples the photograph.
+ *
+ * The canvas at both scales, the export and every tile of one, the finish
+ * thumbnails, the guardrails, and the three measurements taken over the working
+ * area. Written out so that a new one is unchecked until it is named here, and
+ * checked by the test below against every method that evaluates the graph.
+ */
+const PICTURE_PATHS = [
+  'renderToCanvas',
+  'readFullResolution',
+  'renderThumbnail',
+  'measure',
+  'measureFace',
+  'measureTextureRetention',
+  'measureSkinSpread',
+];
+
+describe('the paths that sample the photograph', () => {
+  // What these are for is the conceal stage, and the form they take is the
+  // design's: the plate is what has had the identifying band taken out of it,
+  // and everything downstream is a function of the plate, so nothing downstream
+  // can put back what is not there — whether it is a point non-linearity or a
+  // filter. What has to be checked is therefore structural. A path that reads
+  // the decoded photograph instead is not a weaker version of the guarantee; it
+  // is the guarantee absent, and it is invisible in the picture because the
+  // difference is a circle somewhere in a frame nobody is looking at.
+  it('evaluates the graph from nowhere but a pass context', () => {
+    const methods = pipelineMethods();
+    expect(methods.has('runFinish'), 'the class was not read to its end').toBe(true);
+    const evaluating = [...methods]
+      .filter(([, body]) => body.includes('this.dag.evaluate('))
+      .map(([name]) => name);
+    expect(new Set(evaluating)).toEqual(new Set(PICTURE_PATHS));
+    for (const name of PICTURE_PATHS) {
+      expect(methods.get(name), `${name} does not build a pass context`).toMatch(
+        /=\s*this\.context\(/,
+      );
+    }
+  });
+
+  it('gives that context the plate while there is one', () => {
+    // One expression decides it for every path at once, which is why they are
+    // all made to come through here.
+    expect(pipelineSource).toMatch(
+      /source: asDecoded \? this\.requireSource\(\) : this\.photograph\(\)/,
+    );
+    expect(pipelineSource).toMatch(
+      /private photograph\(\): SourceTexture \{\s+return this\.healed \?\? this\.requireSource\(\);/,
+    );
+  });
+
+  it('reads the photograph as decoded on one path, and it is the comparison view', () => {
+    // The exception, and it is deliberate: holding the button down shows the
+    // photograph as it arrived, which is the only thing that view could mean.
+    // It is on screen and never in a file, and the tools whose work would be
+    // undone by it are the ones the stage excludes from the comparison.
+    const methods = pipelineMethods();
+    const asDecoded = [...methods]
+      .filter(([, body]) => /this\.context\([^)]*,[^)]*,[^)]*\)/.test(body))
+      .map(([name]) => name);
+    expect(asDecoded).toEqual(['renderToCanvas']);
+    expect(methods.get('renderToCanvas')).toMatch(/this\.context\(recipe, spec, original\)/);
+    expect(methods.get('renderToCanvas')).toMatch(/const original = options\.original/);
+  });
+
+  it('reads the decoded pixels only to build a plate on', () => {
+    // They are held so that a fill can be taken away and so that a circle has
+    // something pristine to be concealed from. Anything else that read them
+    // would be a path rendering the photograph as it arrived.
+    const readers = [...pipelineMethods()]
+      .filter(([, body]) => body.includes('this.decoded'))
+      .map(([name]) => name);
+    expect(new Set(readers)).toEqual(new Set(['setSource', 'syncRestore']));
+  });
+
+  it('binds no sampler in those paths to the photograph itself', () => {
+    // The mask refinement is not in the list and reads the source texture
+    // directly, which is allowed for the reason it is not in the list: what it
+    // produces is a mask, and a mask cannot carry the picture's detail back into
+    // the frame. These produce the picture.
+    const methods = pipelineMethods();
+    for (const name of [...PICTURE_PATHS, 'runFinish']) {
+      const body = methods.get(name) as string;
+      expect(body, `${name} binds the source texture`).not.toMatch(/source\.texture/);
+    }
+  });
+
+  it('leaves the graph no way to the photograph but the context', () => {
+    // The nodes take a context and nothing else, so the substitution reaches all
+    // of them at once. Paired with the signature check above: the plate has to
+    // arrive, and it has to be told apart from what it replaced.
+    const nodes = graphSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(nodes).not.toMatch(/\bdecoded\b/);
+    expect(nodes).not.toMatch(/\bplate\b/);
+  });
+});
+
 describe('the stage shaders themselves', () => {
   it('writes a result from every one of them', () => {
     for (const [program, source] of Object.entries(PROGRAMS)) {

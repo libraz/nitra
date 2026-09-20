@@ -281,20 +281,24 @@ export class Pipeline {
   }
 
   /**
-   * Bring the plate in line with the recipe, restoring first and then filling.
+   * Bring the plate in line with the recipe: restore, then fill, then conceal.
    *
-   * The order is the stage order and is not free to change: a blemish is filled
+   * The order is the stage order and is not free to change. A blemish is filled
    * on the face that ends up in the picture, so a fill placed on a restored
-   * cheek has to be applied after the cheek arrives. Restoring second would fill
-   * the generated face and then throw the result away.
+   * cheek has to be applied after the cheek arrives; restoring second would fill
+   * the generated face and then throw the result away. And a circle is the last
+   * word inside itself, so it goes over the fills rather than under them — a
+   * fill that put sharp structure back inside a ring would make the ring's
+   * promise false.
    *
    * This is the only public way in, so the ordering lives here rather than in
-   * each caller. Both halves must run before an export for the same reason: an
-   * export taken before a settle would write the generated face back in.
+   * each caller. Every part of it must run before an export for the same reason:
+   * an export taken before a settle would write the generated face back in, or
+   * the reflection.
    */
   async syncPlate(recipe: Recipe): Promise<void> {
     this.syncRestore(recipe);
-    await this.syncHeal(recipe);
+    await this.syncSpots(recipe);
   }
 
   /**
@@ -375,13 +379,14 @@ export class Pipeline {
   }
 
   /**
-   * Fill the spots the recipe asks for, and put the result on the GPU.
+   * Fill the spots and conceal the circles the recipe asks for, and put the
+   * result on the GPU.
    *
    * A step the caller takes before rendering rather than a node in the graph.
-   * Everything else is a shader the renderer can run inside a frame; this one
-   * reads and writes pixels on the CPU, and a render that happens before it has
-   * run shows the photograph as it was, which is the right thing to show while
-   * the fill has not happened yet.
+   * Everything else is a shader the renderer can run inside a frame; these read
+   * and write pixels on the CPU, and a render that happens before they have run
+   * shows the photograph as it was, which is the right thing to show while the
+   * work has not happened yet.
    *
    * The promise is the stage's contract rather than a description of what it
    * does: the fill does not yield, and while it runs nothing else does. Keeping
@@ -390,16 +395,16 @@ export class Pipeline {
    *
    * It must never be awaited from a drag. The fill is tenths of a second at the
    * top of the brush's range, and a pixel read inside the loop is a slider that
-   * stops following the pointer. Spots are placed by a click, and this runs on
-   * that click.
+   * stops following the pointer. Spots and circles are placed by a click, and
+   * this runs on that click.
    *
    * What comes out is a second source texture standing in for the photograph.
-   * Substituting the source is what puts the stage where the design fixes it —
-   * ahead of the reshaping, which is why the coordinates are in the
+   * Substituting the source is what puts the stages where the design fixes them
+   * — ahead of the reshaping, which is why the coordinates are in the
    * photograph's own frame — and it means the stages downstream need to know
-   * nothing about healing at all: they read the source they always read.
+   * nothing about either of them: they read the source they always read.
    */
-  private async syncHeal(recipe: Recipe): Promise<void> {
+  private async syncSpots(recipe: Recipe): Promise<void> {
     const plate = this.plate;
     const source = this.source;
     if (!plate || !source) return;
@@ -409,16 +414,16 @@ export class Pipeline {
     // from happening twice when both stages have something to say.
     const pending = this.restored !== null && this.healed === null;
     // This runs on the way to every settled render, and almost none of them
-    // placed a spot.
-    if (!pending && plate.matches(recipe.heal)) return;
+    // placed anything.
+    if (!pending && plate.matches(recipe.conceal, recipe.heal)) return;
 
-    const update = plate.apply(recipe.heal);
+    const update = plate.apply(recipe.conceal, recipe.heal);
     if (update === null && !pending) return;
 
-    // The plate is null again once the last spot goes, and what that means
-    // depends on whether anything was restored: back to the photograph if not,
-    // and back to the photograph with its own faces in it if so. Reading the
-    // decoded pixels here would undo the restore whenever a fill was removed.
+    // The plate is null again once the last spot or circle goes, and what that
+    // means depends on whether anything was restored: back to the photograph if
+    // not, and back to the photograph with its own faces in it if so. Reading
+    // the decoded pixels here would undo the restore whenever one was removed.
     const pixels = plate.pixels ?? this.restored;
     if (!pixels) {
       // Back to the photograph, and back to costing nothing.
