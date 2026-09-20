@@ -28,7 +28,16 @@ import { cutOut } from '../heal/inpaint';
 import { HealPlate } from '../heal/plate';
 import type { SourceImage } from '../io/decode';
 import { buildCurveLut } from '../recipe/curve';
-import { isIdentityCurve, isSkinNeutral, neutralRecipe, type Recipe } from '../recipe/schema';
+import {
+  isIdentityCurve,
+  isRestoreNeutral,
+  isSkinNeutral,
+  neutralRecipe,
+  type Recipe,
+  restoreSignature,
+} from '../recipe/schema';
+import { pairFaces } from '../restore/align';
+import { type GraftFace, type GraftImage, graft } from '../restore/graft';
 import { rasterizeText, textSignature } from '../text/raster';
 import type {
   FaceStats,
@@ -39,6 +48,8 @@ import type {
   RenderOptions,
   RenderScale,
   RenderStats,
+  RestoreReference,
+  RestoreReport,
   SourceTexture,
   SubjectTextures,
 } from './context';
@@ -100,7 +111,14 @@ import {
   rectOf,
 } from './uniforms';
 
-export type { FaceStats, RenderOptions, RenderScale, RenderStats } from './context';
+export type {
+  FaceStats,
+  RenderOptions,
+  RenderScale,
+  RenderStats,
+  RestoreReference,
+  RestoreReport,
+} from './context';
 
 /** Longest edge of the interactive proxy. */
 export const PROXY_LONG_EDGE = 1024;
@@ -130,8 +148,14 @@ export class Pipeline {
   private readonly programs: Programs;
   private readonly dag: Dag<PassContext, RenderTarget, Recipe>;
   private source: SourceTexture | null = null;
+  private decoded: GraftImage | null = null;
   private plate: HealPlate | null = null;
   private healed: SourceTexture | null = null;
+  private reference: RestoreReference | null = null;
+  /** The frame with the photographed faces in it, while there are any. */
+  private restored: Uint8ClampedArray | null = null;
+  private restoreKey = 'none';
+  private restoreReport: RestoreReport | null = null;
   private generation = 0;
   private curveTexture: WebGLTexture | null = null;
   private curveKey = 'identity';
@@ -216,9 +240,142 @@ export class Pipeline {
       fromSrgb: image.space === 'srgb',
       generation: this.generation,
     };
+    this.decoded = {
+      data: image.data,
+      width: image.width,
+      height: image.height,
+      space: image.space,
+    };
+    // The reference is deliberately kept. One photograph against several
+    // generated versions of it is the working shape, and reopening the original
+    // for each of them would be the app forgetting something it is holding.
+    this.restored = null;
+    this.restoreKey = 'none';
+    this.restoreReport = null;
     // The decoded pixels are held, not copied: they are the only record of what
     // is under a fill, and a copy is made only once something is filled.
     this.plate = new HealPlate(image.data, image.width, image.height);
+  }
+
+  /**
+   * Take delivery of the photograph the faces are restored from.
+   *
+   * Passing null is how the reference is put away. Neither this nor the recipe
+   * alone switches the stage on: the recipe names a file and this supplies one,
+   * and a recipe reopened without its reference renders the frame it was given.
+   */
+  setReference(reference: RestoreReference | null): void {
+    this.reference = reference;
+    // A value no key can be computed as, rather than the key for an idle stage:
+    // putting the reference away has to *recompute* — to nothing, and so undo
+    // the patch — and writing the idle key here would leave the next settle
+    // agreeing it was already up to date with the face still pasted in. The
+    // same applies in the other direction, to a reference reopened under the
+    // name it already had after being changed on disk.
+    this.restoreKey = 'stale';
+  }
+
+  /** What the last restore found, or null while none has run. */
+  get lastRestore(): RestoreReport | null {
+    return this.restoreReport;
+  }
+
+  /**
+   * Bring the plate in line with the recipe, restoring first and then filling.
+   *
+   * The order is the stage order and is not free to change: a blemish is filled
+   * on the face that ends up in the picture, so a fill placed on a restored
+   * cheek has to be applied after the cheek arrives. Restoring second would fill
+   * the generated face and then throw the result away.
+   *
+   * This is the only public way in, so the ordering lives here rather than in
+   * each caller. Both halves must run before an export for the same reason: an
+   * export taken before a settle would write the generated face back in.
+   */
+  async syncPlate(recipe: Recipe): Promise<void> {
+    this.syncRestore(recipe);
+    await this.syncHeal(recipe);
+  }
+
+  /**
+   * Put the photographed faces back into the frame.
+   *
+   * A substituted source, like the fills and for the same reasons: it happens
+   * once rather than per frame, it reads and writes pixels on the CPU, and every
+   * stage downstream then reads the photograph it always reads. What it buys by
+   * being here rather than at the end is the whole reason a patch stops looking
+   * like one — the grade runs over the seam and the grain lands on it, so the
+   * restored face is finished by the same pass as the frame around it.
+   *
+   * It is synchronous, and that is the contract rather than a description: it
+   * runs from the settled render, never from a drag.
+   */
+  private syncRestore(recipe: Recipe): void {
+    const decoded = this.decoded;
+    if (!decoded) return;
+
+    const reference = this.reference;
+    const usable =
+      !isRestoreNeutral(recipe.restore) &&
+      reference !== null &&
+      reference.fileName === recipe.restore.reference;
+    // The analysis is named because it decides where the patch goes, and it
+    // arrives after the first render: without it here, a restore asked for
+    // before the models landed would never be reconsidered.
+    const key = usable ? `${restoreSignature(recipe.restore)}:${this.face?.key ?? 'none'}` : 'none';
+    if (key === this.restoreKey) return;
+
+    // Everything that can fail happens before anything is assigned, so a graft
+    // that throws leaves the renderer holding the state it already had rather
+    // than a plate built on pixels nobody produced.
+    let restored: Uint8ClampedArray | null = null;
+    let report: RestoreReport | null = null;
+
+    if (usable && this.face) {
+      const target = this.face;
+      const pairs = pairFaces(target.faces, reference.faces);
+      report = {
+        paired: pairs.length,
+        unpaired: target.faces.length - pairs.length,
+        residual: pairs.reduce((worst, pair) => Math.max(worst, pair.residual), 0),
+      };
+      const faces: GraftFace[] = pairs.flatMap((pair) => {
+        const into = target.faces[pair.destination];
+        const from = reference.faces[pair.reference];
+        if (!into || !from) return [];
+        return [
+          { outline: into.oval, source: from.oval, width: into.width, transform: pair.transform },
+        ];
+      });
+      restored =
+        graft(decoded, reference.image, faces, recipe.restore.edge, recipe.restore.match)?.data ??
+        null;
+    }
+
+    this.restoreKey = key;
+    const previous = this.restored;
+    this.restored = restored;
+    this.restoreReport = report;
+
+    // Nothing to do when neither the old state nor the new one has a patch in
+    // it, which is every settled render on a photograph nobody is restoring.
+    if (!previous && !this.restored) return;
+
+    // A different photograph as far as the graph is concerned, and the plate is
+    // rebuilt on it: the fills are replayed onto the face that is now there.
+    this.generation += 1;
+    this.plate = new HealPlate(this.restored ?? decoded.data, decoded.width, decoded.height);
+    this.dropHealed();
+    if (this.restored) {
+      this.healed = {
+        texture: createSourceTexture(this.gl, decoded.width, decoded.height, this.restored),
+        width: decoded.width,
+        height: decoded.height,
+        fromSrgb: decoded.space === 'srgb',
+        generation: this.generation,
+      };
+    }
+    this.dag.invalidate();
   }
 
   /**
@@ -246,7 +403,7 @@ export class Pipeline {
    * photograph's own frame — and it means the stages downstream need to know
    * nothing about healing at all: they read the source they always read.
    */
-  async syncHeal(recipe: Recipe): Promise<void> {
+  private async syncHeal(recipe: Recipe): Promise<void> {
     const plate = this.plate;
     const source = this.source;
     if (!plate || !source) return;
@@ -257,7 +414,11 @@ export class Pipeline {
     const update = plate.apply(recipe.heal);
     if (update === null) return;
 
-    const pixels = plate.pixels;
+    // The plate is null again once the last spot goes, and what that means
+    // depends on whether anything was restored: back to the photograph if not,
+    // and back to the photograph with its own faces in it if so. Reading the
+    // decoded pixels here would undo the restore whenever a fill was removed.
+    const pixels = plate.pixels ?? this.restored;
     if (!pixels) {
       // Back to the photograph, and back to costing nothing.
       this.dropHealed();

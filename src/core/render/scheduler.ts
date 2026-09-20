@@ -105,18 +105,19 @@ export class RenderScheduler {
   /**
    * The full-resolution render, once the recipe has stopped moving.
    *
-   * The Heal stage runs here and nowhere else, which is what keeps it out of the
-   * drag loop by construction rather than by everyone remembering: this function
-   * is only reachable from a recipe that has been still for {@link SETTLE_MS},
-   * and the proxy path — the one a moving slider goes through — cannot call it.
-   * Until it has run, the proxy shows the photograph with the spot still in it,
-   * which is what has actually happened so far.
+   * The two stages that work on pixels rather than in a shader — the restore
+   * and the fills — run here and nowhere else, which is what keeps them out of
+   * the drag loop by construction rather than by everyone remembering: this
+   * function is only reachable from a recipe that has been still for
+   * {@link SETTLE_MS}, and the proxy path — the one a moving slider goes through
+   * — cannot call it. Until it has run, the proxy shows the photograph with the
+   * spot still in it, which is what has actually happened so far.
    */
   private async renderSettled(): Promise<void> {
     if (this.disposed || !this.pipeline.hasSource) return;
     const recipe = this.hooks.recipe();
     try {
-      await this.pipeline.syncHeal(recipe);
+      await this.pipeline.syncPlate(recipe);
     } catch (error) {
       this.hooks.healFailed?.(error);
     }

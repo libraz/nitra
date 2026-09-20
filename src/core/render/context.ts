@@ -10,6 +10,7 @@
 import type { Mat3 } from '../color/matrix';
 import type { FaceRegions } from '../face/geometry';
 import type { FaceMaskRegion } from '../face/raster';
+import type { GraftImage } from '../restore/graft';
 import type { GlContext, Program, RenderTarget } from './gl';
 
 export type RenderScale = 'proxy' | 'full';
@@ -120,6 +121,43 @@ export interface SubjectTextures {
   /** Face-skin, hair and person confidence, at the model's own 256 pixels. */
   segment: WebGLTexture;
   key: string;
+}
+
+/**
+ * The photograph the faces are taken back from, and what was found in it.
+ *
+ * Held by the renderer rather than named in the recipe, for the reason a
+ * supplied typeface is: it is pixels, and a recipe has none. It does not survive
+ * a reload, and the recipe carrying its file name is what lets the panel say the
+ * reference is missing instead of quietly restoring from something else.
+ *
+ * It does survive a new frame being opened, because the working shape here is
+ * one photograph against several generated versions of it. Pairing it with a
+ * frame it has nothing to do with is not guarded against by refusing to try —
+ * the fit's own residual is what says so, and it says it with a number.
+ */
+export interface RestoreReference {
+  image: GraftImage;
+  faces: readonly FaceRegions[];
+  /** What the file was called, which is what the recipe carries. */
+  fileName: string;
+}
+
+/** What the last restore found, for the panel to report. */
+export interface RestoreReport {
+  /** Faces the reference and the frame agreed on. */
+  paired: number;
+  /** Faces in the frame no reference face was found for. */
+  unpaired: number;
+  /**
+   * The worst residual among the pairs, as a fraction of a face width.
+   *
+   * Zero when nothing paired. What a similarity could not absorb is the
+   * generator having changed the face's shape, pose or expression, which is
+   * exactly the case a patch cannot be laid over — so this is the one number
+   * worth putting in front of somebody before they trust the result.
+   */
+  residual: number;
 }
 
 export interface PassContext {

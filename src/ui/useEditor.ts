@@ -41,9 +41,15 @@ import {
   neutralTextLayer,
   paramDef,
   type Recipe,
+  type RestoreParams,
   type TextLayer,
 } from '../core/recipe/schema';
-import { Pipeline, type RenderStats } from '../core/render/pipeline';
+import {
+  Pipeline,
+  type RenderStats,
+  type RestoreReference,
+  type RestoreReport,
+} from '../core/render/pipeline';
 import { RenderScheduler } from '../core/render/scheduler';
 import { fontsReady, loadFontFile } from '../core/text/fonts';
 import { type MessageKey, type Translate, useI18n } from '../i18n';
@@ -53,7 +59,24 @@ import { writeParam } from './params';
 const THUMBNAIL_EDGE = 220;
 
 /** The panels the tool rail switches between. */
-export type Tool = 'adjust' | 'heal' | 'crop' | 'text' | 'tiles' | 'metadata' | 'export';
+export type Tool =
+  | 'adjust'
+  | 'restore'
+  | 'heal'
+  | 'crop'
+  | 'text'
+  | 'tiles'
+  | 'metadata'
+  | 'export';
+
+/** The photograph the faces are restored from, as the panel needs to show it. */
+export interface ReferenceState {
+  fileName: string;
+  width: number;
+  height: number;
+  /** Faces found in it. Zero is a reference nothing can be taken from. */
+  faces: number;
+}
 
 /** A change to the metadata block, one group at a time. */
 export interface MetadataPatch {
@@ -110,6 +133,17 @@ export interface Editor {
   faceState: FaceState;
   /** How many faces the analysis found. Zero until it has. */
   faceCount: number;
+  /** The reference photograph, once one has been opened. */
+  reference: ReferenceState | null;
+  /** True while the reference is being decoded and analysed. */
+  referenceBusy: boolean;
+  /**
+   * What the last restore found, refreshed with the settled render.
+   *
+   * Null until one has run, which is also what it is whenever the stage is off:
+   * the panel says nothing about a restore that did not happen.
+   */
+  restoreReport: RestoreReport | null;
   toneResponse: Uint8Array | null;
   thumbnails: ReadonlyMap<string, ImageData>;
   scale: 'proxy' | 'full';
@@ -151,6 +185,9 @@ export interface Editor {
   resetFraming: () => void;
   setTiles: (patch: Partial<Recipe['tiles']>) => void;
   matchCropToTiles: (tileRatio: number) => void;
+  setRestore: (patch: Partial<RestoreParams>) => void;
+  loadReference: (file: File) => void;
+  clearReference: () => void;
   setHealRadius: (value: number) => void;
   addHealSpot: (x: number, y: number) => void;
   removeHealSpot: (index: number) => void;
@@ -249,6 +286,16 @@ export function useEditor(): Editor {
    */
   const analysisRef = useRef<FaceAnalysis | null>(null);
 
+  /**
+   * The reference photograph, for the same reason the analysis is kept.
+   *
+   * Its pixels and its outlines are what the restore works from, and neither is
+   * in the recipe. A remount would otherwise leave a recipe naming a reference
+   * the renderer no longer holds, which renders as the generated face coming
+   * back — exactly the failure the stage exists to undo.
+   */
+  const referenceRef = useRef<RestoreReference | null>(null);
+
   const [source, setSource] = useState<SourceImage | null>(null);
   const sourceRef = useRef<SourceImage | null>(null);
   sourceRef.current = source;
@@ -263,6 +310,9 @@ export function useEditor(): Editor {
   const [stats, setStats] = useState<RenderStats | null>(null);
   const [faceState, setFaceState] = useState<FaceState>('idle');
   const [faceCount, setFaceCount] = useState(0);
+  const [reference, setReferenceState] = useState<ReferenceState | null>(null);
+  const [referenceBusy, setReferenceBusy] = useState(false);
+  const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [toneResponse, setToneResponse] = useState<Uint8Array | null>(null);
   const [thumbnails, setThumbnails] = useState<ReadonlyMap<string, ImageData>>(new Map());
   const [scale, setScale] = useState<'proxy' | 'full'>('proxy');
@@ -307,6 +357,9 @@ export function useEditor(): Editor {
       stats: (next) => {
         setStats(next);
         setToneResponse(pipeline.toneResponse(recipeRef.current));
+        // The restore runs on the way to this render and nowhere else, so this
+        // is the moment its measurement exists to be read.
+        setRestoreReport(pipeline.lastRestore);
       },
       scaleChanged: (next) => {
         setScale(next);
@@ -328,6 +381,7 @@ export function useEditor(): Editor {
     if (sourceRef.current) {
       pipeline.setSource(sourceRef.current);
       pipeline.setFaceAnalysis(analysisRef.current);
+      pipeline.setReference(referenceRef.current);
       scheduler.markDirty();
     }
 
@@ -602,6 +656,80 @@ export function useEditor(): Editor {
     commit({ ...recipeRef.current, heal: [] });
   }, [commit]);
 
+  const setRestore = useCallback(
+    (patch: Partial<RestoreParams>) => {
+      const current = recipeRef.current;
+      commit({ ...current, restore: { ...current.restore, ...patch } });
+    },
+    [commit],
+  );
+
+  /**
+   * Open the photograph the faces are to be taken back from.
+   *
+   * Analysed on arrival, because the outlines are what the fit is made of and
+   * there is nothing to defer: unlike the frame's own analysis, which the whole
+   * app is usable without, this one is the feature. A reference with no face in
+   * it is loaded anyway and reported as having none — that is a fact about the
+   * file the panel can state, and it is different from the models failing.
+   *
+   * Naming the file in the recipe is the last step, so the stage cannot switch
+   * itself on against a reference that did not finish arriving.
+   */
+  const loadReference = useCallback(
+    (file: File) => {
+      setReferenceBusy(true);
+      void (async () => {
+        try {
+          const image = await decodeSourceFile(file, file.name);
+          const analysis = await analyzeFace(asImageData(image));
+          const next: RestoreReference = {
+            image: {
+              data: image.data,
+              width: image.width,
+              height: image.height,
+              space: image.space,
+            },
+            faces: analysis.faces,
+            fileName: image.fileName,
+          };
+          referenceRef.current = next;
+          pipelineRef.current?.setReference(next);
+          setReferenceState({
+            fileName: image.fileName,
+            width: image.width,
+            height: image.height,
+            faces: analysis.faces.length,
+          });
+          setRestore({ reference: image.fileName });
+          notify(
+            analysis.faces.length > 0
+              ? t('restore.toastLoaded', {
+                  name: image.fileName,
+                  count: analysis.faces.length,
+                })
+              : t('restore.toastNoFace', { name: image.fileName }),
+            analysis.faces.length > 0 ? 'normal' : 'alert',
+          );
+        } catch (err) {
+          const detail = err instanceof Error ? ` — ${err.message}` : '';
+          notify(`${t('restore.toastFailed')}${detail}`, 'alert');
+        } finally {
+          setReferenceBusy(false);
+        }
+      })();
+    },
+    [notify, setRestore, t],
+  );
+
+  const clearReference = useCallback(() => {
+    referenceRef.current = null;
+    pipelineRef.current?.setReference(null);
+    setReferenceState(null);
+    setRestoreReport(null);
+    setRestore({ reference: '' });
+  }, [setRestore]);
+
   /**
    * Register a typeface from the user's own machine and set it on the caption.
    *
@@ -793,10 +921,11 @@ export function useEditor(): Editor {
       try {
         const current = recipeRef.current;
         const plan = planExport(image.width, image.height, current);
-        // The export is not allowed to be behind the preview. The fills the
-        // preview is showing were made on the way to a settled render, and an
-        // export taken before one has happened would write the spots back in.
-        await pipeline.syncHeal(current);
+        // The export is not allowed to be behind the preview. The restore and
+        // the fills the preview is showing were made on the way to a settled
+        // render, and an export taken before one has happened would write the
+        // generated face and the spots back in.
+        await pipeline.syncPlate(current);
         const pixels = pipeline.readFullResolution(current);
         const result = await exportImage(pixels, current, image.fileName, plan.tiles, image.exif);
         const download = result.archive ?? (result.files[0] as { name: string; blob: Blob });
@@ -932,6 +1061,9 @@ export function useEditor(): Editor {
       stats,
       faceState,
       faceCount,
+      reference,
+      referenceBusy,
+      restoreReport,
       toneResponse,
       thumbnails,
       scale,
@@ -961,6 +1093,9 @@ export function useEditor(): Editor {
       resetFraming,
       setTiles,
       matchCropToTiles,
+      setRestore,
+      loadReference,
+      clearReference,
       setHealRadius,
       addHealSpot,
       removeHealSpot,
@@ -988,6 +1123,9 @@ export function useEditor(): Editor {
       stats,
       faceState,
       faceCount,
+      reference,
+      referenceBusy,
+      restoreReport,
       toneResponse,
       thumbnails,
       scale,
@@ -1016,6 +1154,9 @@ export function useEditor(): Editor {
       resetFraming,
       setTiles,
       matchCropToTiles,
+      setRestore,
+      loadReference,
+      clearReference,
       addHealSpot,
       removeHealSpot,
       clearHeal,

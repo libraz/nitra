@@ -204,6 +204,16 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
       <circle cx="10" cy="17" r="2" />
     </>
   ),
+  // A face inside a frame, with the frame open on one side: the photographed
+  // face going back into the picture.
+  restore: (
+    <>
+      <path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4" />
+      <path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4" />
+      <circle cx="12" cy="10" r="2.6" />
+      <path d="M8 17.5a4.6 4.6 0 0 1 8 0" />
+    </>
+  ),
   heal: (
     <>
       <rect x="3" y="9" width="18" height="6" rx="3" transform="rotate(-45 12 12)" />
@@ -249,6 +259,9 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
 /** The order the rail reads in. The first entry is where the editor opens. */
 export const TOOL_ORDER: readonly Tool[] = [
   'adjust',
+  // Ahead of the fills, which is the order the picture is built in: a blemish is
+  // filled on the face that ends up in the photograph.
+  'restore',
   'heal',
   'crop',
   'text',

@@ -11,6 +11,7 @@ import { Guide, guideSeen, rememberGuideSeen } from './components/Guide';
 import { HealPanel } from './components/HealPanel';
 import { MetadataPanel } from './components/MetadataPanel';
 import { CropOverlay, HealOverlay, TextOverlay, TileOverlay } from './components/overlays';
+import { RestorePanel } from './components/RestorePanel';
 import { SimplePanel } from './components/SimplePanel';
 import { Stage } from './components/Stage';
 import { TextPanel } from './components/TextPanel';
@@ -174,6 +175,20 @@ function Workspace() {
               onSimple={() => editor.setMode('simple')}
             />
           ))}
+
+        {editor.tool === 'restore' && (
+          <RestorePanel
+            restore={editor.recipe.restore}
+            reference={editor.reference}
+            busy={editor.referenceBusy}
+            report={editor.restoreReport}
+            hasImage={editor.source !== null}
+            faceCount={editor.faceCount}
+            onLoad={editor.loadReference}
+            onClear={editor.clearReference}
+            onChange={editor.setRestore}
+          />
+        )}
 
         {editor.tool === 'heal' && (
           <HealPanel

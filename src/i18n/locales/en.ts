@@ -35,6 +35,7 @@ export const en = {
   'rail.compare': 'Compare with original (hold)',
 
   'tool.adjust': 'Adjust',
+  'tool.restore': 'Restore the face',
   'tool.heal': 'Remove blemishes',
   'tool.crop': 'Crop and rotate',
   'tool.text': 'Text',
@@ -247,6 +248,35 @@ export const en = {
   'heal.aboutTitle': 'Texture is kept',
   'heal.aboutBody':
     'The fill copies skin from around the mark rather than smoothing it over, so the pores come with it. It runs once per spot, on the photo as it was opened.',
+
+  'restore.title': 'Restore the face',
+  'restore.how':
+    'Open the photo this one was made from. The face it has is fitted back over the face in the picture.',
+  'restore.noImage': 'Open a photo first.',
+  'restore.open': 'Open the original photo',
+  'restore.loading': 'Reading the original…',
+  'restore.clear': 'Put the original away',
+  'restore.referenceFaces': 'Faces in the original — {count}',
+  'restore.missing':
+    'This edit was made with {name}, which is not open. Open it again to restore the face.',
+  'restore.noFaceHere': 'No face was found in the picture, so there is nowhere to put one back.',
+  'restore.edge': 'Edge',
+  'restore.edgeNote':
+    'How far inside the face the patch stops. Wider hides a poor fit; narrower keeps more of the original face.',
+  'restore.match': 'Match the light',
+  'restore.matchNote':
+    'Takes the patch towards the light in this picture. Full is usually right — a face lit differently from the frame around it is what gives a paste away.',
+  'restore.paired': 'Faces put back — {count}',
+  'restore.unpaired': 'Faces with no match in the original — {count}',
+  'restore.residualOk': 'The two faces line up. The fit is a move, a turn and a resize.',
+  'restore.residualHigh':
+    'The two faces do not line up well. The picture has been given a different pose or expression, so the patch sits in a frame that is not quite its own.',
+  'restore.aboutTitle': 'Restored before everything else',
+  'restore.aboutBody':
+    'The face goes in before the grade and the grain, so both run over the join. Nothing is generated: the pixels are the ones the camera recorded.',
+  'restore.toastLoaded': '{name} — {count} face(s) found in the original',
+  'restore.toastNoFace': '{name} has no face in it, so there is nothing to take back.',
+  'restore.toastFailed': 'That photo could not be read',
 
   'crop.rotate': 'Rotate',
   'crop.rotateLeft': 'Rotate left',

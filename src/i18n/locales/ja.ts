@@ -32,6 +32,7 @@ export const ja: Messages = {
   'rail.compare': '原画と比較（長押し）',
 
   'tool.adjust': '調整',
+  'tool.restore': '顔を戻す',
   'tool.heal': 'シミ・ニキビ消し',
   'tool.crop': 'トリミングと回転',
   'tool.text': '文字入れ',
@@ -243,6 +244,35 @@ export const ja: Messages = {
   'heal.aboutTitle': '質感は残ります',
   'heal.aboutBody':
     'ぼかすのではなく、点のまわりの肌を写して埋めるので、毛穴もいっしょに移ります。処理は1点につき一度、開いたときの写真に対して走ります。',
+
+  'restore.title': '顔を戻す',
+  'restore.how':
+    'この写真の元になった写真を開いてください。そちらの顔を、いまの絵の顔の位置に合わせて戻します。',
+  'restore.noImage': '先に写真を開いてください。',
+  'restore.open': '元の写真を開く',
+  'restore.loading': '元の写真を読んでいます…',
+  'restore.clear': '元の写真を閉じる',
+  'restore.referenceFaces': '元の写真の顔 — {count}',
+  'restore.missing':
+    'この編集は {name} を使って作られていますが、いまは開かれていません。もう一度開くと顔が戻ります。',
+  'restore.noFaceHere': 'いまの絵から顔が見つからないので、戻す場所がありません。',
+  'restore.edge': '境界の位置',
+  'restore.edgeNote':
+    '顔のどれだけ内側で貼り終えるか。広げるとズレが隠れ、狭めると元の顔がより多く残ります。',
+  'restore.match': '光を合わせる',
+  'restore.matchNote':
+    '貼った顔を、いまの絵の光に寄せます。基本は最大で構いません。まわりと違う光の当たり方をした顔は、境界よりも先に気づかれます。',
+  'restore.paired': '戻した顔 — {count}',
+  'restore.unpaired': '元の写真に対応が見つからなかった顔 — {count}',
+  'restore.residualOk': '二つの顔はよく重なっています。移動・回転・拡大縮小だけで合いました。',
+  'restore.residualHigh':
+    '二つの顔がうまく重なりません。いまの絵では向きや表情が変えられているため、貼った顔が本来の枠からずれた位置に収まります。',
+  'restore.aboutTitle': 'ほかのすべてより先に戻します',
+  'restore.aboutBody':
+    '色調整も粒状も、顔を戻したあとに継ぎ目の上をまとめて通ります。生成は一切していません。カメラが記録した画素をそのまま使います。',
+  'restore.toastLoaded': '{name} — 元の写真から顔を {count} 件見つけました',
+  'restore.toastNoFace': '{name} には顔が写っていないため、戻せるものがありません。',
+  'restore.toastFailed': 'その写真を読み込めませんでした',
 
   'crop.rotate': '回転',
   'crop.rotateLeft': '左に 90 度回転',
