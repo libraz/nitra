@@ -347,9 +347,7 @@ export class Pipeline {
           { outline: into.oval, source: from.oval, width: into.width, transform: pair.transform },
         ];
       });
-      restored =
-        graft(decoded, reference.image, faces, recipe.restore.edge, recipe.restore.match)?.data ??
-        null;
+      restored = graft(decoded, reference.image, faces, recipe.restore.edge, recipe.restore.match);
     }
 
     this.restoreKey = key;
@@ -363,18 +361,16 @@ export class Pipeline {
 
     // A different photograph as far as the graph is concerned, and the plate is
     // rebuilt on it: the fills are replayed onto the face that is now there.
+    // That replay is the real cost of moving either of this stage's sliders —
+    // every spot is filled again, since there is no fill to keep once what was
+    // underneath it has changed.
     this.generation += 1;
     this.plate = new HealPlate(this.restored ?? decoded.data, decoded.width, decoded.height);
+    // The texture is left to the fills to build, even though the pixels are
+    // already here. Uploading them now would be uploading them twice whenever a
+    // spot exists, because rebuilding the plate makes the next step a rebuild
+    // too, and at twelve megapixels that is a wasted forty-eight.
     this.dropHealed();
-    if (this.restored) {
-      this.healed = {
-        texture: createSourceTexture(this.gl, decoded.width, decoded.height, this.restored),
-        width: decoded.width,
-        height: decoded.height,
-        fromSrgb: decoded.space === 'srgb',
-        generation: this.generation,
-      };
-    }
     this.dag.invalidate();
   }
 
@@ -407,12 +403,17 @@ export class Pipeline {
     const plate = this.plate;
     const source = this.source;
     if (!plate || !source) return;
+    // The restore put faces back and left the upload to here, which is the one
+    // way the plate can be ahead of the GPU without a spot having moved. It is
+    // the same upload either way, and doing it in one place is what stops it
+    // from happening twice when both stages have something to say.
+    const pending = this.restored !== null && this.healed === null;
     // This runs on the way to every settled render, and almost none of them
     // placed a spot.
-    if (plate.matches(recipe.heal)) return;
+    if (!pending && plate.matches(recipe.heal)) return;
 
     const update = plate.apply(recipe.heal);
-    if (update === null) return;
+    if (update === null && !pending) return;
 
     // The plate is null again once the last spot goes, and what that means
     // depends on whether anything was restored: back to the photograph if not,
@@ -427,13 +428,13 @@ export class Pipeline {
     }
     // Nothing was reached: every new spot was smaller than a pixel, so the
     // texture already says what the plate says.
-    if (!update.rebuilt && this.healed && update.rects.length === 0) return;
+    if (update && !update.rebuilt && this.healed && update.rects.length === 0) return;
 
     // A new photograph as far as anything downstream is concerned, and the
     // cheapest way to say so: every signature that samples the source carries
     // this number.
     this.generation += 1;
-    if (update.rebuilt || !this.healed) {
+    if (!update || update.rebuilt || !this.healed) {
       this.dropHealed();
       this.healed = {
         texture: createSourceTexture(this.gl, plate.width, plate.height, pixels),
