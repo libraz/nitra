@@ -134,8 +134,10 @@ export function CropOverlay({ crop, ratio, onChange }: CropOverlayProps) {
   );
 }
 
-interface HealOverlayProps {
-  spots: Recipe['heal'];
+interface SpotOverlayProps {
+  /** Which circles these are. The ring means a different thing in each. */
+  variant: 'heal' | 'conceal';
+  spots: Recipe['heal'] | Recipe['conceal'];
   /** Radius the next spot gets, as a fraction of the image width. */
   radius: number;
   /** Output coordinate back to source coordinate, both normalised. */
@@ -147,7 +149,7 @@ interface HealOverlayProps {
 }
 
 /**
- * The spots that have been filled, and where the next one goes.
+ * The circles placed on the photograph, and where the next one goes.
  *
  * The overlay is the one place the two coordinate systems meet. A spot is in the
  * photograph's own frame, because a mark is on the photograph and a crop must not
@@ -155,21 +157,28 @@ interface HealOverlayProps {
  * click is mapped one way and every existing spot the other, both through the
  * renderer's own framing matrix rather than through a second copy of it.
  *
- * A filled spot stays visible as a ring, and clicking the ring takes it back.
+ * A placed circle stays visible as a ring, and clicking the ring takes it back.
  * Nothing else in the app has to be undone to be judged — a slider goes back by
- * moving it — so the fills are the one edit that needs somewhere to be seen.
+ * moving it — so these are the one edit that needs somewhere to be seen.
+ *
+ * Both stages place circles on the photograph the same way, so they are one
+ * component. What the ring says differs, and only the stylesheet knows it: on a
+ * fill it marks where skin was copied in, and on a conceal it marks the range
+ * being guaranteed.
  */
-export function HealOverlay({
+export function SpotOverlay({
+  variant,
   spots,
   radius,
   toSource,
   aspect,
   onPlace,
   onRemove,
-}: HealOverlayProps) {
+}: SpotOverlayProps) {
   const host = useRef<HTMLDivElement | null>(null);
   const brush = useRef<HTMLDivElement | null>(null);
   const fromSource = useMemo(() => mat3Inverse(toSource), [toSource]);
+  const style = variant === 'heal' ? 'healov' : 'concealov';
 
   // How much of the photograph one step across the picture covers, in image
   // widths. It comes out of the matrix rather than out of the crop rectangle
@@ -185,7 +194,7 @@ export function HealOverlay({
     // No label and no role: this is a pointer affordance. What it does is also
     // said in the panel, which counts the spots and can take them all back.
     <div
-      className="healov"
+      className={style}
       ref={host}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
@@ -216,12 +225,16 @@ export function HealOverlay({
         if (brush.current) brush.current.style.opacity = '0';
       }}
     >
-      <div className="healov-brush" ref={brush} style={{ width: `${across(radius) * 100}%` }} />
+      <div className={`${style}-brush`} ref={brush} style={{ width: `${across(radius) * 100}%` }} />
       {spots.map((spot, index) => {
         const [u, v] = mat3Apply(fromSource, [spot.x, spot.y, 1]);
-        // Outside the crop the spot is still filled — the fill is on the whole
-        // photograph — but there is nowhere on screen to draw it.
-        if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+        // Drawn whenever the circle reaches the crop, not only when its centre
+        // is inside it. A circle wide enough to cover most of the picture has
+        // its centre outside the crop easily, and one that is not drawn is one
+        // that cannot be clicked to take back. The half-extent is the circle's
+        // own, in the same units as the coordinates being tested.
+        const half = across(spot.r) / 2;
+        if (u < -half || u > 1 + half || v < -half || v > 1 + half) return null;
         return (
           <button
             // A spot carries no id of its own: the order is what makes two
@@ -232,7 +245,7 @@ export function HealOverlay({
             // biome-ignore lint/suspicious/noArrayIndexKey: the position in the list is the identity
             key={`${spot.x}-${spot.y}-${index}`}
             type="button"
-            className="healov-spot"
+            className={`${style}-spot`}
             style={{
               left: `${u * 100}%`,
               top: `${v * 100}%`,

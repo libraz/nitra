@@ -42,6 +42,11 @@ function hintsFor(tool: Tool): [MessageKey, MessageKey][] {
         ['stage.hintHeal', 'stage.hintHealText'],
         ['stage.hintHealBack', 'stage.hintHealBackText'],
       ];
+    case 'conceal':
+      return [
+        ['stage.hintConceal', 'stage.hintConcealText'],
+        ['stage.hintConcealBack', 'stage.hintConcealBackText'],
+      ];
     default:
       return [
         ['stage.hintHold', 'stage.hintHoldText'],
@@ -130,7 +135,15 @@ export function Stage({
               onPointerDown={(event) => {
                 // Holding to compare would fight a crop drag or a caption drag,
                 // so it belongs to the tools that are only looking at the photo.
-                if (event.button !== 0 || tool === 'crop' || tool === 'text' || tool === 'heal')
+                // The two that place circles are excluded for the same reason:
+                // a press on the picture is already a placement.
+                if (
+                  event.button !== 0 ||
+                  tool === 'crop' ||
+                  tool === 'text' ||
+                  tool === 'heal' ||
+                  tool === 'conceal'
+                )
                   return;
                 holding.current = true;
                 onCompare(true);

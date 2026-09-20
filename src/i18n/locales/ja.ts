@@ -34,6 +34,7 @@ export const ja: Messages = {
   'tool.adjust': '調整',
   'tool.restore': 'AIが変えた顔を戻す',
   'tool.heal': 'シミ・ニキビ消し',
+  'tool.conceal': '映り込みを隠す',
   'tool.crop': 'トリミングと回転',
   'tool.text': '文字入れ',
   'tool.tiles': 'グリッド分割',
@@ -60,6 +61,10 @@ export const ja: Messages = {
   'stage.hintHealText': '気になる点を消す',
   'stage.hintHealBack': '輪郭をクリック',
   'stage.hintHealBackText': '元に戻す',
+  'stage.hintConceal': 'クリック',
+  'stage.hintConcealText': '映り込みを隠す',
+  'stage.hintConcealBack': '輪郭をクリック',
+  'stage.hintConcealBackText': '元に戻す',
 
   'guide.step': '{total} ステップ中 {n} 番目',
   'guide.skip': 'スキップ',
@@ -244,6 +249,25 @@ export const ja: Messages = {
   'heal.aboutTitle': '質感は残ります',
   'heal.aboutBody':
     'ぼかすのではなく、点のまわりの肌を写して埋めるので、毛穴もいっしょに移ります。処理は1点につき一度、開いたときの写真に対して走ります。',
+
+  'conceal.title': '反射の映り込み',
+  'conceal.how':
+    '瞳・鏡・金属・ガラスの反射に写り込んだ人を隠します。隠したい反射をクリックしてください。残った輪郭をクリックすると元に戻ります。',
+  'conceal.noImage': '写真を開くと使えます。',
+  'conceal.size': '円の大きさ',
+  'conceal.sizeNote':
+    '反射より一回り、3割ほど大きく。保証できるのは輪郭の内側だけで、その外側のぼけた帯は含みません。',
+  'conceal.irises': '見つかった目にまとめて置く（{count}）',
+  'conceal.irisesNone': 'この写真からは目が見つかりませんでした。クリックで円を置いてください。',
+  'conceal.cost':
+    'この方法で隠した目は、キャッチライトを失います。光の点は円全体に広がって点としては残らず、代わりに描き足すこともしません。',
+  'conceal.count': '隠した反射 — {count}',
+  'conceal.full': '上限',
+  'conceal.removeLast': '直前の1つを戻す',
+  'conceal.clear': 'すべて戻す',
+  'conceal.aboutTitle': '円の中に残るもの',
+  'conceal.aboutBody':
+    '瞳に映った顔は数十ピクセルしかなく、輪郭の内側にはその大きさの顔を形づくる細かさがもう残っていません。これは消去ではありませんし、解析できないとも言いません。言えるのは、顔を見分けている周波数が残っていないということです。',
 
   'restore.title': '顔を戻す',
   'restore.how':
@@ -514,7 +538,13 @@ export const ja: Messages = {
   'toast.faceFound': '顔を {count} 件検出しました。肌の調整が有効になります',
   'toast.faceNone': '顔を検出しませんでした。肌の調整は無効のまま、他の調整はそのまま使えます',
   'toast.faceFailed': '顔解析を実行できませんでした',
-  'toast.healFailed': '点を埋める処理を実行できませんでした',
+  'toast.plateFailed': '写真の画素そのものを書き換える処理を実行できませんでした',
+  'toast.concealSeeded': '見つかった目に円を{count}個置きました',
+  'toast.concealSeedNone': '見つかった目にはすべて円が置かれています',
+  'toast.concealSeedOverflow':
+    '{count}個置きました。残り{overflow}個は上限{limit}を超えるため置いていません',
+  'toast.concealTooSmall':
+    'この写真ではその円が1ピクセル未満になり、何も隠れません。もう少し大きくしてください。',
   'toast.fontLoaded': '{name} を読み込みました',
   'toast.fontFailed': 'このフォントファイルは読み込めませんでした',
   'toast.framingReset': '構図をリセットしました',

@@ -1951,6 +1951,59 @@ body::after {
   background: color-mix(in oklab, var(--amber) 16%, transparent);
 }
 
+/* ── concealed reflections ── */
+
+.concealov {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  cursor: none;
+}
+.concealov-brush,
+.concealov-spot {
+  position: absolute;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  /* No floor, unlike the fills. This ring is the range being guaranteed, so a
+     ring drawn wider than the circle would claim cover over pixels nothing was
+     done to. Being grabbable is the hit area's job below. */
+}
+.concealov-brush {
+  left: 50%;
+  top: 50%;
+  opacity: 0;
+  pointer-events: none;
+  /* Solid where a fill's ring is dashed: the edge is where the guarantee stops,
+     not an approximate mark on the photograph. The soft band the mask feathers
+     through lies outside it and is deliberately not drawn — it is not covered
+     by the promise, and the panel is what says so. */
+  border: 1px solid color-mix(in oklab, var(--amber) 85%, transparent);
+  background: color-mix(in oklab, var(--amber) 18%, transparent);
+}
+.concealov-spot {
+  padding: 0;
+  border: 1px solid color-mix(in oklab, var(--amber) 70%, transparent);
+  background: color-mix(in oklab, var(--amber) 10%, transparent);
+  cursor: pointer;
+  touch-action: none;
+}
+/* Something to aim at, for the same reason the fills have one: a circle over an
+   iris is a few pixels across on a photo shown whole. */
+.concealov-spot::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+}
+.concealov-spot:hover {
+  border-color: var(--amber);
+  background: color-mix(in oklab, var(--amber) 22%, transparent);
+}
+
 /* ── text handles ── */
 
 .textov {

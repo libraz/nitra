@@ -3,6 +3,7 @@ import { resolveAspect } from '../core/geometry/aspects';
 import { normalisedRatio } from '../core/geometry/transform';
 import { I18nProvider, useI18n } from '../i18n';
 import { About } from './components/About';
+import { ConcealPanel } from './components/ConcealPanel';
 import { CropPanel } from './components/CropPanel';
 import { StatusBar, Toast, ToolRail, TopBar } from './components/chrome';
 import { DetailPanel } from './components/DetailPanel';
@@ -10,7 +11,7 @@ import { ExportPanel } from './components/ExportPanel';
 import { Guide, guideSeen, rememberGuideSeen } from './components/Guide';
 import { HealPanel } from './components/HealPanel';
 import { MetadataPanel } from './components/MetadataPanel';
-import { CropOverlay, HealOverlay, TextOverlay, TileOverlay } from './components/overlays';
+import { CropOverlay, SpotOverlay, TextOverlay, TileOverlay } from './components/overlays';
 import { RestorePanel } from './components/RestorePanel';
 import { SimplePanel } from './components/SimplePanel';
 import { Stage } from './components/Stage';
@@ -113,13 +114,25 @@ function Workspace() {
                 />
               )}
               {editor.tool === 'heal' && editor.source && (
-                <HealOverlay
+                <SpotOverlay
+                  variant="heal"
                   spots={editor.recipe.heal}
                   radius={editor.healRadius}
                   toSource={editor.toSource}
                   aspect={editor.source.height / editor.source.width}
                   onPlace={editor.addHealSpot}
                   onRemove={editor.removeHealSpot}
+                />
+              )}
+              {editor.tool === 'conceal' && editor.source && (
+                <SpotOverlay
+                  variant="conceal"
+                  spots={editor.recipe.conceal}
+                  radius={editor.concealRadius}
+                  toSource={editor.toSource}
+                  aspect={editor.source.height / editor.source.width}
+                  onPlace={editor.addConcealSpot}
+                  onRemove={editor.removeConcealSpot}
                 />
               )}
               {editor.tool === 'text' && (
@@ -198,6 +211,19 @@ function Workspace() {
             onRadius={editor.setHealRadius}
             onRemoveLast={() => editor.removeHealSpot(editor.recipe.heal.length - 1)}
             onClear={editor.clearHeal}
+          />
+        )}
+
+        {editor.tool === 'conceal' && (
+          <ConcealPanel
+            spots={editor.recipe.conceal}
+            radius={editor.concealRadius}
+            hasImage={editor.source !== null}
+            irisCount={editor.irisCount}
+            onRadius={editor.setConcealRadius}
+            onSeedIrises={editor.seedConcealFromIrises}
+            onRemoveLast={() => editor.removeConcealSpot(editor.recipe.conceal.length - 1)}
+            onClear={editor.clearConceal}
           />
         )}
 

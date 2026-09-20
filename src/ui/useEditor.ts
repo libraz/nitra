@@ -9,6 +9,7 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type AutoNote, suggestGrade } from '../core/analysis/auto';
 import { MAT3_IDENTITY, type Mat3 } from '../core/color/matrix';
+import { seedConcealFromIrises as seedFromIrises } from '../core/conceal/seed';
 import { analyzeFace, type FaceAnalysis } from '../core/face/analyze';
 import { aspectByKey, resolveAspect } from '../core/geometry/aspects';
 import { cropRatioForTiles, type ExportPlan, planExport } from '../core/geometry/tiles';
@@ -31,6 +32,7 @@ import {
   REFERENCE_STRENGTH,
 } from '../core/recipe/presets';
 import {
+  CONCEAL_LIMIT,
   type DepthParams,
   type FaceParams,
   type GeometryParams,
@@ -63,6 +65,7 @@ export type Tool =
   | 'adjust'
   | 'restore'
   | 'heal'
+  | 'conceal'
   | 'crop'
   | 'text'
   | 'tiles'
@@ -133,6 +136,14 @@ export interface Editor {
   faceState: FaceState;
   /** How many faces the analysis found. Zero until it has. */
   faceCount: number;
+  /**
+   * How many irises the analysis found, over every face.
+   *
+   * Not twice the faces: a head turned far enough shows one, and a model that
+   * returned no irises at all leaves the one-click placement with nothing to
+   * place, which the panel says rather than offering a button that does nothing.
+   */
+  irisCount: number;
   /** The reference photograph, once one has been opened. */
   reference: ReferenceState | null;
   /** True while the reference is being decoded and analysed. */
@@ -165,6 +176,8 @@ export interface Editor {
   toSource: Mat3;
   /** Radius the next spot gets, as a fraction of the image width. */
   healRadius: number;
+  /** Radius the next conceal circle gets, as a fraction of the image width. */
+  concealRadius: number;
   selectedText: string | null;
   /** Bumped when a supplied typeface finishes loading. */
   fontRevision: number;
@@ -192,6 +205,12 @@ export interface Editor {
   addHealSpot: (x: number, y: number) => void;
   removeHealSpot: (index: number) => void;
   clearHeal: () => void;
+  setConcealRadius: (value: number) => void;
+  addConcealSpot: (x: number, y: number) => void;
+  removeConcealSpot: (index: number) => void;
+  clearConceal: () => void;
+  /** Place a circle over every iris the analysis found and has not covered yet. */
+  seedConcealFromIrises: () => void;
   addText: () => void;
   updateText: (id: string, patch: Partial<TextLayer>) => void;
   removeText: (id: string) => void;
@@ -310,6 +329,7 @@ export function useEditor(): Editor {
   const [stats, setStats] = useState<RenderStats | null>(null);
   const [faceState, setFaceState] = useState<FaceState>('idle');
   const [faceCount, setFaceCount] = useState(0);
+  const [irisCount, setIrisCount] = useState(0);
   const [reference, setReferenceState] = useState<ReferenceState | null>(null);
   const [referenceBusy, setReferenceBusy] = useState(false);
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
@@ -321,6 +341,7 @@ export function useEditor(): Editor {
   // The brush size is not part of the edit: it is the size the next spot gets,
   // and each spot carries the size it was placed at.
   const [healRadius, setHealRadius] = useState(() => paramDef('heal.r').neutral);
+  const [concealRadius, setConcealRadius] = useState(() => paramDef('conceal.r').neutral);
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const selectedTextRef = useRef<string | null>(null);
   selectedTextRef.current = selectedText;
@@ -366,11 +387,12 @@ export function useEditor(): Editor {
         const [width, height] = pipeline.resolutionFor(recipeRef.current, next);
         setPreviewSize(`${width}×${height}`);
       },
-      // The spots stay in the picture rather than being reported as gone, and
-      // the module's own message names what it could not fetch.
-      healFailed: (error) => {
+      // Named for the plate rather than for one of the stages on it: a
+      // reflection that was not concealed reported as a brush that did not run
+      // is a message about the wrong tool.
+      plateFailed: (error: unknown) => {
         const detail = error instanceof Error ? ` — ${error.message}` : '';
-        notify(`${translateRef.current('toast.healFailed')}${detail}`, 'alert');
+        notify(`${translateRef.current('toast.plateFailed')}${detail}`, 'alert');
       },
     });
     schedulerRef.current = scheduler;
@@ -656,6 +678,83 @@ export function useEditor(): Editor {
     commit({ ...recipeRef.current, heal: [] });
   }, [commit]);
 
+  /**
+   * Conceal the reflection at a point on the photograph.
+   *
+   * Same shape as the fills: the coordinates are the source's, and the circle
+   * keeps the size the brush had when it was placed.
+   *
+   * A circle under a pixel across is refused instead of being placed. The blur
+   * that carries the guarantee cannot run below one pixel of radius, so the
+   * ring would be drawn over a reflection nothing had happened to — and a
+   * conceal tool that shows a guarantee it did not make is the one failure this
+   * feature may not have. The seeded circles are not checked against it: their
+   * radius is a measured iris, which is not sub-pixel in a photo a face was
+   * found in.
+   */
+  const addConcealSpot = useCallback(
+    (x: number, y: number) => {
+      const current = recipeRef.current;
+      const image = sourceRef.current;
+      if (!image || current.conceal.length >= CONCEAL_LIMIT) return;
+      if (concealRadius * image.width < 1) {
+        notify(t('toast.concealTooSmall'), 'alert');
+        return;
+      }
+      commit({ ...current, conceal: [...current.conceal, { x, y, r: concealRadius }] });
+    },
+    [commit, concealRadius, notify, t],
+  );
+
+  const removeConcealSpot = useCallback(
+    (index: number) => {
+      const current = recipeRef.current;
+      commit({ ...current, conceal: current.conceal.filter((_, at) => at !== index) });
+    },
+    [commit],
+  );
+
+  const clearConceal = useCallback(() => {
+    commit({ ...recipeRef.current, conceal: [] });
+  }, [commit]);
+
+  /**
+   * Put a circle over every iris the analysis found.
+   *
+   * The most common case by far is a pair of eyes, and the error it removes is
+   * the one nothing can detect: a circle drawn smaller than the reflection it
+   * was meant to cover. An iris already carrying a circle is skipped, so the
+   * button can be pressed twice without stacking.
+   */
+  const seedConcealFromIrises = useCallback(() => {
+    const image = sourceRef.current;
+    const analysis = analysisRef.current;
+    if (!image || !analysis) return;
+    const current = recipeRef.current;
+    const { added, overflow } = seedFromIrises(
+      analysis.faces.flatMap((face) => face.irises),
+      image.height / image.width,
+      current.conceal,
+    );
+    if (added.length > 0) commit({ ...current, conceal: [...current.conceal, ...added] });
+    if (overflow > 0) {
+      notify(
+        t('toast.concealSeedOverflow', {
+          count: added.length,
+          overflow,
+          limit: CONCEAL_LIMIT,
+        }),
+        'alert',
+      );
+    } else {
+      notify(
+        added.length > 0
+          ? t('toast.concealSeeded', { count: added.length })
+          : t('toast.concealSeedNone'),
+      );
+    }
+  }, [commit, notify, t]);
+
   const setRestore = useCallback(
     (patch: Partial<RestoreParams>) => {
       const current = recipeRef.current;
@@ -812,6 +911,7 @@ export function useEditor(): Editor {
     (image: SourceImage) => {
       setFaceState('analysing');
       setFaceCount(0);
+      setIrisCount(0);
       analysisRef.current = null;
       void (async () => {
         try {
@@ -822,6 +922,7 @@ export function useEditor(): Editor {
           analysisRef.current = analysis;
           pipelineRef.current?.setFaceAnalysis(analysis);
           setFaceCount(analysis.faces.length);
+          setIrisCount(analysis.faces.reduce((total, face) => total + face.irises.length, 0));
           setFaceState(analysis.faces.length > 0 ? 'found' : 'none');
           schedulerRef.current?.markDirty();
           notify(
@@ -861,10 +962,17 @@ export function useEditor(): Editor {
           setThumbnails(new Map());
           // The framing belongs to the photo it was drawn on, so a new photo
           // arrives unframed rather than inheriting a crop placed on another.
+          // The two lists of circles go with it, and the conceal list is why:
+          // carried over, they would sit at the same normalised coordinates on
+          // a photograph nobody has looked at, and the panel would count them
+          // as reflections concealed. A fill from another photograph was never
+          // meaningful either, so both are cleared rather than one.
           const fresh = neutralRecipe();
           const next: Recipe = {
             ...recipeRef.current,
             geometry: fresh.geometry,
+            heal: [],
+            conceal: [],
             source: { w: image.width, h: image.height, space: image.space },
           };
           recipeRef.current = next;
@@ -1061,6 +1169,7 @@ export function useEditor(): Editor {
       stats,
       faceState,
       faceCount,
+      irisCount,
       reference,
       referenceBusy,
       restoreReport,
@@ -1074,6 +1183,7 @@ export function useEditor(): Editor {
       frameAspect,
       toSource: outputToSourceMatrix,
       healRadius,
+      concealRadius,
       selectedText,
       fontRevision,
       setTool,
@@ -1100,6 +1210,11 @@ export function useEditor(): Editor {
       addHealSpot,
       removeHealSpot,
       clearHeal,
+      setConcealRadius,
+      addConcealSpot,
+      removeConcealSpot,
+      clearConceal,
+      seedConcealFromIrises,
       addText,
       updateText,
       removeText,
@@ -1123,6 +1238,7 @@ export function useEditor(): Editor {
       stats,
       faceState,
       faceCount,
+      irisCount,
       reference,
       referenceBusy,
       restoreReport,
@@ -1136,6 +1252,7 @@ export function useEditor(): Editor {
       frameAspect,
       outputToSourceMatrix,
       healRadius,
+      concealRadius,
       selectedText,
       fontRevision,
       setTool,
@@ -1160,6 +1277,10 @@ export function useEditor(): Editor {
       addHealSpot,
       removeHealSpot,
       clearHeal,
+      addConcealSpot,
+      removeConcealSpot,
+      clearConceal,
+      seedConcealFromIrises,
       addText,
       updateText,
       removeText,

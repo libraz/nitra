@@ -226,6 +226,15 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
       <circle cx="12" cy="12" r="1.4" />
     </>
   ),
+  // An eye with a circle over the iris and the detail inside it gone: the
+  // reflection is where it is looked for, and the circle is what covers it.
+  conceal: (
+    <>
+      <path d="M2.6 12c2.4-3.7 5.5-5.6 9.4-5.6s7 1.9 9.4 5.6c-2.4 3.7-5.5 5.6-9.4 5.6S5 15.7 2.6 12z" />
+      <circle cx="12" cy="12" r="3.8" />
+      <path d="M9.1 12h5.8" />
+    </>
+  ),
   crop: (
     <>
       <path d="M7 2v15h15" />
@@ -265,10 +274,12 @@ const TOOL_ICONS: Record<Tool, ReactNode> = {
 /** The order the rail reads in. The first entry is where the editor opens. */
 export const TOOL_ORDER: readonly Tool[] = [
   'adjust',
-  // Ahead of the fills, which is the order the picture is built in: a blemish is
-  // filled on the face that ends up in the photograph.
+  // The order the picture is built in: a blemish is filled on the face that
+  // ends up in the photograph, and inside a concealed circle the low pass has
+  // the last word, so a fill under one is never seen.
   'restore',
   'heal',
+  'conceal',
   'crop',
   'text',
   'tiles',

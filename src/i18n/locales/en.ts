@@ -37,6 +37,7 @@ export const en = {
   'tool.adjust': 'Adjust',
   'tool.restore': 'Restore the face an AI changed',
   'tool.heal': 'Remove blemishes',
+  'tool.conceal': 'Conceal a reflection',
   'tool.crop': 'Crop and rotate',
   'tool.text': 'Text',
   'tool.tiles': 'Split into a grid',
@@ -63,6 +64,10 @@ export const en = {
   'stage.hintHealText': 'Fill a blemish',
   'stage.hintHealBack': 'click a ring',
   'stage.hintHealBackText': 'Put it back',
+  'stage.hintConceal': 'click',
+  'stage.hintConcealText': 'Conceal a reflection',
+  'stage.hintConcealBack': 'click a ring',
+  'stage.hintConcealBackText': 'Put it back',
 
   'guide.step': 'Step {n} of {total}',
   'guide.skip': 'Skip',
@@ -248,6 +253,25 @@ export const en = {
   'heal.aboutTitle': 'Texture is kept',
   'heal.aboutBody':
     'The fill copies skin from around the mark rather than smoothing it over, so the pores come with it. It runs once per spot, on the photo as it was opened.',
+
+  'conceal.title': 'Reflections',
+  'conceal.how':
+    'For somebody caught in a reflection — in an eye, a mirror, metal, glass. Click the reflection to conceal it; click the ring it leaves to take it back.',
+  'conceal.noImage': 'Open a photo to start concealing.',
+  'conceal.size': 'Circle size',
+  'conceal.sizeNote':
+    'A size larger than the reflection — about a third wider. Only what is inside the ring is covered; the soft band outside it is not.',
+  'conceal.irises': 'Cover every eye found ({count})',
+  'conceal.irisesNone': 'No eye was found in this photo. Place the circles by clicking.',
+  'conceal.cost':
+    'An eye concealed this way loses its catchlight. The bright point spreads across the circle, and nothing is drawn back in its place.',
+  'conceal.count': 'Concealed — {count}',
+  'conceal.full': 'full',
+  'conceal.removeLast': 'Undo the last circle',
+  'conceal.clear': 'Remove every circle',
+  'conceal.aboutTitle': 'What is left inside the circle',
+  'conceal.aboutBody':
+    'A face reflected in an eye is a few dozen pixels across, and inside the ring the detail at that scale is no longer there. That is not erasure, and nothing here claims the file cannot be attacked — what it claims is that the frequencies a face is recognised by are gone.',
 
   'restore.title': 'Restore the face',
   'restore.how':
@@ -519,7 +543,12 @@ export const en = {
   'toast.faceFound': 'Found {count} face(s) — the skin controls are live',
   'toast.faceNone': 'No face found — the skin controls stay off and the rest is unaffected',
   'toast.faceFailed': 'Face analysis could not run',
-  'toast.healFailed': 'The blemish filler could not run',
+  'toast.plateFailed': 'The stages that work on the photo’s own pixels could not run',
+  'toast.concealSeeded': 'Placed {count} circle(s) over the eyes found',
+  'toast.concealSeedNone': 'Every eye found already has a circle over it',
+  'toast.concealSeedOverflow': 'Placed {count}; {overflow} more would pass the limit of {limit}',
+  'toast.concealTooSmall':
+    'That circle is under a pixel wide on this photo, so nothing would be concealed. Make it larger.',
   'toast.fontLoaded': 'Loaded {name}',
   'toast.fontFailed': 'Could not read that font file',
   'toast.framingReset': 'Framing reset',
