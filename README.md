@@ -20,6 +20,7 @@ Working after the fact removes the frame-rate budget. Passes can be as expensive
 - Adjusts hue, saturation and lightness per colour, across eight bands whose centres are derived from the primaries rather than typed in. Near-neutral pixels are left alone, because a grey sky has a hue only in the arithmetic sense.
 - Effects: split toning, monochrome with channel weights, matte fade, vignette, glow, sharpening, clarity, film grain, highlight rolloff, and dithering on the way down to eight bits.
 - Fills a blemish where you click it. Skin from around the mark is copied in rather than smoothed over, so the pores come with it.
+- Lets you conceal a bystander caught in a reflection — a corneal catchlight, a mirror, metal or glass — by removing the spatial frequencies that carry identity rather than by blurring how it looks. One click on a detected iris places the circle at its width.
 - Retouches the person: skin, eyes, lips, teeth, cheeks, hair, the background behind them, one added light, and the shape of the face within a bound it reports (see below).
 - Frames: flips, quarter turns, straightening, and a crop that can be locked to a shape. Straightening trims the frame to keep it filled, so no corner comes out empty.
 - Crops to what a destination actually publishes — Instagram, X, Facebook, YouTube, TikTok — taking the shape and the size as one decision.
@@ -121,6 +122,8 @@ The area immediately around the photo stays a neutral mid grey in either. Colour
 ## Non-goals
 
 - **No retouching that makes someone look like a different person.** Rebuilding bone structure, swapping faces, reshaping a body and filling anything in generatively are out of scope. So is replacing the background: a photograph that claims a place it was not taken in is over the same line.
+- **A concealed reflection is not claimed to be erased.** The low pass drops the spatial frequencies that carry identity; that is not the ISO/IEC 27038 sense of removal, and nitra does not claim it is.
+- **A concealed eye loses its catchlight.** The same blur that guarantees nothing identifying survives inside the ring also flattens the circle to close to one tone, and nothing is drawn back in to replace it.
 - **No server.** There is no upload path, and none will be added.
 - **No accounts.** Saving and sharing happen through files.
 - Video is out of scope for now. The pipeline is built so it can be extended to video later.
