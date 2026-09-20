@@ -9,13 +9,7 @@
 
 import type { Disc } from '../face/geometry';
 import { CONCEAL_LIMIT, paramDef } from '../recipe/schema';
-
-/** A conceal circle as the recipe holds it: normalised centre, radius in image widths. */
-export interface ConcealSpot {
-  x: number;
-  y: number;
-  r: number;
-}
+import type { ConcealSpot } from './conceal';
 
 export interface ConcealSeedResult {
   /** Circles to append to the recipe's existing conceal list. */

@@ -8,7 +8,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { type ConcealSpot, seedConcealFromIrises } from '../src/core/conceal/seed';
+import type { ConcealSpot } from '../src/core/conceal/conceal';
+import { seedConcealFromIrises } from '../src/core/conceal/seed';
 import type { Disc } from '../src/core/face/geometry';
 import { CONCEAL_LIMIT, paramDef } from '../src/core/recipe/schema';
 
