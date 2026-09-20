@@ -127,7 +127,7 @@ function Workspace() {
               {editor.tool === 'conceal' && editor.source && (
                 <SpotOverlay
                   variant="conceal"
-                  spots={editor.recipe.conceal}
+                  spots={editor.recipe.conceal.spots}
                   radius={editor.concealRadius}
                   toSource={editor.toSource}
                   aspect={editor.source.height / editor.source.width}
@@ -216,13 +216,15 @@ function Workspace() {
 
         {editor.tool === 'conceal' && (
           <ConcealPanel
-            spots={editor.recipe.conceal}
+            spots={editor.recipe.conceal.spots}
             radius={editor.concealRadius}
+            amount={editor.recipe.conceal.amount}
             hasImage={editor.source !== null}
             irisCount={editor.irisCount}
             onRadius={editor.setConcealRadius}
+            onAmount={editor.setConcealAmount}
             onSeedIrises={editor.seedConcealFromIrises}
-            onRemoveLast={() => editor.removeConcealSpot(editor.recipe.conceal.length - 1)}
+            onRemoveLast={() => editor.removeConcealSpot(editor.recipe.conceal.spots.length - 1)}
             onClear={editor.clearConceal}
           />
         )}

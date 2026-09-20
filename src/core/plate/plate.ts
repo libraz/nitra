@@ -10,7 +10,7 @@
  *
  * The two are applied in that order, fills and then circles, because inside a
  * circle the conceal is the last word: a fill placed under one must not put
- * sharp structure back where the ring promises there is none. Each circle reads
+ * sharp structure back into a ring the user blurred. Each circle reads
  * the pristine source rather than the plate, which is what lets one be applied
  * again as often as the fills beneath it change.
  *
@@ -29,9 +29,9 @@ export interface PlateUpdate {
    * The whole plate was rewritten and the rectangles say nothing useful.
    *
    * True when a spot was removed or moved rather than added, and true of any
-   * change to the circles. There is no inverse of a fill — the pixels it
-   * replaced are gone from the plate — so undoing one means starting from the
-   * photograph again and replaying the rest.
+   * change to the circles or to how far they were blurred. There is no inverse
+   * of a fill — the pixels it replaced are gone from the plate — so undoing one
+   * means starting from the photograph again and replaying the rest.
    */
   rebuilt: boolean;
   /** The parts of the plate the new fills and the circles over them reached. */
@@ -62,6 +62,8 @@ export class SourcePlate {
   private plate: Uint8ClampedArray | null = null;
   private appliedHeal: HealSpot[] = [];
   private appliedConceal: ConcealSpot[] = [];
+  /** The amount the applied circles were blurred by. Meaningless while the list is empty. */
+  private appliedAmount = 0;
 
   /**
    * @param pristine The pixels the stage under this one left, held rather than
@@ -86,11 +88,16 @@ export class SourcePlate {
    * render that did not place anything, which is almost all of them. Both lists
    * are compared in order, since a plate that agrees about the contents of one
    * of them and not about its order is not the picture the recipe describes.
+   *
+   * The amount is compared only while there are circles for it to apply to,
+   * which is what keeps moving that slider with an empty list from dropping a
+   * plate full of fills.
    */
-  matches(conceal: readonly ConcealSpot[], heal: readonly HealSpot[]): boolean {
+  matches(conceal: readonly ConcealSpot[], amount: number, heal: readonly HealSpot[]): boolean {
     return (
       conceal.length === this.appliedConceal.length &&
       heal.length === this.appliedHeal.length &&
+      (conceal.length === 0 || amount === this.appliedAmount) &&
       prefixOf(this.appliedConceal, conceal) &&
       prefixOf(this.appliedHeal, heal)
     );
@@ -105,11 +112,16 @@ export class SourcePlate {
    * Appending a fill is the fast path and the one that happens while working —
    * the new spots are filled into the plate as it stands, and their own
    * rectangles are most of what has to be uploaded. Anything else is a rebuild,
-   * including every change to the circles: a circle is applied over the pristine
-   * source, so there is nothing to undo it with short of starting again.
+   * including every change to the circles and to the amount they were blurred
+   * by: a circle is applied over the pristine source, so there is nothing to
+   * undo it with short of starting again.
    */
-  apply(conceal: readonly ConcealSpot[], heal: readonly HealSpot[]): PlateUpdate | null {
-    if (this.matches(conceal, heal)) return null;
+  apply(
+    conceal: readonly ConcealSpot[],
+    amount: number,
+    heal: readonly HealSpot[],
+  ): PlateUpdate | null {
+    if (this.matches(conceal, amount, heal)) return null;
 
     if (conceal.length === 0 && heal.length === 0) {
       this.drop();
@@ -118,10 +130,14 @@ export class SourcePlate {
 
     const appended =
       conceal.length === this.appliedConceal.length &&
+      // Same reason {@link matches} skips it: with no circle in the list there
+      // is nothing the amount has applied to, so moving it is not a change.
+      (conceal.length === 0 || amount === this.appliedAmount) &&
       prefixOf(this.appliedConceal, conceal) &&
       heal.length > this.appliedHeal.length &&
       prefixOf(this.appliedHeal, heal);
     if (!appended) this.drop();
+    this.appliedAmount = amount;
 
     const from = this.appliedHeal.length;
     if (!this.plate) this.plate = new Uint8ClampedArray(this.pristine);
@@ -141,13 +157,13 @@ export class SourcePlate {
     if (!appended) {
       for (const spot of conceal) {
         this.appliedConceal.push(spot);
-        concealSpot(plate, this.pristine, this.width, this.height, spot);
+        concealSpot(plate, this.pristine, this.width, this.height, spot, amount);
       }
       return { rebuilt: true, rects };
     }
 
-    // A fill that reached a circle put structure back inside a ring that says
-    // there is none, so the circle has the last word again. Running it a second
+    // A fill that reached a circle put sharp structure back inside a ring the
+    // user blurred, so the circle has the last word again. Running it a second
     // time is exact rather than approximate because it reads the pristine
     // source, so what comes out does not depend on how many fills it has
     // outlived. Circles the fills did not reach are left alone, which is every
@@ -156,9 +172,9 @@ export class SourcePlate {
       // What decides this is where the circle writes, not the wider rectangle
       // the blur reads over: a circle takes its light from the pristine source,
       // so a fill it merely read past cannot have changed what it produces.
-      const written = concealRegion(spot, this.width, this.height).written;
+      const written = concealRegion(spot, this.width, this.height, amount).written;
       if (!filled.some((rect) => overlaps(rect, written))) continue;
-      concealSpot(plate, this.pristine, this.width, this.height, spot);
+      concealSpot(plate, this.pristine, this.width, this.height, spot, amount);
       rects.push(written);
     }
     return { rebuilt: false, rects };
@@ -169,5 +185,6 @@ export class SourcePlate {
     this.plate = null;
     this.appliedHeal = [];
     this.appliedConceal = [];
+    this.appliedAmount = 0;
   }
 }

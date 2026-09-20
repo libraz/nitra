@@ -37,7 +37,7 @@ export const en = {
   'tool.adjust': 'Adjust',
   'tool.restore': 'Restore the face an AI changed',
   'tool.heal': 'Remove blemishes',
-  'tool.conceal': 'Conceal a reflection',
+  'tool.conceal': 'Blur a reflection',
   'tool.crop': 'Crop and rotate',
   'tool.text': 'Text',
   'tool.tiles': 'Split into a grid',
@@ -65,7 +65,7 @@ export const en = {
   'stage.hintHealBack': 'click a ring',
   'stage.hintHealBackText': 'Put it back',
   'stage.hintConceal': 'click',
-  'stage.hintConcealText': 'Conceal a reflection',
+  'stage.hintConcealText': 'Blur a reflection',
   'stage.hintConcealBack': 'click a ring',
   'stage.hintConcealBackText': 'Put it back',
 
@@ -256,22 +256,25 @@ export const en = {
 
   'conceal.title': 'Reflections',
   'conceal.how':
-    'For somebody caught in a reflection — in an eye, a mirror, metal, glass. Click the reflection to conceal it; click the ring it leaves to take it back.',
-  'conceal.noImage': 'Open a photo to start concealing.',
+    'For somebody caught in a reflection — in an eye, a mirror, metal, glass. Click the reflection to blur it; click the ring it leaves to take it back.',
+  'conceal.noImage': 'Open a photo to start.',
   'conceal.size': 'Circle size',
   'conceal.sizeNote':
-    'A size larger than the reflection — about a third wider. Only what is inside the ring is covered; the soft band outside it is not.',
+    'A size larger than the reflection — about a third wider. Only what is inside the ring is blurred; the soft band outside it is where it goes back to the photo.',
+  'conceal.amount': 'Blur',
+  'conceal.amountNote':
+    'A fraction of each circle\u2019s own radius, so one setting suits an eye and a mirror in the same frame. Low already leaves the reflection unreadable while the circle still looks like what it was drawn over; at the top it comes back close to one flat tone.',
   'conceal.irises': 'Cover every eye found ({count})',
   'conceal.irisesNone': 'No eye was found in this photo. Place the circles by clicking.',
   'conceal.cost':
-    'An eye concealed this way loses its catchlight. The bright point spreads across the circle, and nothing is drawn back in its place.',
-  'conceal.count': 'Concealed — {count}',
+    'An eye keeps its colour and its catchlight over the lower part of the slider. Past that the bright point spreads across the circle, and nothing is drawn back in its place.',
+  'conceal.count': 'Blurred — {count}',
   'conceal.full': 'full',
   'conceal.removeLast': 'Undo the last circle',
   'conceal.clear': 'Remove every circle',
-  'conceal.aboutTitle': 'What is left inside the circle',
+  'conceal.aboutTitle': 'What this claims',
   'conceal.aboutBody':
-    'A face reflected in an eye is a few dozen pixels across, and inside the ring the detail at that scale is no longer there. That is not erasure, and nothing here claims the file cannot be attacked — what it claims is that the frequencies a face is recognised by are gone.',
+    'A blur, held inside the circle and taken in linear light, so the white of an eye is never drawn into the middle of it. How much survives is what the slider says and nothing more: nitra makes no claim about what could be recovered from the file. Set it by looking at the picture.',
 
   'restore.title': 'Restore the face',
   'restore.how':
@@ -548,7 +551,7 @@ export const en = {
   'toast.concealSeedNone': 'Every eye found already has a circle over it',
   'toast.concealSeedOverflow': 'Placed {count}; {overflow} more would pass the limit of {limit}',
   'toast.concealTooSmall':
-    'That circle is under a pixel wide on this photo, so nothing would be concealed. Make it larger.',
+    'That circle is under a pixel wide on this photo, so nothing would be blurred. Make it larger.',
   'toast.fontLoaded': 'Loaded {name}',
   'toast.fontFailed': 'Could not read that font file',
   'toast.framingReset': 'Framing reset',

@@ -240,6 +240,39 @@ const concealSpotSchema = z.object({
 });
 
 /**
+ * Conceal: a blur held inside the circles drawn over a reflection.
+ *
+ * The amount is the blur's reach as a fraction of each circle's own radius,
+ * never a number of pixels, which is what lets one control cover a mirror and a
+ * pupil when their radii differ by two orders of magnitude. It is also why the
+ * amount sits here rather than on the spot: the circles in one photograph are
+ * all asking for the same strength relative to their own size.
+ *
+ * Like {@link restoreSchema}, the declared default is a working value rather
+ * than the value at which nothing happens — a reach of zero is not a blur. What
+ * keeps the invariant is a level up: with no circles there is nothing for the
+ * amount to be an amount of, so a recipe that never names one renders the frame
+ * it was given.
+ */
+const concealSchema = z
+  .object({
+    /**
+     * Blur reach as a fraction of a circle's radius.
+     *
+     * At the default the reflection's own detail is gone while the circle still
+     * reads as what it was drawn over — on an eye, the iris keeps its colour and
+     * the pupil and the catchlight are still there. Towards the top the reach
+     * passes the circle's own width and what comes back is close to one flat
+     * tone, since a normalised average whose window is wider than its mask
+     * weights the whole mask almost evenly.
+     */
+    amount: num('conceal.amount', 0.02, 1, 0.15),
+    /** Order does not matter: each circle reads the same pristine source. */
+    spots: z.array(concealSpotSchema).max(CONCEAL_LIMIT).default([]),
+  })
+  .prefault({});
+
+/**
  * Restore: the photographed face, put back where a generator replaced it.
  *
  * The one stage whose input is a second file, and the schema holds the file's
@@ -733,8 +766,7 @@ export const recipeSchema = z.object({
    * one fills from what the first one left behind.
    */
   heal: z.array(healSpotSchema).max(HEAL_LIMIT).default([]),
-  /** Circles marking reflections to conceal. Order does not matter: each reads the same pristine source. */
-  conceal: z.array(concealSpotSchema).max(CONCEAL_LIMIT).default([]),
+  conceal: concealSchema,
   face: faceSchema,
   hair: hairSchema,
   depth: depthSchema,

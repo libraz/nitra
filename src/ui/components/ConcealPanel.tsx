@@ -1,14 +1,14 @@
 /**
- * Concealing a reflection.
+ * Blurring a reflection.
  *
  * Same bones as the blemish panel — a size to choose before the click, a count,
  * and the way back — with one button that does the common case on its own.
  *
- * There is no amount. The bottom of an amount slider is a reflection that is
- * still readable, which is the one state this tool may not offer; what the size
- * controls is how much of the picture the guarantee covers, not how strong it
- * is. So the panel's remaining job is to say what the ring promises and what it
- * costs, which is the catchlight of any eye it is drawn over.
+ * Two sliders that are easy to confuse, so the panel keeps them apart: the size
+ * is how much of the picture the circle covers, and the amount is how hard what
+ * is under it is blurred. The amount is one value for every circle because it is
+ * a fraction of each one's own radius, so an eye and a mirror in the same frame
+ * are already being treated in proportion.
  */
 
 import { CONCEAL_LIMIT, type Recipe } from '../../core/recipe/schema';
@@ -17,14 +17,17 @@ import { spec } from '../params';
 import { Slider } from './controls';
 
 const SIZE = spec('conceal.r', 'conceal.size');
+const AMOUNT = spec('conceal.amount', 'conceal.amount');
 
 interface ConcealPanelProps {
-  spots: Recipe['conceal'];
+  spots: Recipe['conceal']['spots'];
   radius: number;
+  amount: number;
   hasImage: boolean;
   /** Irises the analysis found, over every face. Zero disables the one click. */
   irisCount: number;
   onRadius: (value: number) => void;
+  onAmount: (value: number) => void;
   onSeedIrises: () => void;
   onRemoveLast: () => void;
   onClear: () => void;
@@ -33,9 +36,11 @@ interface ConcealPanelProps {
 export function ConcealPanel({
   spots,
   radius,
+  amount,
   hasImage,
   irisCount,
   onRadius,
+  onAmount,
   onSeedIrises,
   onRemoveLast,
   onClear,
@@ -57,6 +62,9 @@ export function ConcealPanel({
 
           <Slider spec={SIZE} value={radius} onChange={onRadius} />
           <p className="mini">{t('conceal.sizeNote')}</p>
+
+          <Slider spec={AMOUNT} value={amount} onChange={onAmount} />
+          <p className="mini">{t('conceal.amountNote')}</p>
 
           <button
             type="button"

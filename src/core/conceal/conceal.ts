@@ -1,9 +1,10 @@
 /**
- * Concealing a reflection: a low pass held inside the circle the user drew.
+ * Concealing a reflection: a blur held inside the circle the user drew.
  *
- * What the stage buys is not a blur but the absence of the band that carries
- * identity, so its reach is a fraction of the circle's own radius. One rule then
- * covers a mirror and a pupil, whose radii differ by two orders of magnitude.
+ * Its reach is a fraction of that circle's own radius rather than a number of
+ * pixels, which is what lets one amount cover a mirror and a pupil when their
+ * radii differ by two orders of magnitude, and what keeps the control meaning
+ * the same thing on the next photograph.
  *
  * Two things about the arithmetic are load-bearing. The average is taken in
  * linear light and composited there too, because a catchlight is the extreme of
@@ -15,16 +16,16 @@
  * Each circle reads the pristine source rather than the plate, so the order of
  * the list cannot change a pixel and a circle can be re-applied as often as the
  * stages under it are rebuilt. The mask's feather points outward: the ring the
- * user sees is the range being guaranteed, and a feather reaching inward would
- * leave the original structure inside it.
+ * user sees is the extent being blurred, and a feather reaching inward would
+ * leave the reflection's own structure standing just inside it.
  *
- * The average itself is taken on a decimated grid. A reach of 1.75r makes the
- * largest circle's region the whole frame, and four full-resolution planes of it
- * is where both the second and the hundreds of megabytes went; the field being
- * built varies over a span of about that reach, so carrying it at one sample per
- * pixel is carrying nothing. What the decimation may not touch is the mask used
- * to composite, which stays at full resolution: the ring is the range being
- * guaranteed, so its edge lands where the user drew it.
+ * The average itself is taken on a decimated grid, which matters at the top of
+ * the amount: the field being built varies over a span of about the reach, so
+ * carrying it at one sample per pixel is carrying nothing, and four
+ * full-resolution planes over a region that large is where both the second and
+ * the hundreds of megabytes went. What the decimation may not touch is the mask
+ * used to composite, which stays at full resolution so the ring's edge lands
+ * where the user drew it.
  */
 
 import { transferFromLinear } from '../color/spaces';
@@ -32,28 +33,15 @@ import { BLUR_PASSES, boxBlur, clampIndex, linearTable } from '../plate/blur';
 import type { Region } from '../plate/region';
 
 /**
- * Blur reach as a fraction of the circle's radius (σ/r).
- *
- * Bound by the band: a full-contrast grating of λ = r has to come back under two
- * code values, and since the average may only read light from inside the mask,
- * the window is about 2.7 wavelengths wide there and a free-space reach of r/2
- * leaves 9.5 of them. Measured, it takes 1.75 to clear the bound at every radius
- * the schema allows. One circle at the largest radius on a 4240x2832 frame
- * measures 140-172 ms over 14 MB, the region being the whole frame while what is
- * written is a fifth of it; a pupil-sized circle there is 8-24 ms over 7 MB.
- */
-export const CONCEAL_REACH = 1.75;
-
-/**
  * Box radius the blur is left with after the decimation, in decimated samples.
  *
  * Two things set it and neither is cost: the decimated field is reconstructed
  * bilinearly, whose error falls as the square of this, and the reach that
  * survives is `box·step`, which rounding moves by at most half a step — 1/(2·32)
- * of the reach here, against the 10% the catchlight's residual is predicted to.
- * The blur is the one part of the stage whose cost the decimation makes free, so
- * spending samples on it is spending nothing: at the largest circle on a
- * twelve-megapixel frame the grid is 93x62 and the four planes over it are 92 kB.
+ * of the reach here. The blur is the one part of the stage whose cost the
+ * decimation makes free, so spending samples on it is spending nothing: the grid
+ * is this many samples across the kernel whatever the circle and the amount are,
+ * and at the largest of both on a twelve-megapixel frame it is 93x62 cells.
  */
 const DECIMATED_BOX = 32;
 
@@ -61,7 +49,7 @@ const DECIMATED_BOX = 32;
  * Where the mask reaches zero, as a fraction past the radius.
  *
  * The same width as the heal stage's join and the opposite sign: what the ring
- * marks is the range being guaranteed, so the softening is outside it.
+ * marks is the extent being blurred, so the softening is outside it.
  */
 export const CONCEAL_FEATHER = 0.35;
 
@@ -72,12 +60,12 @@ export interface ConcealSpot {
   r: number;
 }
 
-/** Radius of the box whose three passes approximate a Gaussian of σ = reach·r. */
-function boxRadiusFor(radius: number): number {
-  // Kovesi's wIdeal = sqrt(12σ²/n + 1) is a width, and at n = BLUR_PASSES with
-  // σ = CONCEAL_REACH·r it comes to about r — so the radius is about σ. Under one
-  // pixel the blur returns in silence, which the ring would then be lying about.
-  return Math.max(1, Math.round(radius * CONCEAL_REACH));
+/** Radius of the box whose three passes approximate a Gaussian of σ = amount·r. */
+function boxRadiusFor(radius: number, amount: number): number {
+  // Kovesi's wIdeal = sqrt(12σ²/n + 1) is a width, so at n = BLUR_PASSES the box
+  // radius comes to about σ itself. Under one pixel the blur returns in silence
+  // and the ring would be standing over a reflection it never touched.
+  return Math.max(1, Math.round(radius * amount));
 }
 
 /**
@@ -90,8 +78,8 @@ function boxRadiusFor(radius: number): number {
  * {@link DECIMATED_BOX} samples is worked at full resolution, where it costs
  * nothing anyway.
  */
-export function concealDecimation(radius: number): number {
-  return Math.max(1, Math.floor(boxRadiusFor(radius) / DECIMATED_BOX));
+export function concealDecimation(radius: number, amount: number): number {
+  return Math.max(1, Math.floor(boxRadiusFor(radius, amount) / DECIMATED_BOX));
 }
 
 /** The mask at one distance from the centre: one inside, feathered outward. */
@@ -132,21 +120,23 @@ function bilinear(
  *
  * `region` is wide enough to hold the mask and everything three box passes read
  * from it, which is three radii rather than the one a single pass would take.
- * `written` is the part of it the mask reaches, which at the shipped reach is a
- * twentieth of the area — it is what the circle changes, so it is both what the
- * caller re-uploads and what decides whether a fill landed under the ring.
+ * `written` is the part of it the mask reaches, and at the top of the amount it
+ * is a twentieth of the area — it is what the circle changes, so it is both what
+ * the caller re-uploads and what decides whether a fill landed under the ring.
  *
  * Clamped to the frame: a circle at an edge loses reach on that side, since the
- * blur extends the border rather than inventing pixels, and the guarantee is
- * over the pixels the frame actually has.
+ * blur extends the border rather than inventing pixels.
  */
 export function concealRegion(
   spot: ConcealSpot,
   imageWidth: number,
   imageHeight: number,
+  amount: number,
 ): { region: Region; written: Region; centre: [number, number]; radius: number } {
   const radius = spot.r * imageWidth;
-  const reach = Math.ceil(radius * (1 + CONCEAL_FEATHER) + BLUR_PASSES * boxRadiusFor(radius));
+  const reach = Math.ceil(
+    radius * (1 + CONCEAL_FEATHER) + BLUR_PASSES * boxRadiusFor(radius, amount),
+  );
   const cx = spot.x * imageWidth;
   const cy = spot.y * imageHeight;
   const x = Math.max(0, Math.min(imageWidth - 1, Math.round(cx - reach)));
@@ -172,16 +162,16 @@ export function concealRegion(
  * Conceal one circle: read the pristine source, write the plate.
  *
  * Only the pixels the mask reaches are written. The region is as wide as three
- * box passes read, which at the shipped reach is twenty times the mask's area,
- * and laying the source back over all of it would take out every fill the stage
- * under this one left around the circle.
+ * box passes read, which at the top of the amount is twenty times the mask's
+ * area, and laying the source back over all of it would take out every fill the
+ * stage under this one left around the circle.
  *
  * The `(1−m)` term reads the pristine source rather than the plate, which is
  * what keeps a circle idempotent — the plate applies one again whenever a fill
  * lands under it, and a feather reading its own output would eat into the band
  * a little more on every pass. The cost is that a fill inside the feather is
- * pulled towards the source in that proportion, over a ring outside the range
- * the drawn one guarantees.
+ * pulled towards the source in that proportion, over a ring outside the one the
+ * user drew.
  *
  * @returns The rectangle that was written, which is what the caller re-uploads.
  */
@@ -191,8 +181,9 @@ export function concealSpot(
   imageWidth: number,
   imageHeight: number,
   spot: ConcealSpot,
+  amount: number,
 ): Region {
-  const { region, written, centre, radius } = concealRegion(spot, imageWidth, imageHeight);
+  const { region, written, centre, radius } = concealRegion(spot, imageWidth, imageHeight, amount);
   const [cx, cy] = centre;
   const outer = radius * (1 + CONCEAL_FEATHER);
 
@@ -204,8 +195,8 @@ export function concealSpot(
   const top = written.y - region.y;
   const bottom = top + written.height;
 
-  const step = concealDecimation(radius);
-  const box = Math.max(1, Math.round(boxRadiusFor(radius) / step));
+  const step = concealDecimation(radius, amount);
+  const box = Math.max(1, Math.round(boxRadiusFor(radius, amount) / step));
   const gridWidth = Math.ceil(region.width / step);
   const gridHeight = Math.ceil(region.height / step);
   const cells = gridWidth * gridHeight;

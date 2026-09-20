@@ -137,7 +137,7 @@ export function CropOverlay({ crop, ratio, onChange }: CropOverlayProps) {
 interface SpotOverlayProps {
   /** Which circles these are. The ring means a different thing in each. */
   variant: 'heal' | 'conceal';
-  spots: Recipe['heal'] | Recipe['conceal'];
+  spots: Recipe['heal'] | Recipe['conceal']['spots'];
   /** Radius the next spot gets, as a fraction of the image width. */
   radius: number;
   /** Output coordinate back to source coordinate, both normalised. */

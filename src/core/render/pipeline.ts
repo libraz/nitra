@@ -415,9 +415,10 @@ export class Pipeline {
     const pending = this.restored !== null && this.healed === null;
     // This runs on the way to every settled render, and almost none of them
     // placed anything.
-    if (!pending && plate.matches(recipe.conceal, recipe.heal)) return;
+    const { spots: circles, amount } = recipe.conceal;
+    if (!pending && plate.matches(circles, amount, recipe.heal)) return;
 
-    const update = plate.apply(recipe.conceal, recipe.heal);
+    const update = plate.apply(circles, amount, recipe.heal);
     if (update === null && !pending) return;
 
     // The plate is null again once the last spot or circle goes, and what that

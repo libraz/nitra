@@ -34,7 +34,7 @@ export const ja: Messages = {
   'tool.adjust': '調整',
   'tool.restore': 'AIが変えた顔を戻す',
   'tool.heal': 'シミ・ニキビ消し',
-  'tool.conceal': '映り込みを隠す',
+  'tool.conceal': '映り込みをぼかす',
   'tool.crop': 'トリミングと回転',
   'tool.text': '文字入れ',
   'tool.tiles': 'グリッド分割',
@@ -62,7 +62,7 @@ export const ja: Messages = {
   'stage.hintHealBack': '輪郭をクリック',
   'stage.hintHealBackText': '元に戻す',
   'stage.hintConceal': 'クリック',
-  'stage.hintConcealText': '映り込みを隠す',
+  'stage.hintConcealText': '映り込みをぼかす',
   'stage.hintConcealBack': '輪郭をクリック',
   'stage.hintConcealBackText': '元に戻す',
 
@@ -252,22 +252,25 @@ export const ja: Messages = {
 
   'conceal.title': '反射の映り込み',
   'conceal.how':
-    '瞳・鏡・金属・ガラスの反射に写り込んだ人を隠します。隠したい反射をクリックしてください。残った輪郭をクリックすると元に戻ります。',
+    '瞳・鏡・金属・ガラスの反射に写り込んだ人をぼかします。ぼかしたい反射をクリックしてください。残った輪郭をクリックすると元に戻ります。',
   'conceal.noImage': '写真を開くと使えます。',
   'conceal.size': '円の大きさ',
   'conceal.sizeNote':
-    '反射より一回り、3割ほど大きく。保証できるのは輪郭の内側だけで、その外側のぼけた帯は含みません。',
+    '反射より一回り、3割ほど大きく。ぼけるのは輪郭の内側だけで、その外側の帯は写真へ戻っていく部分です。',
+  'conceal.amount': 'ぼかしの強さ',
+  'conceal.amountNote':
+    '円それぞれの半径に対する比なので、瞳と鏡が同じ写真にあっても一つの設定で釣り合います。弱めでも反射は読めなくなり、そこが何であったかは残ります。上げきると円の中はほぼ単色になります。',
   'conceal.irises': '見つかった目にまとめて置く（{count}）',
   'conceal.irisesNone': 'この写真からは目が見つかりませんでした。クリックで円を置いてください。',
   'conceal.cost':
-    'この方法で隠した目は、キャッチライトを失います。光の点は円全体に広がって点としては残らず、代わりに描き足すこともしません。',
-  'conceal.count': '隠した反射 — {count}',
+    'スライダーの下のほうなら、目は虹彩の色もキャッチライトも保ちます。それより上げると光の点は円全体に広がって点としては残らず、代わりに描き足すこともしません。',
+  'conceal.count': 'ぼかした反射 — {count}',
   'conceal.full': '上限',
   'conceal.removeLast': '直前の1つを戻す',
   'conceal.clear': 'すべて戻す',
-  'conceal.aboutTitle': '円の中に残るもの',
+  'conceal.aboutTitle': 'この機能が言えること',
   'conceal.aboutBody':
-    '瞳に映った顔は数十ピクセルしかなく、輪郭の内側にはその大きさの顔を形づくる細かさがもう残っていません。これは消去ではありませんし、解析できないとも言いません。言えるのは、顔を見分けている周波数が残っていないということです。',
+    '円の中だけを、リニア光で、白目を巻き込まずにぼかします。どれだけ残るかはスライダーが決めるところまでで、ファイルから何が復元できるかについて nitra は何も主張しません。写真を見ながら、反射が読めなくなるところまで上げてください。',
 
   'restore.title': '顔を戻す',
   'restore.how':
@@ -544,7 +547,7 @@ export const ja: Messages = {
   'toast.concealSeedOverflow':
     '{count}個置きました。残り{overflow}個は上限{limit}を超えるため置いていません',
   'toast.concealTooSmall':
-    'この写真ではその円が1ピクセル未満になり、何も隠れません。もう少し大きくしてください。',
+    'この写真ではその円が1ピクセル未満になり、何もぼけません。もう少し大きくしてください。',
   'toast.fontLoaded': '{name} を読み込みました',
   'toast.fontFailed': 'このフォントファイルは読み込めませんでした',
   'toast.framingReset': '構図をリセットしました',

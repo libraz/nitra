@@ -10,9 +10,10 @@
  *
  * The circles are asserted as an order and a re-application: they go over the
  * fills, they read what the stage under the plate left rather than the plate
- * itself, and a fill that reaches one has to run it again — otherwise a ring
- * that promises the identifying frequencies are gone has sharp structure put
- * back inside it.
+ * itself, and a fill that reaches one has to run it again — otherwise a fill
+ * lands under a circle the user blurred and puts sharp structure back inside
+ * it. The amount is bookkeeping here too: changing it cannot be appended to
+ * what is already in the plate.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -21,6 +22,21 @@ import { type HealSpot, regionFor } from '../src/core/heal/inpaint';
 import { SourcePlate } from '../src/core/plate/plate';
 
 const SIZE = 192;
+
+/**
+ * Blur the circles are applied at. Away from both ends of the slider, so a
+ * transition that quietly fell back to a default would show up here.
+ */
+const AMOUNT = 0.3;
+
+/**
+ * The top of the slider, for the two cases whose geometry needs it.
+ *
+ * What a circle reads over is the mask plus three box passes, so at a low amount
+ * the region is barely wider than the mask and there is no room for a fill to
+ * sit between the two — which is the case those tests are about.
+ */
+const WIDE_AMOUNT = 1;
 
 /** Flat skin with grain, and a dark mark wherever one is asked for. */
 function photograph(marks: readonly { x: number; y: number; r: number }[]): Uint8ClampedArray {
@@ -77,7 +93,7 @@ describe('the plate', () => {
     const { plate } = plateOf();
     expect(plate.pixels).toBeNull();
     // An empty list is not a change to apply; the photograph is already it.
-    expect(plate.apply([], [])).toBeNull();
+    expect(plate.apply([], AMOUNT, [])).toBeNull();
     expect(plate.pixels).toBeNull();
   });
 
@@ -86,7 +102,7 @@ describe('the plate', () => {
     const before = pristine.slice();
     const dark = meanAt(pristine, LEFT);
 
-    const update = plate.apply([], [LEFT]);
+    const update = plate.apply([], AMOUNT, [LEFT]);
     expect(update).not.toBeNull();
     expect(update?.rebuilt).toBe(false);
     expect(update?.rects).toHaveLength(1);
@@ -100,7 +116,7 @@ describe('the plate', () => {
 
   it('reports the rectangle the fill reached, not the whole frame', () => {
     const { plate } = plateOf();
-    const update = plate.apply([], [LEFT]);
+    const update = plate.apply([], AMOUNT, [LEFT]);
     const rect = update?.rects[0] as { x: number; y: number; width: number; height: number };
     // The region reaches past the spot on every side, because the surrounding
     // skin is the only place the fill has to copy from.
@@ -112,19 +128,19 @@ describe('the plate', () => {
 
   it('does nothing when asked for what it has already done', () => {
     const { plate } = plateOf();
-    expect(plate.apply([], [LEFT, RIGHT])).not.toBeNull();
-    expect(plate.apply([], [LEFT, RIGHT])).toBeNull();
+    expect(plate.apply([], AMOUNT, [LEFT, RIGHT])).not.toBeNull();
+    expect(plate.apply([], AMOUNT, [LEFT, RIGHT])).toBeNull();
     // A separate object with the same numbers is the same edit: the recipe is
     // replaced on every change, so identity would report work on every render.
-    expect(plate.apply([], [{ ...LEFT }, { ...RIGHT }])).toBeNull();
+    expect(plate.apply([], AMOUNT, [{ ...LEFT }, { ...RIGHT }])).toBeNull();
   });
 
   it('appends without redoing what is already in the plate', () => {
     const { plate } = plateOf();
-    plate.apply([], [LEFT]);
+    plate.apply([], AMOUNT, [LEFT]);
     const filled = (plate.pixels as Uint8ClampedArray).slice();
 
-    const update = plate.apply([], [LEFT, RIGHT]);
+    const update = plate.apply([], AMOUNT, [LEFT, RIGHT]);
     expect(update?.rebuilt).toBe(false);
     expect(update?.rects).toHaveLength(1);
 
@@ -143,9 +159,9 @@ describe('the plate', () => {
 
   it('puts back what was under a spot that is taken away', () => {
     const { pristine, plate } = plateOf();
-    plate.apply([], [LEFT, RIGHT]);
+    plate.apply([], AMOUNT, [LEFT, RIGHT]);
 
-    const update = plate.apply([], [LEFT]);
+    const update = plate.apply([], AMOUNT, [LEFT]);
     // There is no inverse of a fill, so the plate is built again from the
     // photograph and the remaining spots are replayed.
     expect(update?.rebuilt).toBe(true);
@@ -158,16 +174,16 @@ describe('the plate', () => {
 
   it('rebuilds when a spot moves rather than treating it as a new one', () => {
     const { plate } = plateOf();
-    plate.apply([], [LEFT, RIGHT]);
-    const update = plate.apply([], [LEFT, { ...RIGHT, x: 0.66 }]);
+    plate.apply([], AMOUNT, [LEFT, RIGHT]);
+    const update = plate.apply([], AMOUNT, [LEFT, { ...RIGHT, x: 0.66 }]);
     expect(update?.rebuilt).toBe(true);
     expect(update?.rects).toHaveLength(2);
   });
 
   it('goes back to costing nothing when the last spot is removed', () => {
     const { plate } = plateOf();
-    plate.apply([], [LEFT]);
-    const update = plate.apply([], []);
+    plate.apply([], AMOUNT, [LEFT]);
+    const update = plate.apply([], AMOUNT, []);
     expect(update).toEqual({ rebuilt: true, rects: [] });
     // The plate is dropped rather than refilled: the photograph is already the
     // answer, and holding a copy of it is holding the decoded image twice.
@@ -177,7 +193,7 @@ describe('the plate', () => {
   it('composes two spots that overlap', () => {
     const near: HealSpot = { x: 0.32, y: 0.4, r: 0.03 };
     const { pristine, plate } = plateOf([LEFT, near]);
-    plate.apply([], [LEFT, near]);
+    plate.apply([], AMOUNT, [LEFT, near]);
     const pixels = plate.pixels as Uint8ClampedArray;
     // The second fill read what the first left behind, so neither mark is left
     // in the overlap — which is what would happen if a person had healed them
@@ -189,12 +205,12 @@ describe('the plate', () => {
   it('remembers a spot too small to fill anything', () => {
     const { plate } = plateOf();
     const speck: HealSpot = { x: 0.5, y: 0.5, r: 0.002 };
-    const update = plate.apply([], [speck]);
+    const update = plate.apply([], AMOUNT, [speck]);
     // Under a pixel and a half of radius there is nothing to fill, so there is
     // nothing to upload either — but the spot is in the recipe, and asking again
     // must not run it a second time.
     expect(update).toEqual({ rebuilt: false, rects: [] });
-    expect(plate.apply([], [speck])).toBeNull();
+    expect(plate.apply([], AMOUNT, [speck])).toBeNull();
   });
 });
 
@@ -256,7 +272,7 @@ const RESTORED = photograph([BESIDE]);
 describe('the plate and the circles over it', () => {
   it('conceals the frame the restore left rather than the one that was decoded', () => {
     const plate = new SourcePlate(RESTORED, SIZE, SIZE);
-    plate.apply([CIRCLE], []);
+    plate.apply([CIRCLE], AMOUNT, []);
     const pixels = plate.pixels as Uint8ClampedArray;
     // The disc comes back at the level of the face that was put back, not of
     // the mark the generator left there.
@@ -266,7 +282,7 @@ describe('the plate and the circles over it', () => {
 
   it('flattens what is inside the circle and leaves the frame around it alone', () => {
     const plate = new SourcePlate(RESTORED, SIZE, SIZE);
-    const update = plate.apply([CIRCLE], []);
+    const update = plate.apply([CIRCLE], AMOUNT, []);
     // A circle is applied over the pristine source, so there is nothing to undo
     // it with: every change to the list is a rebuild, and the rectangles of a
     // rebuild say nothing the caller can use.
@@ -279,10 +295,10 @@ describe('the plate and the circles over it', () => {
 
   it('conceals the source under the fills rather than the fills', () => {
     const alone = new SourcePlate(RESTORED, SIZE, SIZE);
-    alone.apply([CIRCLE], []);
+    alone.apply([CIRCLE], AMOUNT, []);
 
     const both = new SourcePlate(RESTORED, SIZE, SIZE);
-    both.apply([CIRCLE], [UNDER, BESIDE]);
+    both.apply([CIRCLE], AMOUNT, [UNDER, BESIDE]);
     const pixels = both.pixels as Uint8ClampedArray;
 
     // Byte for byte the same inside the ring, with a fill under it and without.
@@ -296,10 +312,10 @@ describe('the plate and the circles over it', () => {
 
   it('runs a circle again when a fill reaches it', () => {
     const plate = new SourcePlate(RESTORED, SIZE, SIZE);
-    plate.apply([CIRCLE, OTHER_CIRCLE], []);
+    plate.apply([CIRCLE, OTHER_CIRCLE], AMOUNT, []);
     const concealed = disc(plate.pixels as Uint8ClampedArray, CIRCLE);
 
-    const update = plate.apply([CIRCLE, OTHER_CIRCLE], [UNDER]);
+    const update = plate.apply([CIRCLE, OTHER_CIRCLE], AMOUNT, [UNDER]);
     // Still the append path — the fill is not redone and the circles are not
     // all replayed. What comes back is the fill's own rectangle and the one
     // circle it reached; the other circle is not in the list, because nothing
@@ -307,7 +323,7 @@ describe('the plate and the circles over it', () => {
     expect(update?.rebuilt).toBe(false);
     expect(update?.rects).toEqual([
       regionFor(UNDER, SIZE, SIZE).region,
-      concealRegion(CIRCLE, SIZE, SIZE).written,
+      concealRegion(CIRCLE, SIZE, SIZE, AMOUNT).written,
     ]);
     // And the ring holds what it held before the fill went under it.
     expect(disc(plate.pixels as Uint8ClampedArray, CIRCLE)).toEqual(concealed);
@@ -316,14 +332,14 @@ describe('the plate and the circles over it', () => {
   it('keeps a fill that sits outside a circle but inside its reach', () => {
     const restored = photograph([AROUND]);
     const plate = new SourcePlate(restored, SIZE, SIZE);
-    plate.apply([CIRCLE], []);
+    plate.apply([CIRCLE], WIDE_AMOUNT, []);
 
     // The fill is outside the ring and its feather, so the circle has no claim
     // on it, and inside the region the circle's blur reads, so it is in reach of
     // being written over. Both have to hold for the assertion to mean anything.
     const gap = Math.hypot(AROUND.x - CIRCLE.x, AROUND.y - CIRCLE.y) * SIZE;
     expect(gap - AROUND.r * SIZE).toBeGreaterThan(CIRCLE.r * SIZE * (1 + CONCEAL_FEATHER));
-    const { region, written } = concealRegion(CIRCLE, SIZE, SIZE);
+    const { region, written } = concealRegion(CIRCLE, SIZE, SIZE, WIDE_AMOUNT);
     expect(gap + AROUND.r * SIZE).toBeLessThan(region.x + region.width - CIRCLE.x * SIZE);
     // And the fill's own rectangle still meets the box the circle writes, which
     // is what puts the circle back on the list below.
@@ -333,7 +349,7 @@ describe('the plate and the circles over it', () => {
     expect(reached.y).toBeLessThan(written.y + written.height);
     expect(written.y).toBeLessThan(reached.y + reached.height);
 
-    const update = plate.apply([CIRCLE], [AROUND]);
+    const update = plate.apply([CIRCLE], WIDE_AMOUNT, [AROUND]);
     // The circle is applied again — and what it writes must not take the fill
     // with it.
     expect(update?.rebuilt).toBe(false);
@@ -344,8 +360,8 @@ describe('the plate and the circles over it', () => {
 
   it('leaves a circle alone when the fill is nowhere near it', () => {
     const plate = new SourcePlate(RESTORED, SIZE, SIZE);
-    plate.apply([CIRCLE], []);
-    const update = plate.apply([CIRCLE], [BESIDE]);
+    plate.apply([CIRCLE], AMOUNT, []);
+    const update = plate.apply([CIRCLE], AMOUNT, [BESIDE]);
     expect(update?.rebuilt).toBe(false);
     expect(update?.rects).toEqual([regionFor(BESIDE, SIZE, SIZE).region]);
   });
@@ -355,7 +371,7 @@ describe('the plate and the circles over it', () => {
     const before = decoded.slice();
     const plate = new SourcePlate(decoded, SIZE, SIZE);
 
-    expect(plate.apply([], [])).toBeNull();
+    expect(plate.apply([], AMOUNT, [])).toBeNull();
     expect(plate.pixels).toBeNull();
     // What the renderer uploads is the plate's pixels or, while there are none,
     // the ones it was given. So a recipe with neither a circle nor a spot in it
@@ -365,8 +381,8 @@ describe('the plate and the circles over it', () => {
 
     // The same once a circle has been placed and taken away again, which is the
     // other way of arriving at a recipe that asks for nothing.
-    plate.apply([CIRCLE], []);
-    expect(plate.apply([], [])).toEqual({ rebuilt: true, rects: [] });
+    plate.apply([CIRCLE], AMOUNT, []);
+    expect(plate.apply([], AMOUNT, [])).toEqual({ rebuilt: true, rects: [] });
     expect(plate.pixels).toBeNull();
     expect(decoded).toEqual(before);
   });
@@ -526,6 +542,50 @@ const TRANSITIONS: readonly {
   },
 ];
 
+/**
+ * Changes to the amount alone, which the table above cannot carry: every row
+ * there runs at one amount, and these are about moving it.
+ */
+describe('moving the amount the circles are blurred at', () => {
+  it('rebuilds rather than appending, and the fills survive it', () => {
+    // A circle large enough that two amounts do not round to the same box.
+    const wide: ConcealSpot = { ...CIRCLE, r: 0.12 };
+    const plate = new SourcePlate(DECODED, SIZE, SIZE);
+    plate.apply([wide], AMOUNT, [BESIDE]);
+    const filled = (plate.pixels as Uint8ClampedArray).slice();
+
+    expect(plate.matches([wide], WIDE_AMOUNT, [BESIDE])).toBe(false);
+    const update = plate.apply([wide], WIDE_AMOUNT, [BESIDE]);
+    expect(update?.rebuilt).toBe(true);
+
+    // The circle came out differently and the fill beside it did not: a rebuild
+    // replays the whole list rather than dropping what the amount does not move.
+    // Read over the whole disc rather than at its centre, where two amounts both
+    // wide enough to cross the mask agree on the same mean.
+    const pixels = plate.pixels as Uint8ClampedArray;
+    const cx = wide.x * SIZE;
+    const cy = wide.y * SIZE;
+    let moved = 0;
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) > wide.r * SIZE) continue;
+        const i = (y * SIZE + x) * 4;
+        if (pixels[i] !== filled[i]) moved++;
+      }
+    }
+    expect(moved).toBeGreaterThan(0);
+    expect(meanAt(pixels, BESIDE)).toBeCloseTo(meanAt(filled, BESIDE), 5);
+  });
+
+  it('is not a change while there is no circle to blur', () => {
+    // Otherwise the slider would drop a plate full of fills on every touch.
+    const plate = new SourcePlate(DECODED, SIZE, SIZE);
+    plate.apply([], AMOUNT, [BESIDE]);
+    expect(plate.matches([], AMOUNT + 0.1, [BESIDE])).toBe(true);
+    expect(plate.apply([], AMOUNT + 0.1, [BESIDE])).toBeNull();
+  });
+});
+
 for (const restored of [false, true]) {
   const base = restored ? RESTORED : DECODED;
   const untouched = base.slice();
@@ -533,8 +593,8 @@ for (const restored of [false, true]) {
     for (const step of TRANSITIONS) {
       it(step.name, () => {
         const plate = new SourcePlate(base, SIZE, SIZE);
-        for (const [conceal, heal] of step.start) plate.apply(conceal, heal);
-        const update = plate.apply(step.next[0], step.next[1]);
+        for (const [conceal, heal] of step.start) plate.apply(conceal, AMOUNT, heal);
+        const update = plate.apply(step.next[0], AMOUNT, step.next[1]);
         if (step.update === null) {
           expect(update).toBeNull();
         } else {

@@ -2,24 +2,25 @@
  * The conceal stage, asserted by what is left of a reflection rather than by
  * stored bytes.
  *
- * What the stage promises is a band, not a look: a grating finer than the circle
- * it was drawn on has to come back under the eye's threshold, measured in code
- * values inside the ring the user saw, because the ring is the range being
- * guaranteed. Everything else here defends one claim each, and each is measured
- * against what the alternative would have done — a plain convolution for the
- * light outside the mask, a gamma-space average for the mean — since a number
- * on its own says nothing about why the arithmetic is shaped the way it is.
+ * The stage is a blur whose strength the user sets, so what is asserted is what
+ * a given strength does to detail of a given size, measured in code values
+ * inside the ring. Both ends of the slider are pinned, because both are claims
+ * the panel makes: at the default the reflection's own detail is gone while the
+ * circle still looks like what it was drawn over, and at the top what comes back
+ * is close to one flat tone.
  *
- * The counterfactuals are built from the same shared box blur rather than a
- * second blur written for the test, so what they differ in is the one step
- * being argued about.
+ * Everything else here defends one claim each, and each is measured against what
+ * the alternative would have done — a plain convolution for the light outside
+ * the mask, a gamma-space average for the mean — since a number on its own says
+ * nothing about why the arithmetic is shaped the way it is. The counterfactuals
+ * are built from the same shared box blur rather than a second blur written for
+ * the test, so what they differ in is the one step being argued about.
  */
 
 import { describe, expect, it } from 'vitest';
 import { transferFromLinear, transferToLinear } from '../src/core/color/spaces';
 import {
   CONCEAL_FEATHER,
-  CONCEAL_REACH,
   type ConcealSpot,
   concealDecimation,
   concealRegion,
@@ -27,16 +28,19 @@ import {
 } from '../src/core/conceal/conceal';
 import { boxBlur } from '../src/core/plate/blur';
 import { cutOut } from '../src/core/plate/region';
+import { paramDef } from '../src/core/recipe/schema';
 
 /**
- * Residual amplitude the test allows, in code values.
+ * Residual amplitude a grating is called gone at, in code values.
  *
- * A reflected face is a few tens of pixels across, and a known one survives at
- * 7x10 of them; a circle placed on the reflection makes that band λ ≈ 0.29r, so
- * clearing λ ≤ r is several times more than identification needs. The bound is
- * what a unit-contrast grating may come back as.
+ * Two of them is under what an eye resolves on a photograph, and a unit-contrast
+ * grating is the worst case a real reflection is bounded by.
  */
-const BAND_LIMIT = 2;
+const GONE = 2;
+
+/** The two ends of the slider, read from the schema rather than repeated here. */
+const DEFAULT_AMOUNT = paramDef('conceal.amount').neutral;
+const FULL_AMOUNT = paramDef('conceal.amount').max;
 
 /** An RGBA frame, opaque, painted per channel. */
 function frame(
@@ -129,8 +133,8 @@ function linearMean(
 }
 
 /** The box the stage blurs with, as `conceal.ts` rounds it. */
-function boxRadius(radius: number): number {
-  return Math.max(1, Math.round(radius * CONCEAL_REACH));
+function boxRadius(radius: number, amount: number): number {
+  return Math.max(1, Math.round(radius * amount));
 }
 
 /** The stage's mask: one inside the ring, feathered outward to zero. */
@@ -166,14 +170,15 @@ function concealPerPixel(
   imageWidth: number,
   imageHeight: number,
   spot: ConcealSpot,
+  amount: number,
   toLinear: (code: number) => number = transferToLinear,
   fromLinear: (light: number) => number = transferFromLinear,
 ): Uint8ClampedArray {
   const out = new Uint8ClampedArray(pristine);
-  const { region, centre, radius } = concealRegion(spot, imageWidth, imageHeight);
+  const { region, centre, radius } = concealRegion(spot, imageWidth, imageHeight, amount);
   const patch = cutOut(pristine, imageWidth, region);
   const count = region.width * region.height;
-  const box = boxRadius(radius);
+  const box = boxRadius(radius, amount);
   const mask = maskOf(region.width, region.height, centre[0], centre[1], radius);
   const scratch = new Float32Array(count);
   const weight = new Float32Array(mask);
@@ -223,13 +228,14 @@ function plainConvolutionMean(
   imageWidth: number,
   imageHeight: number,
   spot: ConcealSpot,
+  amount: number,
 ): number {
-  const { region, centre, radius } = concealRegion(spot, imageWidth, imageHeight);
+  const { region, centre, radius } = concealRegion(spot, imageWidth, imageHeight, amount);
   const patch = cutOut(pristine, imageWidth, region);
   const count = region.width * region.height;
   const value = new Float32Array(count);
   for (let i = 0; i < count; i++) value[i] = transferToLinear((patch[i * 4] as number) / 255);
-  boxBlur(value, region.width, region.height, boxRadius(radius), new Float32Array(count));
+  boxBlur(value, region.width, region.height, boxRadius(radius, amount), new Float32Array(count));
   let sum = 0;
   let n = 0;
   insideDisc(region.width, region.height, centre[0], centre[1], radius, (i) => {
@@ -239,55 +245,79 @@ function plainConvolutionMean(
   return sum / n;
 }
 
-describe('the band a conceal has to take out', () => {
+describe('what a circle takes out at each end of the slider', () => {
   const WIDTH = 512;
   const HEIGHT = 512;
   const SPOT: ConcealSpot = { x: 0.5, y: 0.5, r: 0.15 };
 
-  it('leaves under two code values of a grating at or under its own radius', () => {
-    const radius = SPOT.r * WIDTH;
-    for (const ratio of [0.25, 0.35, 0.5, 0.7, 0.85, 1]) {
-      const pristine = frame(WIDTH, HEIGHT, grating(radius * ratio));
-      const plate = new Uint8ClampedArray(pristine);
-      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT);
-      for (const left of residual(plate, WIDTH, HEIGHT, SPOT)) {
-        expect.soft(left, `grating of lambda = ${ratio}r`).toBeLessThanOrEqual(BAND_LIMIT);
+  /** Worst residual over the three orientations, for a grating of `ratio·r`. */
+  function left(ratio: number, amount: number, spot = SPOT, w = WIDTH, h = HEIGHT): number {
+    const pristine = frame(w, h, grating(spot.r * w * ratio));
+    const plate = new Uint8ClampedArray(pristine);
+    concealSpot(plate, pristine, w, h, spot, amount);
+    return Math.max(...residual(plate, w, h, spot));
+  }
+
+  it('is measured by something that can see a grating', () => {
+    // A residual of zero means nothing until the measurement is known to report
+    // the full swing of a grating it is given.
+    for (const ratio of [0.25, 0.5, 1]) {
+      const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * ratio));
+      for (const seen of residual(pristine, WIDTH, HEIGHT, SPOT)) {
+        expect.soft(seen, `unblurred lambda = ${ratio}r`).toBeGreaterThan(100);
       }
     }
   });
 
-  it('is measured by something that can see a grating', () => {
-    // The same reading taken before the stage runs, because a residual of zero
-    // means nothing until the measurement is known to report the full swing of
-    // a grating it is given.
-    const radius = SPOT.r * WIDTH;
-    for (const ratio of [0.25, 0.5, 1]) {
-      const pristine = frame(WIDTH, HEIGHT, grating(radius * ratio));
-      for (const left of residual(pristine, WIDTH, HEIGHT, SPOT)) {
-        expect.soft(left, `unconcealed lambda = ${ratio}r`).toBeGreaterThan(100);
+  it('clears the reflection at the default without flattening the circle', () => {
+    // Both halves are the product claim, and the second is the one worth
+    // guarding: an amount wide enough to reach across the circle leaves a flat
+    // disc, which on an eye reads as a hole rather than as a blurred eye. The
+    // detail of a reflected face is a fraction of the circle drawn over it, so
+    // taking it out and keeping the circle's own shape is not a contradiction.
+    for (const ratio of [0.05, 0.1, 0.2]) {
+      expect.soft(left(ratio, DEFAULT_AMOUNT), `lambda = ${ratio}r`).toBeLessThanOrEqual(GONE);
+    }
+    // Half of a unit-contrast grating at the circle's own scale still standing:
+    // a pupil against an iris survives a default-strength circle over it.
+    expect(left(1, DEFAULT_AMOUNT)).toBeGreaterThan(60);
+  });
+
+  it('comes back close to one tone at the top', () => {
+    for (const ratio of [0.2, 0.35, 0.5]) {
+      expect.soft(left(ratio, FULL_AMOUNT), `lambda = ${ratio}r`).toBeLessThanOrEqual(GONE);
+    }
+    // And what is left at the circle's own scale, where the average's window is
+    // wider than the mask and the normalisation weights the mask almost evenly.
+    expect(left(1, FULL_AMOUNT)).toBeLessThan(4);
+  });
+
+  it('takes out more the further the slider goes, at every scale', () => {
+    // The two ends above are the claims; this is what makes the control between
+    // them a control. A blur whose reach did not follow the amount would pass
+    // either end alone.
+    for (const ratio of [0.35, 0.5, 0.7, 1]) {
+      const sweep = [0.05, 0.1, 0.25, 0.5, 1].map((amount) => left(ratio, amount));
+      for (let i = 1; i < sweep.length; i++) {
+        const step = `lambda = ${ratio}r, step ${i}`;
+        expect.soft(sweep[i] as number, step).toBeLessThanOrEqual(sweep[i - 1] as number);
       }
     }
   });
 
   it('holds at the smallest circle the schema allows', () => {
-    // The schema's floor is r = 0.004, and the blur's box is rounded to whole
-    // pixels: a width of 750 is the narrowest frame where that box is more than
-    // the one pixel it is clamped up to. Below a two-pixel period there is no
-    // grating left to sample, so the sweep starts where one can exist.
-    const WIDE = 750;
+    // The schema's floor is r = 0.004. The frame is wide enough that detail
+    // under that radius still has a period of two pixels to be sampled at, and
+    // the blur's box comes out well above the one pixel it is clamped up to.
+    const WIDE = 2000;
     const TALL = 64;
     const spot: ConcealSpot = { x: 0.5, y: 0.5, r: 0.004 };
     const radius = spot.r * WIDE;
-    expect(boxRadius(radius)).toBeGreaterThan(1);
-    for (const ratio of [0.7, 0.85, 1]) {
-      const lambda = radius * ratio;
-      expect(lambda).toBeGreaterThanOrEqual(2);
-      const pristine = frame(WIDE, TALL, grating(lambda));
-      const plate = new Uint8ClampedArray(pristine);
-      concealSpot(plate, pristine, WIDE, TALL, spot);
-      for (const left of residual(plate, WIDE, TALL, spot)) {
-        expect.soft(left, `smallest circle, lambda = ${ratio}r`).toBeLessThanOrEqual(BAND_LIMIT);
-      }
+    expect(boxRadius(radius, FULL_AMOUNT)).toBeGreaterThan(1);
+    for (const ratio of [0.25, 0.35, 0.5]) {
+      expect(radius * ratio).toBeGreaterThanOrEqual(2);
+      const where = `smallest circle, lambda = ${ratio}r`;
+      expect.soft(left(ratio, FULL_AMOUNT, spot, WIDE, TALL), where).toBeLessThanOrEqual(GONE);
     }
   });
 
@@ -296,19 +326,19 @@ describe('the band a conceal has to take out', () => {
     // those samples, so anything the grid folded down, or any seam left where
     // the reconstruction crosses from one sample to the next, would come back at
     // that period or a multiple of it. The sweep is over the lattice rather than
-    // over fractions of the radius because it is the lattice being asked about;
-    // every wavelength here is under r and so under the same bound.
+    // over fractions of the radius because it is the lattice being asked about,
+    // and it runs at the top of the amount, which is where the grid is thinnest.
     const radius = SPOT.r * WIDTH;
-    const step = concealDecimation(radius);
+    const step = concealDecimation(radius, FULL_AMOUNT);
     expect(step).toBeGreaterThan(1);
     for (const multiple of [1, 1.5, 2, 3, 4, 6]) {
       const lambda = step * multiple;
-      expect(lambda).toBeLessThanOrEqual(radius);
+      expect(lambda).toBeLessThanOrEqual(radius / 2);
       const pristine = frame(WIDTH, HEIGHT, grating(lambda));
       const plate = new Uint8ClampedArray(pristine);
-      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT);
-      for (const left of residual(plate, WIDTH, HEIGHT, SPOT)) {
-        expect.soft(left, `lambda = ${multiple} steps`).toBeLessThanOrEqual(BAND_LIMIT);
+      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
+      for (const seen of residual(plate, WIDTH, HEIGHT, SPOT)) {
+        expect.soft(seen, `lambda = ${multiple} steps`).toBeLessThanOrEqual(GONE);
       }
     }
   });
@@ -350,13 +380,13 @@ describe('the average the decimated grid stands in for', () => {
       for (const spot of [
         { x: 0.5, y: 0.5, r: 0.15 },
         { x: 0.5, y: 0.5, r: 0.2 },
-        { x: 0.12, y: 0.5, r: 0.1 },
+        { x: 0.12, y: 0.5, r: 0.15 },
       ]) {
-        expect(concealDecimation(spot.r * WIDTH)).toBeGreaterThan(1);
+        expect(concealDecimation(spot.r * WIDTH, FULL_AMOUNT)).toBeGreaterThan(1);
         const pristine = frame(WIDTH, HEIGHT, paint);
         const plate = new Uint8ClampedArray(pristine);
-        concealSpot(plate, pristine, WIDTH, HEIGHT, spot);
-        const perPixel = concealPerPixel(pristine, WIDTH, HEIGHT, spot);
+        concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
+        const perPixel = concealPerPixel(pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
         const gap = widestGap(plate, perPixel, WIDTH, HEIGHT, spot);
         expect.soft(gap, `r = ${spot.r} at ${spot.x}`).toBeLessThanOrEqual(GRID_LIMIT);
       }
@@ -386,10 +416,10 @@ describe('where the colour inside the circle comes from', () => {
     const means = ([235, 0] as const).map((sclera) => {
       const pristine = frame(WIDTH, HEIGHT, eye(sclera));
       const plate = new Uint8ClampedArray(pristine);
-      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT);
+      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
       return {
         normalised: linearMean(plate, WIDTH, HEIGHT, SPOT),
-        plain: plainConvolutionMean(pristine, WIDTH, HEIGHT, SPOT),
+        plain: plainConvolutionMean(pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT),
       };
     });
     const [bright, dark] = means as [(typeof means)[0], (typeof means)[0]];
@@ -422,7 +452,7 @@ describe('what the average is taken in', () => {
   it('holds the linear-light mean that a gamma-space average would sink', () => {
     const pristine = frame(WIDTH, HEIGHT, (x) => stripes(x));
     const plate = new Uint8ClampedArray(pristine);
-    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT);
+    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
 
     const before = linearMean(pristine, WIDTH, HEIGHT, SPOT);
     const after = linearMean(plate, WIDTH, HEIGHT, SPOT);
@@ -432,7 +462,7 @@ describe('what the average is taken in', () => {
     // ring by 57%, leaving 43% of the light — the mean of gamma-encoded values
     // is not the mean of the light, and the error grows with the contrast.
     const gamma = linearMean(
-      concealPerPixel(pristine, WIDTH, HEIGHT, SPOT, identity, identity),
+      concealPerPixel(pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, identity, identity),
       WIDTH,
       HEIGHT,
       SPOT,
@@ -441,14 +471,14 @@ describe('what the average is taken in', () => {
   });
 });
 
-describe('the catchlight a concealed eye loses', () => {
+describe('the catchlight a circle at the top of the slider loses', () => {
   const WIDTH = 512;
   const HEIGHT = 512;
   const SPOT: ConcealSpot = { x: 0.5, y: 0.5, r: 0.1875 };
 
   it('is left at the rate the reach predicts', () => {
     const radius = SPOT.r * WIDTH;
-    const sigma = radius * CONCEAL_REACH;
+    const sigma = radius * FULL_AMOUNT;
     const point = radius / 8;
     const dark = [10, 14, 20];
     const bright = [255, 250, 245];
@@ -462,7 +492,7 @@ describe('the catchlight a concealed eye loses', () => {
       return bright[c] as number;
     });
     const plate = new Uint8ClampedArray(pristine);
-    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT);
+    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
 
     let measured = 0;
     for (let c = 0; c < 3; c++) {
@@ -481,14 +511,14 @@ describe('the catchlight a concealed eye loses', () => {
     // averages with, so the prediction is taken from that window rather than
     // assumed: the peak of the blur's own impulse response, divided by the mask
     // weight the normalisation divides by. Both come from the shipped blur.
-    const { region, centre, radius: drawnRadius } = concealRegion(SPOT, WIDTH, HEIGHT);
+    const { region, centre, radius: drawnRadius } = concealRegion(SPOT, WIDTH, HEIGHT, FULL_AMOUNT);
     const count = region.width * region.height;
     const scratch = new Float32Array(count);
     const impulse = new Float32Array(count);
     impulse[Math.round(centre[1]) * region.width + Math.round(centre[0])] = 1;
-    boxBlur(impulse, region.width, region.height, boxRadius(drawnRadius), scratch);
+    boxBlur(impulse, region.width, region.height, boxRadius(drawnRadius, FULL_AMOUNT), scratch);
     const weight = maskOf(region.width, region.height, centre[0], centre[1], drawnRadius);
-    boxBlur(weight, region.width, region.height, boxRadius(drawnRadius), scratch);
+    boxBlur(weight, region.width, region.height, boxRadius(drawnRadius, FULL_AMOUNT), scratch);
     const middle = Math.round(centre[1]) * region.width + Math.round(centre[0]);
     const predicted = (area * (impulse[middle] as number)) / (weight[middle] as number);
     expect(measured / predicted).toBeGreaterThan(0.9);
@@ -512,7 +542,7 @@ describe('a circle at the edge of the frame', () => {
 
   it('keeps its region inside the frame and writes nothing beyond it', () => {
     for (const spot of [SPOT, { x: 0, y: 0, r: 0.1 }, { x: 1, y: 1, r: 0.2 }]) {
-      const { region } = concealRegion(spot, WIDTH, HEIGHT);
+      const { region } = concealRegion(spot, WIDTH, HEIGHT, FULL_AMOUNT);
       expect(region.x).toBeGreaterThanOrEqual(0);
       expect(region.y).toBeGreaterThanOrEqual(0);
       expect(region.x + region.width).toBeLessThanOrEqual(WIDTH);
@@ -520,7 +550,7 @@ describe('a circle at the edge of the frame', () => {
 
       const pristine = frame(WIDTH, HEIGHT, grating(spot.r * WIDTH));
       const plate = new Uint8ClampedArray(pristine);
-      const written = concealSpot(plate, pristine, WIDTH, HEIGHT, spot);
+      const written = concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
       for (let y = 0; y < HEIGHT; y++) {
         for (let x = 0; x < WIDTH; x++) {
           const i = (y * WIDTH + x) * 4;
@@ -536,21 +566,22 @@ describe('a circle at the edge of the frame', () => {
     }
   });
 
-  it('holds the band for the pixels the frame actually has', () => {
+  it('still blurs the pixels the frame actually has', () => {
     // A circle at the corner loses half its reach: the blur repeats the border
     // rather than inventing anything beyond it, so what is averaged there is
-    // one-sided. The guarantee is over the pixels the frame has, which is every
-    // pixel of the circle that is in it, and both placements are measured — one
+    // one-sided, and less is taken out at the circle's own scale than in the
+    // middle of a frame. What has to hold either way is the detail a reflection
+    // carries, well under the radius. Both placements are measured — one
     // touching the corner and one centred on it.
     for (const spot of [SPOT, { x: 0, y: 0, r: 0.1 }]) {
       const radius = spot.r * WIDTH;
-      for (const ratio of [0.5, 0.7, 1]) {
+      for (const ratio of [0.2, 0.35, 0.5]) {
         const pristine = frame(WIDTH, HEIGHT, grating(radius * ratio));
         const plate = new Uint8ClampedArray(pristine);
-        concealSpot(plate, pristine, WIDTH, HEIGHT, spot);
-        for (const left of residual(plate, WIDTH, HEIGHT, spot)) {
+        concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
+        for (const seen of residual(plate, WIDTH, HEIGHT, spot)) {
           const where = `corner circle at ${spot.x}, lambda = ${ratio}r`;
-          expect.soft(left, where).toBeLessThanOrEqual(BAND_LIMIT);
+          expect.soft(seen, where).toBeLessThanOrEqual(GONE);
         }
       }
     }
@@ -579,7 +610,7 @@ describe('the part of the plate a circle writes', () => {
     const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * 0.5));
     const plate = dirtied(pristine);
     const before = plate.slice();
-    const written = concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT);
+    const written = concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
 
     const cx = SPOT.x * WIDTH;
     const cy = SPOT.y * HEIGHT;
@@ -609,8 +640,8 @@ describe('the part of the plate a circle writes', () => {
 
   it('reports the mask around the circle rather than the region the blur needed', () => {
     const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * 0.5));
-    const written = concealSpot(dirtied(pristine), pristine, WIDTH, HEIGHT, SPOT);
-    const { region } = concealRegion(SPOT, WIDTH, HEIGHT);
+    const written = concealSpot(dirtied(pristine), pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
+    const { region } = concealRegion(SPOT, WIDTH, HEIGHT, FULL_AMOUNT);
 
     // The region has to hold what the blur reads; the rectangle only has to hold
     // what was laid down, and uploading the difference is uploading bytes that
@@ -631,17 +662,17 @@ describe('a circle that has been concealed', () => {
     const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * 0.5));
 
     const once = new Uint8ClampedArray(pristine);
-    concealSpot(once, pristine, WIDTH, HEIGHT, SPOT);
+    concealSpot(once, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT);
 
     // Applied again over its own result, which is what a rebuilt plate does, and
     // over a plate somebody else has already written on. Neither can change the
     // answer, because the circle never reads what is under it.
     const twice = new Uint8ClampedArray(once);
-    concealSpot(twice, pristine, WIDTH, HEIGHT, SPOT);
+    concealSpot(twice, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT);
     expect(twice).toEqual(once);
 
     const dirty = new Uint8ClampedArray(pristine.length).fill(200);
-    concealSpot(dirty, pristine, WIDTH, HEIGHT, SPOT);
+    concealSpot(dirty, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT);
     insideDisc(WIDTH, HEIGHT, SPOT.x * WIDTH, SPOT.y * HEIGHT, SPOT.r * WIDTH, (i) => {
       expect(dirty[i]).toBe(once[i]);
     });

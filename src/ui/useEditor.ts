@@ -206,6 +206,7 @@ export interface Editor {
   removeHealSpot: (index: number) => void;
   clearHeal: () => void;
   setConcealRadius: (value: number) => void;
+  setConcealAmount: (value: number) => void;
   addConcealSpot: (x: number, y: number) => void;
   removeConcealSpot: (index: number) => void;
   clearConceal: () => void;
@@ -685,23 +686,27 @@ export function useEditor(): Editor {
    * keeps the size the brush had when it was placed.
    *
    * A circle under a pixel across is refused instead of being placed. The blur
-   * that carries the guarantee cannot run below one pixel of radius, so the
-   * ring would be drawn over a reflection nothing had happened to — and a
-   * conceal tool that shows a guarantee it did not make is the one failure this
-   * feature may not have. The seeded circles are not checked against it: their
-   * radius is a measured iris, which is not sub-pixel in a photo a face was
-   * found in.
+   * cannot run below one pixel of radius, so the ring would be left standing
+   * over a reflection nothing had happened to. The seeded circles are not
+   * checked against it: their radius is a measured iris, which is not sub-pixel
+   * in a photo a face was found in.
    */
   const addConcealSpot = useCallback(
     (x: number, y: number) => {
       const current = recipeRef.current;
       const image = sourceRef.current;
-      if (!image || current.conceal.length >= CONCEAL_LIMIT) return;
+      if (!image || current.conceal.spots.length >= CONCEAL_LIMIT) return;
       if (concealRadius * image.width < 1) {
         notify(t('toast.concealTooSmall'), 'alert');
         return;
       }
-      commit({ ...current, conceal: [...current.conceal, { x, y, r: concealRadius }] });
+      commit({
+        ...current,
+        conceal: {
+          ...current.conceal,
+          spots: [...current.conceal.spots, { x, y, r: concealRadius }],
+        },
+      });
     },
     [commit, concealRadius, notify, t],
   );
@@ -709,14 +714,29 @@ export function useEditor(): Editor {
   const removeConcealSpot = useCallback(
     (index: number) => {
       const current = recipeRef.current;
-      commit({ ...current, conceal: current.conceal.filter((_, at) => at !== index) });
+      commit({
+        ...current,
+        conceal: {
+          ...current.conceal,
+          spots: current.conceal.spots.filter((_, at) => at !== index),
+        },
+      });
     },
     [commit],
   );
 
   const clearConceal = useCallback(() => {
-    commit({ ...recipeRef.current, conceal: [] });
+    const current = recipeRef.current;
+    commit({ ...current, conceal: { ...current.conceal, spots: [] } });
   }, [commit]);
+
+  const setConcealAmount = useCallback(
+    (value: number) => {
+      const current = recipeRef.current;
+      commit({ ...current, conceal: { ...current.conceal, amount: value } });
+    },
+    [commit],
+  );
 
   /**
    * Put a circle over every iris the analysis found.
@@ -734,9 +754,14 @@ export function useEditor(): Editor {
     const { added, overflow } = seedFromIrises(
       analysis.faces.flatMap((face) => face.irises),
       image.height / image.width,
-      current.conceal,
+      current.conceal.spots,
     );
-    if (added.length > 0) commit({ ...current, conceal: [...current.conceal, ...added] });
+    if (added.length > 0) {
+      commit({
+        ...current,
+        conceal: { ...current.conceal, spots: [...current.conceal.spots, ...added] },
+      });
+    }
     if (overflow > 0) {
       notify(
         t('toast.concealSeedOverflow', {
@@ -972,7 +997,9 @@ export function useEditor(): Editor {
             ...recipeRef.current,
             geometry: fresh.geometry,
             heal: [],
-            conceal: [],
+            // The amount stays: it is a preference about how hard to blur, not a
+            // mark on the photograph that was closed.
+            conceal: { ...recipeRef.current.conceal, spots: [] },
             source: { w: image.width, h: image.height, space: image.space },
           };
           recipeRef.current = next;
@@ -1211,6 +1238,7 @@ export function useEditor(): Editor {
       removeHealSpot,
       clearHeal,
       setConcealRadius,
+      setConcealAmount,
       addConcealSpot,
       removeConcealSpot,
       clearConceal,
@@ -1277,6 +1305,7 @@ export function useEditor(): Editor {
       addHealSpot,
       removeHealSpot,
       clearHeal,
+      setConcealAmount,
       addConcealSpot,
       removeConcealSpot,
       clearConceal,

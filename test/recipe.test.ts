@@ -57,7 +57,7 @@ describe('defaults', () => {
     // what makes the Heal stage cost nothing rather than cost a copy.
     expect(recipe.heal).toEqual([]);
     // Same reasoning: no circle is placed until somebody marks a reflection.
-    expect(recipe.conceal).toEqual([]);
+    expect(recipe.conceal.spots).toEqual([]);
     // Zero means "the size it already is", so an untouched recipe never resizes.
     expect(recipe.output.longEdge).toBe(0);
   });
@@ -126,9 +126,9 @@ describe('loading', () => {
     // A too-long list fails schema validation as `too_big` on the array itself,
     // whose bound is a count rather than a replacement value for the array.
     const spots = Array.from({ length: CONCEAL_LIMIT + 6 }, () => ({ x: 0.5, y: 0.5, r: 0.02 }));
-    const loaded = loadRecipe({ version: 1, conceal: spots });
+    const loaded = loadRecipe({ version: 1, conceal: { spots } });
     expect(loaded.ok).toBe(true);
-    if (loaded.ok) expect(loaded.recipe.conceal.length).toBe(CONCEAL_LIMIT);
+    if (loaded.ok) expect(loaded.recipe.conceal.spots.length).toBe(CONCEAL_LIMIT);
   });
 
   it('truncates an over-limit heal list the same way', () => {
