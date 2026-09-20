@@ -52,6 +52,8 @@ export const en = {
   'stage.original': 'ORIGINAL',
   'stage.hintHold': 'hold',
   'stage.hintHoldText': 'Compare with original',
+  'stage.hintZoom': 'scroll',
+  'stage.hintZoomText': 'Magnify, then drag to move',
   'stage.hintReset': 'double click',
   'stage.hintResetText': 'Reset a slider',
   'stage.hintDrop': 'drop',
@@ -68,6 +70,12 @@ export const en = {
   'stage.hintConcealText': 'Blur a reflection',
   'stage.hintConcealBack': 'click a ring',
   'stage.hintConcealBackText': 'Put it back',
+
+  'zoom.label': 'Magnification',
+  'zoom.fit': 'Fit',
+  'zoom.actual': '1:1',
+  'zoom.in': 'Magnify',
+  'zoom.out': 'Pull back',
 
   'guide.step': 'Step {n} of {total}',
   'guide.skip': 'Skip',

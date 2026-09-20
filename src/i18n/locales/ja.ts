@@ -49,6 +49,8 @@ export const ja: Messages = {
   'stage.original': '原画',
   'stage.hintHold': '長押し',
   'stage.hintHoldText': '原画と比較',
+  'stage.hintZoom': 'スクロール',
+  'stage.hintZoomText': '拡大、ドラッグで移動',
   'stage.hintReset': 'ダブルクリック',
   'stage.hintResetText': 'スライダーを既定値に',
   'stage.hintDrop': 'ドロップ',
@@ -65,6 +67,12 @@ export const ja: Messages = {
   'stage.hintConcealText': '映り込みをぼかす',
   'stage.hintConcealBack': '輪郭をクリック',
   'stage.hintConcealBackText': '元に戻す',
+
+  'zoom.label': '表示倍率',
+  'zoom.fit': '全体',
+  'zoom.actual': '1:1',
+  'zoom.in': '拡大',
+  'zoom.out': '縮小',
 
   'guide.step': '{total} ステップ中 {n} 番目',
   'guide.skip': 'スキップ',

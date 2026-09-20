@@ -102,6 +102,10 @@ function Workspace() {
           hasImage={editor.source !== null}
           comparing={editor.comparing}
           tool={editor.tool}
+          view={editor.view}
+          fitScale={editor.fitScale}
+          onView={editor.setView}
+          onResetView={editor.resetView}
           overlay={
             <>
               {editor.tool === 'crop' && (

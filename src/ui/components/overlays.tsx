@@ -17,6 +17,7 @@ import type { TileRect } from '../../core/geometry/tiles';
 import type { CropHandle } from '../../core/geometry/transform';
 import { resizeCrop } from '../../core/geometry/transform';
 import type { GeometryParams, Recipe, TextLayer } from '../../core/recipe/schema';
+import { PAN_THRESHOLD } from '../gestures';
 
 type CropRect = GeometryParams['crop'];
 
@@ -179,6 +180,22 @@ export function SpotOverlay({
   const brush = useRef<HTMLDivElement | null>(null);
   const fromSource = useMemo(() => mat3Inverse(toSource), [toSource]);
   const style = variant === 'heal' ? 'healov' : 'concealov';
+  /**
+   * A press that has landed but not yet said what it is.
+   *
+   * A press on the picture is a circle being placed, or it is the start of a
+   * pinch or of dragging a magnified photograph around — and which one it is
+   * only becomes known once it has stayed still or travelled. So the circle goes
+   * down when the press lifts, and a press that moved is not a placement at all.
+   *
+   * It is the same discrimination the stage makes, applied here because this is
+   * where the consequence lands: a fill placed by a gesture that was on its way
+   * somewhere else is an edit to the photograph nobody asked for. Mouse and
+   * finger take the same path, because they are the same ambiguity.
+   */
+  const pending = useRef<{ id: number; x: number; y: number; ox: number; oy: number } | null>(null);
+  /** The same, for a ring that has been pressed but not yet taken back. */
+  const removing = useRef<{ id: number; index: number; ox: number; oy: number } | null>(null);
 
   // How much of the photograph one step across the picture covers, in image
   // widths. It comes out of the matrix rather than out of the crop rectangle
@@ -208,7 +225,23 @@ export function SpotOverlay({
         // A straightened frame maps its corners outside the photograph, and
         // there is nothing there to fill.
         if (x < 0 || x > 1 || y < 0 || y > 1) return;
-        onPlace(x, y);
+        pending.current = { id: event.pointerId, x, y, ox: event.clientX, oy: event.clientY };
+      }}
+      onPointerUp={(event) => {
+        const press = pending.current;
+        pending.current = null;
+        if (!press || press.id !== event.pointerId) return;
+        // The stage's own threshold rather than one of this overlay's: a press
+        // either places a circle or moves the picture, and two numbers would
+        // leave a band of travel where it did both, or neither.
+        if (Math.hypot(event.clientX - press.ox, event.clientY - press.oy) >= PAN_THRESHOLD) {
+          return;
+        }
+        onPlace(press.x, press.y);
+      }}
+      onPointerCancel={() => {
+        pending.current = null;
+        removing.current = null;
       }}
       // The brush ring is moved by writing to the element rather than through
       // state: a pointer move is a stream of events, and re-rendering the
@@ -251,9 +284,28 @@ export function SpotOverlay({
               top: `${v * 100}%`,
               width: `${across(spot.r) * 100}%`,
             }}
+            // Taken back on release and only if the press stayed still, for the
+            // same reason a circle is placed that way: a ring is a small target
+            // sitting on a photograph that can be dragged around, so a press
+            // that landed on one is as likely to be the start of a hand.
             onPointerDown={(event) => {
               event.stopPropagation();
-              onRemove(index);
+              pending.current = null;
+              removing.current = {
+                id: event.pointerId,
+                index,
+                ox: event.clientX,
+                oy: event.clientY,
+              };
+            }}
+            onPointerUp={(event) => {
+              const press = removing.current;
+              removing.current = null;
+              if (!press || press.id !== event.pointerId) return;
+              if (Math.hypot(event.clientX - press.ox, event.clientY - press.oy) >= PAN_THRESHOLD) {
+                return;
+              }
+              onRemove(press.index);
             }}
           />
         );

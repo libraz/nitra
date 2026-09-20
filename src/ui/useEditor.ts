@@ -56,6 +56,7 @@ import { RenderScheduler } from '../core/render/scheduler';
 import { fontsReady, loadFontFile } from '../core/text/fonts';
 import { type MessageKey, type Translate, useI18n } from '../i18n';
 import { writeParam } from './params';
+import { clampView, FIT_VIEW, maxZoom, type View } from './view';
 
 /** Longest edge of a finish thumbnail. */
 const THUMBNAIL_EDGE = 220;
@@ -160,6 +161,17 @@ export interface Editor {
   scale: 'proxy' | 'full';
   previewSize: string | null;
   workingSpace: string;
+  /** Where the picture is being looked at from. Display state, not part of the edit. */
+  view: View;
+  /**
+   * CSS pixels the fitted picture occupies per exported pixel, once measured.
+   *
+   * What turns the view's multiple of the fit size into the magnification the
+   * zoom bar reads out, and what says whether one-to-one is reachable at all: a
+   * photo already fitting inside the stage is being shown past its own pixels
+   * before anybody has zoomed.
+   */
+  fitScale: number | null;
   toast: EditorToast | null;
   /** What the current recipe would produce, recomputed as the framing changes. */
   plan: ExportPlan | null;
@@ -184,6 +196,8 @@ export interface Editor {
   setTool: (tool: Tool) => void;
   setMode: (mode: 'simple' | 'detail') => void;
   setComparing: (on: boolean) => void;
+  setView: (next: View | ((current: View) => View)) => void;
+  resetView: () => void;
   setParam: (path: string, value: number) => void;
   setDepth: (patch: Partial<DepthParams>) => void;
   setOutput: (patch: Partial<Recipe['output']>) => void;
@@ -338,6 +352,12 @@ export function useEditor(): Editor {
   const [thumbnails, setThumbnails] = useState<ReadonlyMap<string, ImageData>>(new Map());
   const [scale, setScale] = useState<'proxy' | 'full'>('proxy');
   const [previewSize, setPreviewSize] = useState<string | null>(null);
+  // Where the picture is being looked at from. Not part of the recipe: see the
+  // note on `View`.
+  const [view, setViewState] = useState<View>(FIT_VIEW);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const [fitScale, setFitScale] = useState<number | null>(null);
   const [workingSpace, setWorkingSpace] = useState('linear P3 / f16');
   // The brush size is not part of the edit: it is the size the next spot gets,
   // and each spot carries the size it was placed at.
@@ -387,6 +407,10 @@ export function useEditor(): Editor {
         setScale(next);
         const [width, height] = pipeline.resolutionFor(recipeRef.current, next);
         setPreviewSize(`${width}×${height}`);
+        // Measured by the render that has just happened, so the magnification
+        // the panel reads is the one on screen rather than one predicted from a
+        // second copy of the fit.
+        setFitScale(pipeline.fitScale);
       },
       // Named for the plate rather than for one of the stages on it: a
       // reflection that was not concealed reported as a brush that did not run
@@ -442,6 +466,29 @@ export function useEditor(): Editor {
     setComparingState(on);
     schedulerRef.current?.setShowOriginal(on);
   }, []);
+
+  /**
+   * Move the view.
+   *
+   * The clamp lives here rather than at each of the four places a view comes
+   * from, because a magnification that has run past what the window can show is
+   * the same defect whether a wheel, a pinch, a slider or a keystroke produced
+   * it. The renderer is told the magnification and nothing else: where the
+   * picture is being looked at is the page's business.
+   */
+  const setView = useCallback((next: View | ((current: View) => View)) => {
+    const current = viewRef.current;
+    const limit = maxZoom(pipelineRef.current?.fitScale ?? null);
+    const resolved = clampView(typeof next === 'function' ? next(current) : next, limit);
+    if (resolved.zoom === current.zoom && resolved.x === current.x && resolved.y === current.y) {
+      return;
+    }
+    viewRef.current = resolved;
+    setViewState(resolved);
+    schedulerRef.current?.setZoom(resolved.zoom);
+  }, []);
+
+  const resetView = useCallback(() => setView(FIT_VIEW), [setView]);
 
   const setParam = useCallback(
     (path: string, value: number) => {
@@ -985,6 +1032,10 @@ export function useEditor(): Editor {
           setSource(image);
           setStats(null);
           setThumbnails(new Map());
+          // A magnification is a place on the photograph that was open, and the
+          // new one has nothing at that place. It goes back to fit for the same
+          // reason the framing does.
+          resetView();
           // The framing belongs to the photo it was drawn on, so a new photo
           // arrives unframed rather than inheriting a crop placed on another.
           // The two lists of circles go with it, and the conceal list is why:
@@ -1019,7 +1070,7 @@ export function useEditor(): Editor {
         }
       })();
     },
-    [notify, runFaceAnalysis, t],
+    [notify, resetView, runFaceAnalysis, t],
   );
 
   const runAuto = useCallback(() => {
@@ -1205,6 +1256,8 @@ export function useEditor(): Editor {
       scale,
       previewSize,
       workingSpace,
+      view,
+      fitScale,
       toast,
       plan,
       frameAspect,
@@ -1216,6 +1269,8 @@ export function useEditor(): Editor {
       setTool,
       setMode,
       setComparing,
+      setView,
+      resetView,
       setParam,
       setDepth,
       setOutput,
@@ -1275,6 +1330,8 @@ export function useEditor(): Editor {
       scale,
       previewSize,
       workingSpace,
+      view,
+      fitScale,
       toast,
       plan,
       frameAspect,
@@ -1285,6 +1342,8 @@ export function useEditor(): Editor {
       fontRevision,
       setTool,
       setComparing,
+      setView,
+      resetView,
       setParam,
       setDepth,
       setOutput,

@@ -883,6 +883,130 @@ body::after {
   font-size: 10px;
 }
 
+/* ============================================================  magnification  */
+
+/* The hand, while the space bar is holding it open. The tools set their own
+   cursors on the overlays, so the state has to reach them too — a crosshair
+   over a photograph being dragged is a tool that is not the one running. */
+.viewport[data-grab="ready"],
+.viewport[data-grab="ready"] * {
+  cursor: grab;
+}
+.viewport[data-grab="active"],
+.viewport[data-grab="active"] * {
+  cursor: grabbing;
+}
+
+/* The browser's own pinch and pan are given up over the picture, because both
+   of them are the gesture this stage uses for the photograph. */
+.viewport {
+  touch-action: none;
+}
+
+/* Over the surround rather than under it: the bar reads the picture it sits on,
+   and a strip below the stage would put the magnification and the photograph in
+   different places on the screen. */
+.zoombar {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  min-inline-size: auto;
+  padding: 4px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line-2);
+  background: color-mix(in oklab, var(--panel) 84%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 18px -10px var(--drop);
+}
+
+.zoombar-b,
+.zoombar-i {
+  display: grid;
+  place-items: center;
+  height: 22px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.zoombar-b {
+  padding: 0 7px;
+}
+.zoombar-i {
+  width: 22px;
+}
+.zoombar-b:hover,
+.zoombar-i:hover:not(:disabled) {
+  background: var(--line);
+  color: var(--ink-1);
+}
+.zoombar-b[data-on="yes"] {
+  color: var(--amber);
+}
+.zoombar-i:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.zoombar-i svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+
+/* The one part that gives, so the labels either side keep their words whole on
+   a narrow screen — a track a little shorter still reads as a track. */
+.zoombar-track {
+  width: 108px;
+  min-width: 48px;
+  flex: 0 1 auto;
+  height: 16px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: linear-gradient(var(--line-2), var(--line-2)) center / 100% 2px no-repeat;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.zoombar-track::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--thumb);
+  box-shadow: 0 1px 3px var(--drop);
+}
+.zoombar-track:active::-webkit-slider-thumb {
+  background: var(--amber);
+}
+.zoombar-track::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--thumb);
+}
+
+/* Fixed width so the strip does not shuffle as the number passes a hundred. */
+.zoombar-v {
+  min-width: 4.5ch;
+  text-align: right;
+  font-size: 11px;
+  color: var(--ink-1);
+}
+
 /* ============================================================  panel  */
 
 .panel {
@@ -1787,11 +1911,19 @@ body::after {
 /* ============================================================  overlays  */
 
 /* The plate shrinks to the canvas, so anything absolutely positioned inside it
-   is positioned against the photo rather than against the space around it. */
+   is positioned against the photo rather than against the space around it.
+
+   It is also what the magnification moves. Scaling from the top left is what
+   makes the translation expressible in per cent of the plate's own fit size,
+   which is the one unit both the transform and the overlays inside it already
+   speak — see `viewTransform`. The frame around it clips, so the photograph
+   never spills over the surround. */
 .plate {
   position: relative;
   display: block;
   line-height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
 }
 
 /* ── crop rectangle ── */
@@ -2514,6 +2646,26 @@ body::after {
   /* Named affordances for a pointer that is not there. */
   .hint {
     display: none;
+  }
+
+  /* The bar stays where the hints went. A pinch does the magnifying here, so
+     what is left is the reading — and on a screen small enough that a face is
+     a few hundred pixels across, the reading is the part that matters. */
+  .zoombar {
+    left: 50%;
+    right: auto;
+    max-width: calc(100% - 28px);
+    transform: translateX(-50%);
+  }
+  .zoombar-b,
+  .zoombar-i {
+    height: 30px;
+  }
+  .zoombar-i {
+    width: 30px;
+  }
+  .zoombar-track {
+    width: 84px;
   }
 
   .panel {

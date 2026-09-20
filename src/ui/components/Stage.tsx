@@ -14,7 +14,10 @@
 
 import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { type MessageKey, useI18n } from '../../i18n';
+import { useStageGestures } from '../gestures';
 import type { Tool } from '../useEditor';
+import { type View, viewTransform } from '../view';
+import { ZoomBar } from './ZoomBar';
 
 interface StageProps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -23,8 +26,12 @@ interface StageProps {
   hasImage: boolean;
   comparing: boolean;
   tool: Tool;
+  view: View;
+  fitScale: number | null;
   overlay: ReactNode;
   onCompare: (on: boolean) => void;
+  onView: (next: View | ((current: View) => View)) => void;
+  onResetView: () => void;
   onFiles: (files: FileList) => void;
   onPick: () => void;
   onHelp: () => void;
@@ -50,6 +57,7 @@ function hintsFor(tool: Tool): [MessageKey, MessageKey][] {
     default:
       return [
         ['stage.hintHold', 'stage.hintHoldText'],
+        ['stage.hintZoom', 'stage.hintZoomText'],
         ['stage.hintReset', 'stage.hintResetText'],
         ['stage.hintDrop', 'stage.hintDropText'],
       ];
@@ -62,8 +70,12 @@ export function Stage({
   hasImage,
   comparing,
   tool,
+  view,
+  fitScale,
   overlay,
   onCompare,
+  onView,
+  onResetView,
   onFiles,
   onPick,
   onHelp,
@@ -72,12 +84,34 @@ export function Stage({
   const [dragOver, setDragOver] = useState(false);
   const holding = useRef(false);
   const stage = useRef<HTMLElement | null>(null);
+  // The window the view is mapped against. It is the picture at its fit size,
+  // which is also the box the magnified plate is clipped to, so one element
+  // answers both questions.
+  const frame = useRef<HTMLDivElement | null>(null);
 
   const release = useCallback(() => {
     if (!holding.current) return;
     holding.current = false;
     onCompare(false);
   }, [onCompare]);
+
+  useStageGestures({
+    host: viewportRef,
+    frame,
+    view,
+    fitScale,
+    enabled: hasImage,
+    // The two tools whose own gesture is a drag on the picture keep it. Every
+    // other tool presses without travelling, so a drag there is free to be the
+    // hand — which is what a magnified photograph has to answer to on a phone,
+    // where there is no second button and no space bar to reach for.
+    panOnDrag: tool !== 'crop' && tool !== 'text',
+    onView,
+    // A press that turns into a drag was a press first, and on the tools that
+    // compare that already put the original on screen. Panning the original
+    // around would be a hand on the wrong picture.
+    onPanStart: release,
+  });
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -127,8 +161,14 @@ export function Stage({
   return (
     <section className="stage" ref={stage} aria-label={t('stage.dropTitle')}>
       <div className="viewport" ref={viewportRef}>
-        <div className={hasImage ? 'frame' : 'frame empty'}>
-          <div className="plate">
+        <div className={hasImage ? 'frame' : 'frame empty'} ref={frame}>
+          {/* The magnification is a transform on the plate rather than a
+              different size of canvas, so the overlays inside it are carried
+              along by the same number that moved the picture and go on being
+              positioned against the photograph. The canvas is given more pixels
+              to match — see `RenderOptions.zoom` — so what is magnified is the
+              photograph and not the fitted copy of it. */}
+          <div className="plate" style={{ transform: viewTransform(view) }}>
             <canvas
               ref={canvasRef}
               hidden={!hasImage}
@@ -180,6 +220,10 @@ export function Stage({
             </span>
           ))}
         </div>
+      )}
+
+      {hasImage && (
+        <ZoomBar view={view} fitScale={fitScale} onView={onView} onReset={onResetView} />
       )}
     </section>
   );
