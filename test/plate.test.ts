@@ -256,7 +256,7 @@ const UNDER: HealSpot = { x: 0.3, y: 0.4, r: 0.02 };
 const BESIDE: HealSpot = { x: 0.8, y: 0.8, r: 0.03 };
 // Clear of the mask but inside the region the circle's blur reads, which is the
 // ring that a circle pasting its whole region back would wipe.
-const AROUND: HealSpot = { x: 0.4, y: 0.4, r: 0.03 };
+const AROUND: HealSpot = { x: 0.38, y: 0.4, r: 0.03 };
 
 /**
  * The photograph as it was decoded, and the frame a restore would have left.
@@ -288,8 +288,11 @@ describe('the plate and the circles over it', () => {
     // rebuild say nothing the caller can use.
     expect(update).toEqual({ rebuilt: true, rects: [] });
 
+    // Over the part the mask fully covers: the outer band is where it feathers
+    // back to the photograph, and its own detail survives there by design.
     const pixels = plate.pixels as Uint8ClampedArray;
-    expect(spreadAt(pixels, CIRCLE)).toBeLessThan(spreadAt(RESTORED, CIRCLE) / 4);
+    const covered = { ...CIRCLE, r: CIRCLE.r * (1 - CONCEAL_FEATHER) };
+    expect(spreadAt(pixels, covered)).toBeLessThan(spreadAt(RESTORED, covered) / 4);
     expect(meanAt(pixels, BESIDE)).toBeCloseTo(meanAt(RESTORED, BESIDE), 5);
   });
 

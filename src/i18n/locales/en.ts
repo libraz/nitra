@@ -260,7 +260,7 @@ export const en = {
   'conceal.noImage': 'Open a photo to start.',
   'conceal.size': 'Circle size',
   'conceal.sizeNote':
-    'A size larger than the reflection — about a third wider. Only what is inside the ring is blurred; the soft band outside it is where it goes back to the photo.',
+    'A size larger than the reflection — about a third wider. Nothing outside the ring changes, and a narrow band just inside it fades back to the photo.',
   'conceal.amount': 'Blur',
   'conceal.amountNote':
     'A fraction of each circle\u2019s own radius, so one setting suits an eye and a mirror in the same frame. Low already leaves the reflection unreadable while the circle still looks like what it was drawn over; at the top it comes back close to one flat tone.',
@@ -274,7 +274,7 @@ export const en = {
   'conceal.clear': 'Remove every circle',
   'conceal.aboutTitle': 'What this claims',
   'conceal.aboutBody':
-    'A blur, held inside the circle and taken in linear light, so the white of an eye is never drawn into the middle of it. How much survives is what the slider says and nothing more: nitra makes no claim about what could be recovered from the file. Set it by looking at the picture.',
+    'A blur of the photograph, laid down inside the circle and taken in linear light. It reads what is around the circle as well, which is what keeps the edge from showing. How much survives is what the slider says and nothing more: nitra makes no claim about what could be recovered from the file. Set it by looking at the picture.',
 
   'restore.title': 'Restore the face',
   'restore.how':

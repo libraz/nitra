@@ -94,7 +94,13 @@ function insideDisc(
   }
 }
 
-/** Worst peak-to-peak swing inside the ring, per channel, in code values. */
+/**
+ * Worst peak-to-peak swing over the part of the circle the mask fully covers.
+ *
+ * Not the whole circle: the outer band is where the mask feathers back to the
+ * photograph, so a grating there survives on purpose and reading it would be
+ * measuring the join rather than the blur.
+ */
 function residual(
   pixels: Uint8ClampedArray,
   width: number,
@@ -104,7 +110,8 @@ function residual(
 ): number[] {
   const low = [255, 255, 255];
   const high = [0, 0, 0];
-  insideDisc(width, height, spot.x * width, spot.y * height, spot.r * width, (i, x, y) => {
+  const covered = spot.r * width * (1 - CONCEAL_FEATHER);
+  insideDisc(width, height, spot.x * width, spot.y * height, covered, (i, x, y) => {
     if (!keep(x, y)) return;
     for (let c = 0; c < 3; c++) {
       const v = pixels[i + c] as number;
@@ -137,16 +144,16 @@ function boxRadius(radius: number, amount: number): number {
   return Math.max(1, Math.round(radius * amount));
 }
 
-/** The stage's mask: one inside the ring, feathered outward to zero. */
+/** The stage's mask: one inside, feathered in to zero at the ring. */
 function maskOf(width: number, height: number, cx: number, cy: number, radius: number) {
-  const outer = radius * (1 + CONCEAL_FEATHER);
+  const inner = radius * (1 - CONCEAL_FEATHER);
   const mask = new Float32Array(width * height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
-      if (d <= radius) mask[y * width + x] = 1;
-      else if (d < outer) {
-        const t = (outer - d) / (outer - radius);
+      if (d <= inner) mask[y * width + x] = 1;
+      else if (d < radius) {
+        const t = (radius - d) / (radius - inner);
         mask[y * width + x] = t * t * (3 - 2 * t);
       }
     }
@@ -158,12 +165,16 @@ function maskOf(width: number, height: number, cx: number, cy: number, radius: n
 const identity = (value: number) => value;
 
 /**
- * Conceal one circle with every average taken per pixel.
+ * Blur one circle with every average taken per pixel.
  *
  * Two claims read this. It is the arithmetic the shipped path decimates, so it
  * is the answer that path is approximating; and with the transfer replaced by
  * {@link identity} it is the gamma-space counterfactual, which then differs from
  * the reference in the one step being argued about and in nothing else.
+ *
+ * `weigh` is the third: given the mask it makes the average a normalised
+ * convolution over the light inside the ring, which is the shape this stage was
+ * built with and the one the plate of iris colour came from.
  */
 function concealPerPixel(
   pristine: Uint8ClampedArray,
@@ -173,6 +184,7 @@ function concealPerPixel(
   amount: number,
   toLinear: (code: number) => number = transferToLinear,
   fromLinear: (light: number) => number = transferFromLinear,
+  weigh = false,
 ): Uint8ClampedArray {
   const out = new Uint8ClampedArray(pristine);
   const { region, centre, radius } = concealRegion(spot, imageWidth, imageHeight, amount);
@@ -182,19 +194,23 @@ function concealPerPixel(
   const mask = maskOf(region.width, region.height, centre[0], centre[1], radius);
   const scratch = new Float32Array(count);
   const weight = new Float32Array(mask);
-  boxBlur(weight, region.width, region.height, box, scratch);
+  if (weigh) boxBlur(weight, region.width, region.height, box, scratch);
   const carried = new Float32Array(count);
   for (let c = 0; c < 3; c++) {
     for (let i = 0; i < count; i++) {
-      carried[i] = toLinear((patch[i * 4 + c] as number) / 255) * (mask[i] as number);
+      const v = toLinear((patch[i * 4 + c] as number) / 255);
+      carried[i] = weigh ? v * (mask[i] as number) : v;
     }
     boxBlur(carried, region.width, region.height, box, scratch);
     for (let i = 0; i < count; i++) {
       const m = mask[i] as number;
-      const w = weight[i] as number;
-      if (m <= 0 || w <= 0) continue;
+      if (m <= 0) continue;
+      const blurred = weigh
+        ? (carried[i] as number) / (weight[i] as number)
+        : (carried[i] as number);
+      if (!Number.isFinite(blurred)) continue;
       const v = toLinear((patch[i * 4 + c] as number) / 255);
-      const mixed = m * ((carried[i] as number) / w) + (1 - m) * v;
+      const mixed = m * blurred + (1 - m) * v;
       const x = (i % region.width) + region.x;
       const y = Math.floor(i / region.width) + region.y;
       out[(y * imageWidth + x) * 4 + c] = Math.round(
@@ -220,29 +236,6 @@ function widestGap(
     }
   });
   return worst;
-}
-
-/** Mean light inside the ring after a plain blur: no mask, so no normalisation. */
-function plainConvolutionMean(
-  pristine: Uint8ClampedArray,
-  imageWidth: number,
-  imageHeight: number,
-  spot: ConcealSpot,
-  amount: number,
-): number {
-  const { region, centre, radius } = concealRegion(spot, imageWidth, imageHeight, amount);
-  const patch = cutOut(pristine, imageWidth, region);
-  const count = region.width * region.height;
-  const value = new Float32Array(count);
-  for (let i = 0; i < count; i++) value[i] = transferToLinear((patch[i * 4] as number) / 255);
-  boxBlur(value, region.width, region.height, boxRadius(radius, amount), new Float32Array(count));
-  let sum = 0;
-  let n = 0;
-  insideDisc(region.width, region.height, centre[0], centre[1], radius, (i) => {
-    sum += value[i / 4] as number;
-    n++;
-  });
-  return sum / n;
 }
 
 describe('what a circle takes out at each end of the slider', () => {
@@ -300,7 +293,9 @@ describe('what a circle takes out at each end of the slider', () => {
       const sweep = [0.05, 0.1, 0.25, 0.5, 1].map((amount) => left(ratio, amount));
       for (let i = 1; i < sweep.length; i++) {
         const step = `lambda = ${ratio}r, step ${i}`;
-        expect.soft(sweep[i] as number, step).toBeLessThanOrEqual(sweep[i - 1] as number);
+        // Half a code value of slack: once a reading is at zero the next one
+        // rounds either side of it, which is quantisation rather than a rise.
+        expect.soft(sweep[i] as number, step).toBeLessThanOrEqual((sweep[i - 1] as number) + 0.5);
       }
     }
   });
@@ -358,6 +353,15 @@ describe('the average the decimated grid stands in for', () => {
    */
   const GRID_LIMIT = 2;
 
+  /**
+   * The same bound for a circle the frame cuts off, which is looser and not by
+   * approximation: where the region meets the edge of the photograph the blur
+   * repeats its border, and the decimated pass repeats a cell's mean there while
+   * the per-pixel pass repeats a pixel. Nothing on the far side exists for
+   * either of them to agree about.
+   */
+  const CLIPPED_LIMIT = 3;
+
   /** A cliff in each channel, in three directions, at the extreme of contrast. */
   const cliff = (x: number, y: number, c: number) => {
     const u = c === 0 ? x : c === 1 ? y : x + y;
@@ -380,6 +384,8 @@ describe('the average the decimated grid stands in for', () => {
       for (const spot of [
         { x: 0.5, y: 0.5, r: 0.15 },
         { x: 0.5, y: 0.5, r: 0.2 },
+        // Cut off by the left edge of the frame, which is the one case the
+        // two paths cannot be asked to agree to the code value.
         { x: 0.12, y: 0.5, r: 0.15 },
       ]) {
         expect(concealDecimation(spot.r * WIDTH, FULL_AMOUNT)).toBeGreaterThan(1);
@@ -388,50 +394,89 @@ describe('the average the decimated grid stands in for', () => {
         concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
         const perPixel = concealPerPixel(pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
         const gap = widestGap(plate, perPixel, WIDTH, HEIGHT, spot);
-        expect.soft(gap, `r = ${spot.r} at ${spot.x}`).toBeLessThanOrEqual(GRID_LIMIT);
+        const bound = spot.x * WIDTH < spot.r * WIDTH ? CLIPPED_LIMIT : GRID_LIMIT;
+        expect.soft(gap, `r = ${spot.r} at ${spot.x}`).toBeLessThanOrEqual(bound);
       }
     }
   });
 });
 
-describe('where the colour inside the circle comes from', () => {
+describe('the edge of the circle, where a plate of colour would show', () => {
   const WIDTH = 256;
   const HEIGHT = 256;
   const SPOT: ConcealSpot = { x: 0.5, y: 0.5, r: 0.125 };
+  const IRIS = 36;
+  const SCLERA = 235;
 
-  /** A dark iris with a bright point in it, on sclera of the caller's choosing. */
-  function eye(sclera: number) {
+  /** A dark iris filling the circle exactly, on bright sclera. */
+  function eye(): Uint8ClampedArray {
     const radius = SPOT.r * WIDTH;
-    // The iris covers the whole mask, so what is left outside it is exactly the
-    // light the normalised convolution claims not to be reading.
-    const iris = radius * (1 + CONCEAL_FEATHER) + 1;
-    return (x: number, y: number) => {
+    return frame(WIDTH, HEIGHT, (x, y) => {
       const d = Math.hypot(x + 0.5 - WIDTH / 2, y + 0.5 - HEIGHT / 2);
-      if (d <= radius * 0.15) return 250;
-      return d <= iris ? 36 : sclera;
-    };
+      return d <= radius ? IRIS : SCLERA;
+    });
   }
 
-  it('does not read the light outside the mask, which a plain blur would', () => {
-    const means = ([235, 0] as const).map((sclera) => {
-      const pristine = frame(WIDTH, HEIGHT, eye(sclera));
-      const plate = new Uint8ClampedArray(pristine);
-      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
-      return {
-        normalised: linearMean(plate, WIDTH, HEIGHT, SPOT),
-        plain: plainConvolutionMean(pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT),
-      };
+  /** Mean over the ring between two fractions of the radius. */
+  function band(pixels: Uint8ClampedArray, from: number, to: number): number {
+    const cx = SPOT.x * WIDTH;
+    const cy = SPOT.y * HEIGHT;
+    const radius = SPOT.r * WIDTH;
+    let sum = 0;
+    let n = 0;
+    insideDisc(WIDTH, HEIGHT, cx, cy, radius * to, (i, x, y) => {
+      if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) < radius * from) return;
+      sum += pixels[i] as number;
+      n++;
     });
-    const [bright, dark] = means as [(typeof means)[0], (typeof means)[0]];
+    return sum / n;
+  }
 
-    const drift = Math.abs(bright.normalised - dark.normalised) / dark.normalised;
-    expect(drift).toBeLessThanOrEqual(0.01);
+  it('blends into what is around it rather than holding its own colour', () => {
+    // The blur reads the photograph and only the compositing is masked, so at
+    // the rim the average is over iris and sclera alike and lands between them.
+    // That is what makes the join invisible without a wide feather.
+    const pristine = eye();
+    const plate = new Uint8ClampedArray(pristine);
+    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, 0.3);
+    const rim = band(plate, 0.65, 0.85);
+    expect(rim).toBeGreaterThan(IRIS + 20);
+    expect(rim).toBeLessThan(SCLERA);
 
-    // What the assertion above is worth: a plain convolution takes about half
-    // its kernel mass from outside the circle at the rim, and putting sclera
-    // there rather than black moves the mean inside the ring by 393%.
-    const plainDrift = Math.abs(bright.plain - dark.plain) / dark.plain;
-    expect(plainDrift).toBeGreaterThan(0.5);
+    // What that is worth: holding the average to the light inside the mask
+    // leaves the rim within a few code values of the iris it started as, so the
+    // disc keeps its own colour to the very edge and reads as something laid on
+    // top of the eye. That is the shape this stage used to have.
+    const held = concealPerPixel(
+      pristine,
+      WIDTH,
+      HEIGHT,
+      SPOT,
+      0.3,
+      transferToLinear,
+      transferFromLinear,
+      true,
+    );
+    expect(band(held, 0.65, 0.85)).toBeLessThan(IRIS + 6);
+  });
+
+  it('changes nothing outside the ring, at any amount', () => {
+    // The other half of the same failure: a mask that feathered outward pushed
+    // iris colour over the sclera, and the eye grew a halo the wider the reach
+    // went. Nothing beyond the drawn circle may move, however far the slider is.
+    const pristine = eye();
+    const radius = SPOT.r * WIDTH;
+    for (const amount of [DEFAULT_AMOUNT, 0.5, FULL_AMOUNT]) {
+      const plate = new Uint8ClampedArray(pristine);
+      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, amount);
+      for (let y = 0; y < HEIGHT; y++) {
+        for (let x = 0; x < WIDTH; x++) {
+          if (Math.hypot(x + 0.5 - WIDTH / 2, y + 0.5 - HEIGHT / 2) < radius) continue;
+          const i = (y * WIDTH + x) * 4;
+          expect.soft(plate[i], `outside the ring at ${amount}`).toBe(pristine[i]);
+        }
+      }
+    }
   });
 });
 
@@ -478,7 +523,6 @@ describe('the catchlight a circle at the top of the slider loses', () => {
 
   it('is left at the rate the reach predicts', () => {
     const radius = SPOT.r * WIDTH;
-    const sigma = radius * FULL_AMOUNT;
     const point = radius / 8;
     const dark = [10, 14, 20];
     const bright = [255, 250, 245];
@@ -509,29 +553,22 @@ describe('the catchlight a circle at the top of the slider loses', () => {
 
     // What a point keeps is its light spread over the window the stage actually
     // averages with, so the prediction is taken from that window rather than
-    // assumed: the peak of the blur's own impulse response, divided by the mask
-    // weight the normalisation divides by. Both come from the shipped blur.
+    // assumed: the peak of the blur's own impulse response, times the area the
+    // point covers. It comes from the shipped blur.
     const { region, centre, radius: drawnRadius } = concealRegion(SPOT, WIDTH, HEIGHT, FULL_AMOUNT);
     const count = region.width * region.height;
     const scratch = new Float32Array(count);
     const impulse = new Float32Array(count);
     impulse[Math.round(centre[1]) * region.width + Math.round(centre[0])] = 1;
     boxBlur(impulse, region.width, region.height, boxRadius(drawnRadius, FULL_AMOUNT), scratch);
-    const weight = maskOf(region.width, region.height, centre[0], centre[1], drawnRadius);
-    boxBlur(weight, region.width, region.height, boxRadius(drawnRadius, FULL_AMOUNT), scratch);
     const middle = Math.round(centre[1]) * region.width + Math.round(centre[0]);
-    const predicted = (area * (impulse[middle] as number)) / (weight[middle] as number);
+    const predicted = area * (impulse[middle] as number);
     expect(measured / predicted).toBeGreaterThan(0.9);
     expect(measured / predicted).toBeLessThan(1.1);
 
-    // The free-space form the cost is quoted from, a²/2σ², holds only while the
-    // reach is inside the mask. Past that the mask is the window, the residual
-    // stops falling with σ, and the two part company — which is the reason the
-    // prediction above is taken from the window and not from σ.
-    const drawn = Math.sqrt(area / Math.PI);
-    const free = (drawn * drawn) / (2 * sigma * sigma);
-    expect(measured).toBeGreaterThan(free);
-    expect(measured).toBeLessThan(0.02);
+    // And what that comes to: a catchlight an eighth of the circle across is
+    // left at under a twentieth of its own peak once the slider is at the top.
+    expect(measured).toBeLessThan(0.05);
   });
 });
 
