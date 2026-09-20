@@ -227,6 +227,49 @@ const healSpotSchema = z.object({
 });
 
 /**
+ * Restore: the photographed face, put back where a generator replaced it.
+ *
+ * The one stage whose input is a second file, and the schema holds the file's
+ * name rather than its pixels — the same arrangement a supplied typeface has,
+ * and for the same reason: a recipe is a description of an edit and has no
+ * images in it. A reference that is not to hand is reported as missing rather
+ * than substituted, and an empty name is a recipe that renders the frame it was
+ * given. That is what makes the default mean no effect even though the two
+ * amounts below have working values: without a reference there is nothing for
+ * them to be amounts of.
+ *
+ * It sits ahead of the fills. A blemish is filled on the face that ends up in
+ * the picture, so restoring first is the only order in which healing a restored
+ * face is possible at all.
+ */
+const restoreSchema = z
+  .object({
+    /** File name of the photograph the faces are taken from. */
+    reference: z.string().max(260).default(''),
+    /**
+     * Where the patch stops, as a fraction of the face's width.
+     *
+     * How far inside the outline and how softly are one number rather than two.
+     * A boundary laid on the outline itself would cross the hairline, the jaw
+     * and the ear in one stroke, which is the matting problem that makes cutting
+     * a person out of a photograph hard; held a little way inside, it crosses
+     * nothing but cheek. Larger is safer and smaller keeps more of the face, and
+     * there is no setting at which the two have to be traded off separately.
+     */
+    edge: num('restore.edge', 0.02, 0.25, 0.08),
+    /**
+     * How far the patch is taken towards the light in the picture.
+     *
+     * A gain per channel, matched on the mean of the same region in both images.
+     * Full by default: a face that was photographed under one light and dropped
+     * into a frame that has been relit under another does not belong to the
+     * picture, and that reads long before the boundary does.
+     */
+    match: num('restore.match', 0, 1, 1),
+  })
+  .prefault({});
+
+/**
  * The face stages: what happens inside a skin mask, and to the parts.
  *
  * Every radius is a fraction of the width of the face it is applied to, never
@@ -661,6 +704,7 @@ export const recipeSchema = z.object({
     })
     .optional(),
   geometry: geometrySchema,
+  restore: restoreSchema,
   /**
    * The spots to fill, in the order they were placed.
    *
@@ -685,6 +729,7 @@ export type DepthParams = Recipe['depth'];
 export type RelightParams = Recipe['relight'];
 export type GlobalParams = Recipe['global'];
 export type GeometryParams = Recipe['geometry'];
+export type RestoreParams = Recipe['restore'];
 export type TileParams = Recipe['tiles'];
 export type TextLayer = Recipe['text'][number];
 export type OutputParams = Recipe['output'];
@@ -755,6 +800,29 @@ export function isWarpNeutral(face: FaceParams): boolean {
     Math.abs(w.noseBridge) < 1e-4 &&
     Math.abs(w.mouthWidth) < 1e-4
   );
+}
+
+/**
+ * True when nothing in the restore stage would change a pixel.
+ *
+ * Named off the reference rather than off the amounts, because that is where
+ * the stage is switched: the two amounts describe a patch and mean nothing
+ * without a photograph to take one from.
+ */
+export function isRestoreNeutral(restore: RestoreParams): boolean {
+  return restore.reference === '' || restore.edge <= 0;
+}
+
+/**
+ * What the restore asks for, as something a cache can compare.
+ *
+ * Every field of it, so adding one cannot be forgotten here — the failure that
+ * would cause is a control that moves and changes nothing until something
+ * unrelated rebuilds the plate, which reads as broken rather than as stale.
+ */
+export function restoreSignature(restore: RestoreParams): string {
+  if (isRestoreNeutral(restore)) return 'none';
+  return `${restore.reference}:${restore.edge}:${restore.match}`;
 }
 
 /**

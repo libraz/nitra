@@ -61,6 +61,11 @@ describe('the detail panel', () => {
     'tiles.',
     'text.',
     'heal.',
+    // Both amounts describe a patch taken from a second photograph, and that
+    // photograph is opened in the tool rather than named by a path. A slider for
+    // the edge of a patch that does not exist is a control with nothing under
+    // it, which is what the detail panel is not for.
+    'restore.',
     // Where the light stands is one decision written as two numbers, and the
     // disc is how it is made. Two sliders for a direction is a control somebody
     // has to read back and imagine the result of.
