@@ -166,6 +166,28 @@ export function fitResidual(
 }
 
 /**
+ * What to add to a reference centre before it is compared with a destination's.
+ *
+ * Zero unless the two sides hold the same number of faces, in which case it is
+ * whatever moved all of them together — a reframing rather than anybody moving.
+ */
+function commonShift(
+  destination: readonly FaceRegions[],
+  reference: readonly FaceRegions[],
+): Point {
+  if (destination.length === 0 || destination.length !== reference.length) return { x: 0, y: 0 };
+  // Between the two groups' own centres, which needs no correspondence between
+  // them — the pairing is what this is being worked out in order to find.
+  const mean = (faces: readonly FaceRegions[]): Point => ({
+    x: faces.reduce((total, face) => total + face.centre.x, 0) / faces.length,
+    y: faces.reduce((total, face) => total + face.centre.y, 0) / faces.length,
+  });
+  const here = mean(destination);
+  const there = mean(reference);
+  return { x: here.x - there.x, y: here.y - there.y };
+}
+
+/**
  * Work out which face in the reference is which face in the destination.
  *
  * By nearest centre, which is sound here and would not be in general: the two
@@ -177,30 +199,38 @@ export function fitResidual(
  * Ordered by how close the pairing is rather than by position in the frame, so
  * the confident pairs are made before the doubtful ones get to consume a face.
  *
- * One face on each side is paired whatever the distance between them, and that
- * is not a shortcut. The reach exists to stop a group photograph mispairing, so
- * where there is nothing to confuse it is answering a question nobody asked —
- * and it would get that answer wrong, because a coordinate here is a fraction of
- * the image's own width and a generator that returns a square crop of a 4:3
- * frame moves every face down the y axis by an eighth of a width without
- * anything having moved in the photograph. What actually says whether two faces
- * are the same face is the residual, which is measured either way.
+ * **The distance is measured after a shift the two sets share is taken out.** A
+ * coordinate here is a fraction of the image's own width, so a generator that
+ * returns a square crop of a 4:3 frame moves every face down the y axis by an
+ * eighth of a width without anything having moved in the photograph. That shift
+ * is the same for every face, and the reach has no opinion about it: what the
+ * reach is for is telling one person in a group from another, which is a
+ * question about where the faces sit relative to each other. Lining the two sets
+ * up by their common centre first is what makes the answer about that and
+ * nothing else — with one face on each side it removes the distance entirely,
+ * which is the case that has nothing to confuse.
+ *
+ * It is taken out only when the two sides hold the same number of faces. With
+ * different counts the two centres are not the centre of the same group, and
+ * subtracting one from the other would pull a lone reference face towards the
+ * middle of a crowd it is not in the middle of. What actually says whether two
+ * faces are the same face is the residual, which is measured either way.
  */
 export function pairFaces(
   destination: readonly FaceRegions[],
   reference: readonly FaceRegions[],
 ): FacePair[] {
-  const unambiguous = destination.length === 1 && reference.length === 1;
+  const shift = commonShift(destination, reference);
   const candidates: { destination: number; reference: number; distance: number }[] = [];
   for (let d = 0; d < destination.length; d++) {
     const target = destination[d] as FaceRegions;
     for (let r = 0; r < reference.length; r++) {
       const other = reference[r] as FaceRegions;
       const distance = Math.hypot(
-        target.centre.x - other.centre.x,
-        target.centre.y - other.centre.y,
+        target.centre.x - (other.centre.x + shift.x),
+        target.centre.y - (other.centre.y + shift.y),
       );
-      if (!unambiguous && distance > target.width * PAIR_REACH) continue;
+      if (distance > target.width * PAIR_REACH) continue;
       candidates.push({ destination: d, reference: r, distance });
     }
   }
