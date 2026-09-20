@@ -259,6 +259,11 @@ export const en = {
   'restore.referenceFaces': 'Faces in the original — {count}',
   'restore.missing':
     'This edit was made with {name}, which is not open. Open it again to restore the face.',
+  'restore.mismatch':
+    'This edit was made with {wanted}, but the photo that is open is {open}. Open {wanted} again, or use {open} for this edit.',
+  'restore.unused':
+    '{open} is open but this edit is not using it. Undoing past the point where it was opened leaves it here without the edit asking for it.',
+  'restore.adopt': 'Use {name} for this edit',
   'restore.noFaceHere': 'No face was found in the picture, so there is nowhere to put one back.',
   'restore.edge': 'Edge',
   'restore.edgeNote':

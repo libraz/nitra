@@ -61,11 +61,15 @@ export function RestorePanel({
   const { t } = useI18n();
   const fileInput = useRef<HTMLInputElement | null>(null);
 
-  // The recipe can name a reference the session no longer holds — a recipe
-  // written yesterday, or a remount. Saying so is the whole reason the name is
-  // in the recipe at all.
+  // Three states, not two. The recipe names a photograph and the session holds
+  // one, and either can change without the other: a recipe written yesterday or
+  // a remount leaves the name with nothing behind it, and undoing past the point
+  // where a photograph was opened leaves the two naming different files. Without
+  // the third, that last one is a panel showing a loaded reference, no sliders,
+  // no restore and no reason given — which is the shape of a bug report.
   const missing = restore.reference !== '' && reference === null;
   const active = reference !== null && restore.reference === reference.fileName;
+  const mismatch = reference !== null && !active;
 
   return (
     <div className="pane">
@@ -120,6 +124,26 @@ export function RestorePanel({
 
           {missing && (
             <p className="mini alert">{t('restore.missing', { name: restore.reference })}</p>
+          )}
+
+          {mismatch && (
+            <>
+              <p className="mini alert">
+                {restore.reference === ''
+                  ? t('restore.unused', { open: reference.fileName })
+                  : t('restore.mismatch', {
+                      wanted: restore.reference,
+                      open: reference.fileName,
+                    })}
+              </p>
+              <button
+                type="button"
+                className="tomore"
+                onClick={() => onChange({ reference: reference.fileName })}
+              >
+                {t('restore.adopt', { name: reference.fileName })}
+              </button>
+            </>
           )}
 
           {active && faceCount === 0 && <p className="mini alert">{t('restore.noFaceHere')}</p>}

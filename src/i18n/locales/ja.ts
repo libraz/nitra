@@ -255,6 +255,11 @@ export const ja: Messages = {
   'restore.referenceFaces': '元の写真の顔 — {count}',
   'restore.missing':
     'この編集は {name} を使って作られていますが、いまは開かれていません。もう一度開くと顔が戻ります。',
+  'restore.mismatch':
+    'この編集は {wanted} を使って作られていますが、いま開かれているのは {open} です。{wanted} を開き直すか、この編集に {open} を使ってください。',
+  'restore.unused':
+    '{open} は開かれていますが、この編集では使われていません。開くより前まで操作を取り消すと、編集から参照されないまま残ります。',
+  'restore.adopt': 'この編集に {name} を使う',
   'restore.noFaceHere': 'いまの絵から顔が見つからないので、戻す場所がありません。',
   'restore.edge': '境界の位置',
   'restore.edgeNote':
