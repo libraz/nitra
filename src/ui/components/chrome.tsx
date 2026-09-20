@@ -48,24 +48,30 @@ export function TopBar({
         {dimensions && <span className="dim mono">{dimensions}</span>}
       </div>
 
+      {/* Settings about the application, kept on the left of the gap and away
+          from the actions on the right. Not a grouping for its own sake: the
+          mode switch below comes and goes with the tool, and anything sharing
+          the right-hand group with it moves sideways every time it does. */}
+      <div className="util">
+        <button
+          type="button"
+          className="menu-t"
+          aria-label={t('topbar.help')}
+          data-tip={t('topbar.help')}
+          onClick={onHelp}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.4 9.4a2.7 2.7 0 1 1 3.4 2.8c-.5.2-.8.7-.8 1.3v.6" />
+            <path d="M12 17.1h.01" />
+          </svg>
+        </button>
+
+        <ThemePicker />
+        <LanguagePicker />
+      </div>
+
       <div className="spacer" />
-
-      <button
-        type="button"
-        className="menu-t"
-        aria-label={t('topbar.help')}
-        data-tip={t('topbar.help')}
-        onClick={onHelp}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M9.4 9.4a2.7 2.7 0 1 1 3.4 2.8c-.5.2-.8.7-.8 1.3v.6" />
-          <path d="M12 17.1h.01" />
-        </svg>
-      </button>
-
-      <ThemePicker />
-      <LanguagePicker />
 
       {tool === 'adjust' && (
         <div className="modes" data-mode={mode} role="tablist" aria-label={t('topbar.modes')}>
