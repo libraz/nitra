@@ -241,6 +241,14 @@ const healSpotSchema = z.object({
  * It sits ahead of the fills. A blemish is filled on the face that ends up in
  * the picture, so restoring first is the only order in which healing a restored
  * face is possible at all.
+ *
+ * These two amounts are the only ones in the schema whose declared default is
+ * not the value at which they do nothing — an edge of zero is not a patch and a
+ * match of zero is a face lit by another day. They are describing a patch, and
+ * whether there is one is decided a level up, by whether a photograph has been
+ * named. So {@link isRestoreNeutral} is what the invariant is kept by here, and
+ * `neutral` in a parameter definition means "where the slider rests" for these
+ * two rather than "where the stage stops".
  */
 const restoreSchema = z
   .object({
