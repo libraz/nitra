@@ -30,6 +30,7 @@ Working after the fact removes the frame-rate budget. Passes can be as expensive
 - Suggests a starting grade from the image itself, and offers finishes as thumbnails of your own photo rather than as names.
 - Measures the result — skin texture kept, how far the face was moved, clipped highlights, blocked shadows, clipped chroma — and shows the numbers. Nothing is forbidden.
 - Removes the metadata, keeps it, or writes it field by field — location, capture time, camera, credit (see below).
+- Magnifies the picture to judge it, by scroll, pinch or the bar along the foot, and moves it by dragging. The canvas is given more pixels rather than the fitted picture being stretched, so at a hundred per cent one pixel of the exported file covers one pixel of the screen and what is soft on screen is soft in the file.
 - Offers the editor twice. Simple mode shows no numbers at all, which is what leaves showing the result as the only way to offer a choice; detail mode opens every parameter, and can list only the ones that have been changed.
 - Runs in light or dark, in English or Japanese.
 
