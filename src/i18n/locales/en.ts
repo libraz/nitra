@@ -35,7 +35,7 @@ export const en = {
   'rail.compare': 'Compare with original (hold)',
 
   'tool.adjust': 'Adjust',
-  'tool.restore': 'Restore the face',
+  'tool.restore': 'Restore the face an AI changed',
   'tool.heal': 'Remove blemishes',
   'tool.crop': 'Crop and rotate',
   'tool.text': 'Text',
@@ -251,8 +251,9 @@ export const en = {
 
   'restore.title': 'Restore the face',
   'restore.how':
-    'Open the photo this one was made from. The face it has is fitted back over the face in the picture.',
-  'restore.noImage': 'Open a photo first.',
+    'An AI edit redraws the whole picture, so the face in it comes back as somebody else. The photo open now is the edited one; open the original below and only the face is put back.',
+  'restore.noImage':
+    'Two photos, in this order: open the AI-edited one with Open photo in the bar, then open the original here.',
   'restore.open': 'Open the original photo',
   'restore.loading': 'Reading the original…',
   'restore.clear': 'Put the original away',
@@ -276,9 +277,9 @@ export const en = {
   'restore.residualOk': 'The two faces line up. The fit is a move, a turn and a resize.',
   'restore.residualHigh':
     'The two faces do not line up well. The picture has been given a different pose or expression, so the patch sits in a frame that is not quite its own.',
-  'restore.aboutTitle': 'Restored before everything else',
+  'restore.aboutTitle': 'The face is not generated',
   'restore.aboutBody':
-    'The face goes in before the grade and the grain, so both run over the join. Nothing is generated: the pixels are the ones the camera recorded.',
+    'The pixels are the ones the camera recorded. The face goes back in before the grade and the grain, so both run over the join.',
   'restore.toastLoaded': '{name} — {count} face(s) found in the original',
   'restore.toastNoFace': '{name} has no face in it, so there is nothing to take back.',
   'restore.toastFailed': 'That photo could not be read',

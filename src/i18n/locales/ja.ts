@@ -32,7 +32,7 @@ export const ja: Messages = {
   'rail.compare': '原画と比較（長押し）',
 
   'tool.adjust': '調整',
-  'tool.restore': '顔を戻す',
+  'tool.restore': 'AIが変えた顔を戻す',
   'tool.heal': 'シミ・ニキビ消し',
   'tool.crop': 'トリミングと回転',
   'tool.text': '文字入れ',
@@ -247,8 +247,9 @@ export const ja: Messages = {
 
   'restore.title': '顔を戻す',
   'restore.how':
-    'この写真の元になった写真を開いてください。そちらの顔を、いまの絵の顔の位置に合わせて戻します。',
-  'restore.noImage': '先に写真を開いてください。',
+    'AIで加工すると絵全体が描き直されるため、顔も別人になります。いま開いているのが加工後の写真です。続けて元の写真を開くと、顔だけが戻ります。',
+  'restore.noImage':
+    '写真は2枚、この順で開きます。まず上部の「写真を開く」でAI加工後の写真を開き、次にここで元の写真を開きます。',
   'restore.open': '元の写真を開く',
   'restore.loading': '元の写真を読んでいます…',
   'restore.clear': '元の写真を閉じる',
@@ -272,9 +273,9 @@ export const ja: Messages = {
   'restore.residualOk': '二つの顔はよく重なっています。移動・回転・拡大縮小だけで合いました。',
   'restore.residualHigh':
     '二つの顔がうまく重なりません。いまの絵では向きや表情が変えられているため、貼った顔が本来の枠からずれた位置に収まります。',
-  'restore.aboutTitle': 'ほかのすべてより先に戻します',
+  'restore.aboutTitle': '顔は生成していません',
   'restore.aboutBody':
-    '色調整も粒状も、顔を戻したあとに継ぎ目の上をまとめて通ります。生成は一切していません。カメラが記録した画素をそのまま使います。',
+    'カメラが記録した画素をそのまま使います。色調整も粒状も、顔を戻したあとに継ぎ目の上をまとめて通ります。',
   'restore.toastLoaded': '{name} — 元の写真から顔を {count} 件見つけました',
   'restore.toastNoFace': '{name} には顔が写っていないため、戻せるものがありません。',
   'restore.toastFailed': 'その写真を読み込めませんでした',
