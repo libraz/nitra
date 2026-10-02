@@ -10,7 +10,8 @@
 import { useMemo } from 'react';
 import type { TextLayer } from '../../core/recipe/schema';
 import { fontByKey, missingGlyphs } from '../../core/text/fonts';
-import { useI18n } from '../../i18n';
+import { weightChoices } from '../../core/text/weights';
+import { type MessageKey, useI18n } from '../../i18n';
 import { spec } from '../params';
 import { ColorField, Segmented, Slider } from './controls';
 import { FontPicker } from './FontPicker';
@@ -24,11 +25,11 @@ const OUTLINE = spec('text.outline', 'text.outline');
 const SHADOW = spec('text.shadow', 'text.shadow');
 const BACKGROUND = spec('text.background', 'text.background');
 
-const WEIGHTS = [
-  { key: '300', nameKey: 'text.weightLight' },
-  { key: '500', nameKey: 'text.weightRegular' },
-  { key: '700', nameKey: 'text.weightBold' },
-] as const;
+const WEIGHT_NAMES: Partial<Record<number, MessageKey>> = {
+  300: 'text.weightLight',
+  500: 'text.weightRegular',
+  700: 'text.weightBold',
+};
 
 const ALIGNMENTS = [
   { key: 'left', nameKey: 'text.alignLeft' },
@@ -134,10 +135,10 @@ export function TextPanel({
 
               <Segmented
                 label={t('text.weight')}
-                options={WEIGHTS.map((weight) => ({
-                  key: weight.key,
-                  name: t(weight.nameKey),
-                }))}
+                options={weightChoices(active.weight).map((weight) => {
+                  const nameKey = WEIGHT_NAMES[weight];
+                  return { key: String(weight), name: nameKey ? t(nameKey) : String(weight) };
+                })}
                 value={String(active.weight)}
                 onChange={(weight) => onUpdate(active.id, { weight: Number(weight) })}
               />

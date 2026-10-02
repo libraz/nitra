@@ -11,7 +11,7 @@
  * are reading the same numbers out of the same recipe.
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { type Mat3, mat3Apply, mat3Inverse } from '../../core/color/matrix';
 import type { TileRect } from '../../core/geometry/tiles';
 import type { CropHandle } from '../../core/geometry/transform';
@@ -41,6 +41,7 @@ interface CropOverlayProps {
 export function CropOverlay({ crop, ratio, onChange }: CropOverlayProps) {
   const host = useRef<HTMLDivElement | null>(null);
   const state = useRef<{
+    id: number;
     mode: 'move' | CropHandle;
     start: CropRect;
     dx: number;
@@ -68,6 +69,7 @@ export function CropOverlay({ crop, ratio, onChange }: CropOverlayProps) {
       const [px, py] = normalise(event);
       const start = latest.current.crop;
       state.current = {
+        id: event.pointerId,
         mode: handle === 'move' ? 'move' : (handle as CropHandle),
         start,
         dx: px - start.x,
@@ -79,7 +81,7 @@ export function CropOverlay({ crop, ratio, onChange }: CropOverlayProps) {
 
     const move = (event: PointerEvent) => {
       const drag = state.current;
-      if (!drag) return;
+      if (!drag || drag.id !== event.pointerId) return;
       const [px, py] = normalise(event);
       const { start } = drag;
       if (drag.mode === 'move') {
@@ -94,7 +96,7 @@ export function CropOverlay({ crop, ratio, onChange }: CropOverlayProps) {
     };
 
     const up = (event: PointerEvent) => {
-      if (!state.current) return;
+      if (!state.current || state.current.id !== event.pointerId) return;
       state.current = null;
       if (node.hasPointerCapture(event.pointerId)) node.releasePointerCapture(event.pointerId);
     };
@@ -339,7 +341,27 @@ interface TextOverlayProps {
 
 export function TextOverlay({ layers, selected, onSelect, onMove }: TextOverlayProps) {
   const host = useRef<HTMLDivElement | null>(null);
-  const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  const drag = useRef<{ id: string; pointer: number; dx: number; dy: number } | null>(null);
+  // Type size is a fraction of the frame's short edge, so on a frame that is
+  // not square the same fraction spans a different share of each axis.
+  const [aspect, setAspect] = useState(1);
+  useEffect(() => {
+    const node = host.current;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const box = node.getBoundingClientRect();
+      if (box.width >= 1 && box.height >= 1) setAspect(box.width / box.height);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const ofWidth = Math.min(1, 1 / aspect);
+  const ofHeight = Math.min(1, aspect);
+  const end = () => {
+    drag.current = null;
+  };
 
   return (
     <div className="textov" ref={host}>
@@ -355,8 +377,8 @@ export function TextOverlay({ layers, selected, onSelect, onMove }: TextOverlayP
             style={{
               left: `${layer.x * 100}%`,
               top: `${layer.y * 100}%`,
-              width: `${widest * layer.size * 100}%`,
-              height: `${lines.length * layer.lineHeight * layer.size * 100}%`,
+              width: `${widest * layer.size * ofWidth * 100}%`,
+              height: `${lines.length * layer.lineHeight * layer.size * ofHeight * 100}%`,
               transform: `translate(-50%, -50%) rotate(${layer.rotation}deg)`,
             }}
             onPointerDown={(event) => {
@@ -365,6 +387,7 @@ export function TextOverlay({ layers, selected, onSelect, onMove }: TextOverlayP
               onSelect(layer.id);
               drag.current = {
                 id: layer.id,
+                pointer: event.pointerId,
                 dx: (event.clientX - box.left) / box.width - layer.x,
                 dy: (event.clientY - box.top) / box.height - layer.y,
               };
@@ -373,16 +396,16 @@ export function TextOverlay({ layers, selected, onSelect, onMove }: TextOverlayP
             onPointerMove={(event) => {
               const active = drag.current;
               const box = host.current?.getBoundingClientRect();
-              if (!active || !box || box.width < 1) return;
+              if (!active || active.pointer !== event.pointerId || !box || box.width < 1) return;
               onMove(
                 active.id,
                 Math.min(Math.max((event.clientX - box.left) / box.width - active.dx, 0), 1),
                 Math.min(Math.max((event.clientY - box.top) / box.height - active.dy, 0), 1),
               );
             }}
-            onPointerUp={() => {
-              drag.current = null;
-            }}
+            onPointerUp={end}
+            onPointerCancel={end}
+            onLostPointerCapture={end}
           />
         );
       })}

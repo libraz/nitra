@@ -142,6 +142,14 @@ export function useStageGestures({
      */
     const down = new Map<number, { x: number; y: number }>();
     let pinch: { distance: number; cx: number; cy: number } | null = null;
+    /**
+     * Every pointer that has taken part in a pinch and is still down.
+     *
+     * A pointer in here never ends as a tap or a drag on a tool, whichever
+     * finger lifts first: its events are kept from everything under the stage
+     * until it is up.
+     */
+    const joined = new Set<number>();
     let hand: { x: number; y: number; id: number } | null = null;
     /** A press that will become a hand if it travels, and stay the tool's if not. */
     let armed: { x: number; y: number; id: number } | null = null;
@@ -180,6 +188,17 @@ export function useStageGestures({
       };
     };
 
+    /** (Re)start the pinch from the fingers now down, taking every one of them off the tools. */
+    const startPinch = () => {
+      const measured = measurePinch();
+      if (!measured) return;
+      pinch = { ...measured };
+      for (const id of down.keys()) joined.add(id);
+    };
+    const endPinch = () => {
+      pinch = null;
+    };
+
     const onWheel = (event: WheelEvent) => {
       if (!latest.current.enabled) return;
       // Held down, a wheel is the browser's own page zoom, so the default has to
@@ -210,7 +229,10 @@ export function useStageGestures({
         // A second finger settles what the first one was: a pinch, never a drag
         // of the picture and never a tap on it.
         armed = null;
-        pinch = measurePinch();
+        startPinch();
+        // A press that was already comparing or placing is over: the original
+        // must not stay on screen for the length of a pinch.
+        latest.current.onPanStart?.();
         event.stopPropagation();
         return;
       }
@@ -238,6 +260,7 @@ export function useStageGestures({
       }
       if (!down.has(event.pointerId)) return;
       down.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (joined.has(event.pointerId)) event.stopPropagation();
       if (!pinch || down.size < 2) return;
       const next = measurePinch();
       if (!next) return;
@@ -272,18 +295,21 @@ export function useStageGestures({
         event.stopPropagation();
         return;
       }
-      const wasPinching = pinch !== null;
+      const wasJoined = joined.delete(event.pointerId);
       down.delete(event.pointerId);
-      if (down.size < 2) pinch = null;
-      // The finger that is left is not the start of a tap: it has been on the
-      // picture throughout a zoom, and letting its release place a circle is how
-      // a pinch ends with a blemish filled somewhere nobody pointed at.
-      if (wasPinching) event.stopPropagation();
+      if (down.size < 2) endPinch();
+      // Either finger of a pinch, first or last: neither release is a tap.
+      // Letting one place a circle is how a pinch ends with a blemish filled
+      // somewhere nobody pointed at.
+      if (wasJoined) event.stopPropagation();
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (isTyping(event.target)) return;
       if (event.code === 'Space') {
+        // The hand has this key while a photograph is open; left alone, the
+        // release would press whichever button still has focus.
+        if (latest.current.enabled) event.preventDefault();
         if (event.repeat || spaceHeld.current) return;
         spaceHeld.current = true;
         if (!hand) setGrab(restingGrab());
@@ -310,7 +336,8 @@ export function useStageGestures({
       event.preventDefault();
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.code !== 'Space') return;
+      if (event.code !== 'Space' || isTyping(event.target)) return;
+      if (latest.current.enabled) event.preventDefault();
       spaceHeld.current = false;
       if (!hand) setGrab(restingGrab());
     };
@@ -319,7 +346,8 @@ export function useStageGestures({
       spaceHeld.current = false;
       hand = null;
       armed = null;
-      pinch = null;
+      endPinch();
+      joined.clear();
       down.clear();
       setGrab(restingGrab());
     };
@@ -357,10 +385,24 @@ export function useStageGestures({
   }, [host, magnified, panOnDrag]);
 }
 
+/** Inputs that take no text: their keys are not theirs, and the stage's shortcuts stay live. */
+const NON_TEXT_INPUTS = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+]);
+
 /** Whether a key belongs to something being typed into rather than to the stage. */
 export function isTyping(target: EventTarget | null): boolean {
   const node = target as HTMLElement | null;
   if (!node || typeof node.tagName !== 'string') return false;
   const tag = node.tagName.toLowerCase();
-  return tag === 'input' || tag === 'textarea' || tag === 'select' || node.isContentEditable;
+  if (tag === 'input') return !NON_TEXT_INPUTS.has((node as HTMLInputElement).type);
+  return tag === 'textarea' || tag === 'select' || node.isContentEditable;
 }

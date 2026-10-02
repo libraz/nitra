@@ -233,6 +233,11 @@ export function resizeCrop(
   normalised: number | null,
 ): { x: number; y: number; w: number; h: number } {
   const min = 0.04;
+  // A pointer past the frame is at the frame's edge: left to overshoot, the
+  // final clamp would slide the whole rectangle to fit and move the edges the
+  // handle does not own.
+  pointerX = Math.min(Math.max(pointerX, 0), 1);
+  pointerY = Math.min(Math.max(pointerY, 0), 1);
   let left = start.x;
   let top = start.y;
   let right = start.x + start.w;
@@ -257,6 +262,17 @@ export function resizeCrop(
     } else {
       w = h * normalised;
     }
+    // The shape follows the dragged edge, so it can outgrow the room the fixed
+    // edges leave; shrink it about them rather than letting the clamp shift it.
+    const room = (lo: number, hi: number, movesLo: boolean, movesHi: boolean) =>
+      movesLo ? hi : movesHi ? 1 - lo : 2 * Math.min((lo + hi) / 2, 1 - (lo + hi) / 2);
+    const fit = Math.min(
+      1,
+      room(start.x, start.x + start.w, handle.includes('w'), handle.includes('e')) / w,
+      room(start.y, start.y + start.h, handle.includes('n'), handle.includes('s')) / h,
+    );
+    w *= fit;
+    h *= fit;
     if (handle.includes('w')) left = right - w;
     if (handle.includes('n')) top = bottom - h;
     if (horizontal && !vertical) top = start.y + start.h / 2 - h / 2;

@@ -84,6 +84,8 @@ const FALLBACK_STACK = BUILT_IN[0]?.stack ?? 'sans-serif';
 export const DEFAULT_FONT = BUILT_IN[0] as FontDescriptor;
 
 const custom = new Map<string, FontDescriptor>();
+/** The browser-side face behind each supplied font, so unloading can take it back out. */
+const registered = new Map<string, FontFace>();
 
 /** Every face the picker can offer right now. */
 export function allFonts(): readonly FontDescriptor[] {
@@ -118,15 +120,24 @@ export function missingFontKeys(keys: readonly string[]): string[] {
   return [...missing];
 }
 
+/** A short digest of the file's bytes: the same file is the same face in every session. */
+async function digestOf(bytes: ArrayBuffer): Promise<string> {
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(hash.slice(0, 8), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 /**
  * A CSS family name that cannot collide with a real one.
  *
  * Only the internal handle is reduced to ASCII; the name shown in the picker is
- * the file's own, so a Japanese font keeps its Japanese name on screen.
+ * the file's own, so a Japanese font keeps its Japanese name on screen. The
+ * digest is what makes the name, and the recipe key built on it, mean one file:
+ * a count of what is loaded would hand the same name to a different face after
+ * an unload or a reload.
  */
-function familyFor(stem: string): string {
+function familyFor(stem: string, digest: string): string {
   const cleaned = stem.replace(/[^A-Za-z0-9_-]/g, '-').replace(/-+/g, '-');
-  return `nitra-user-${cleaned || 'font'}-${custom.size + 1}`;
+  return `nitra-user-${cleaned || 'font'}-${digest}`;
 }
 
 const FONT_FILE = /\.(otf|ttf|woff2?|ttc)$/i;
@@ -142,17 +153,23 @@ export function isFontFile(file: File): boolean {
  * The file is read into an `ArrayBuffer` and handed to the browser's font
  * machinery, so it never leaves the device any more than the photo does. It also
  * does not survive a reload: a recipe can name the face, but the file has to be
- * picked again, which the panel says rather than silently substituting.
+ * picked again, which the panel says rather than silently substituting. The key
+ * follows the file's contents, so picking the same file again restores the
+ * binding and picking a different one never takes it over.
  */
 export async function loadFontFile(file: File): Promise<FontDescriptor> {
   if (typeof FontFace === 'undefined' || !document.fonts) {
     throw new Error('this browser cannot load a font file');
   }
   const stem = file.name.replace(/\.[^.]+$/, '');
-  const family = familyFor(stem);
-  const face = new FontFace(family, await file.arrayBuffer());
+  const bytes = await file.arrayBuffer();
+  const family = familyFor(stem, await digestOf(bytes));
+  const known = custom.get(`user:${family}`);
+  if (known) return known;
+  const face = new FontFace(family, bytes);
   await face.load();
   document.fonts.add(face);
+  registered.set(`user:${family}`, face);
 
   const descriptor: FontDescriptor = {
     key: `user:${family}`,
@@ -170,6 +187,9 @@ export async function loadFontFile(file: File): Promise<FontDescriptor> {
 /** Forget a supplied face. The recipe may still name it; the panel will say so. */
 export function unloadFont(key: string): void {
   custom.delete(key);
+  const face = registered.get(key);
+  if (face) document.fonts?.delete(face);
+  registered.delete(key);
 }
 
 let probe: CanvasRenderingContext2D | null | undefined;
@@ -217,7 +237,9 @@ export function missingGlyphs(text: string, key: string): string[] {
   for (const char of text) {
     if (seen.has(char) || /\s/.test(char)) continue;
     seen.add(char);
-    if (widthIn(ctx, char, family) === widthIn(ctx, char, ABSENT_FAMILY)) out.push(char);
+    const absent = widthIn(ctx, char, ABSENT_FAMILY);
+    // Nothing is drawn for a zero-advance code point, so there is nothing to miss.
+    if (absent > 0 && widthIn(ctx, char, family) === absent) out.push(char);
   }
   return out;
 }

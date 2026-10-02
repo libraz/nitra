@@ -14,7 +14,7 @@
 
 import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { type MessageKey, useI18n } from '../../i18n';
-import { useStageGestures } from '../gestures';
+import { isTyping, useStageGestures } from '../gestures';
 import type { Tool } from '../useEditor';
 import { type View, viewTransform } from '../view';
 import { ZoomBar } from './ZoomBar';
@@ -115,20 +115,30 @@ export function Stage({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === '\\' && !event.repeat) onCompare(true);
+      if (event.key !== '\\' || event.repeat || isTyping(event.target)) return;
+      holding.current = true;
+      onCompare(true);
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (event.key === '\\') onCompare(false);
+      if (event.key === '\\') release();
+    };
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') release();
     };
     window.addEventListener('pointerup', release);
     window.addEventListener('pointercancel', release);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    // A key held while the window loses focus never sees its keyup.
+    window.addEventListener('blur', release);
+    document.addEventListener('visibilitychange', onHidden);
     return () => {
       window.removeEventListener('pointerup', release);
       window.removeEventListener('pointercancel', release);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', release);
+      document.removeEventListener('visibilitychange', onHidden);
     };
   }, [onCompare, release]);
 
