@@ -62,8 +62,11 @@ export class Dag<Ctx, Value, Params> {
   /**
    * Evaluate up to `outputId`.
    *
-   * `variant` separates results that are the same computation at a different
-   * resolution, so the proxy and the full-size render do not evict each other.
+   * `variant` separates results that have to coexist, so the proxy and the
+   * full-size render do not evict each other. It holds one slot per node, and a
+   * new result overwrites and releases the old one: a variant has to name a
+   * role, never a value like a size or a framing, or every value ever rendered
+   * stays resident.
    */
   evaluate(ctx: Ctx, params: Params, outputId: string, variant: string): Value {
     const needed = this.ancestorsOf(outputId, ctx, params);

@@ -16,6 +16,10 @@ import { describe, expect, it } from 'vitest';
 import { faceRegions } from '../src/core/face/geometry';
 import { type NormalBitmap, rasteriseNormals } from '../src/core/face/normals';
 import { faceRegion } from '../src/core/face/raster';
+import { croppedSize, outputToSource } from '../src/core/geometry/transform';
+import { neutralRecipe, type Recipe } from '../src/core/recipe/schema';
+import type { PassContext } from '../src/core/render/context';
+import { relightUniforms } from '../src/core/render/uniforms';
 import { makeFace, meshTriangles } from './helpers/face';
 
 const SOURCE = 800;
@@ -241,5 +245,94 @@ describe('the face normal field', () => {
       return normalAt(built.map, built.region, { x: centre.x + width * 0.28, y: centre.y }).x;
     };
     expect(cheek(far)).toBeCloseTo(cheek(near), 1);
+  });
+});
+
+/**
+ * The light is chosen on screen and dotted against normals in the photograph's
+ * own frame, so the framing sits between the two. A sign or an axis lost there
+ * is a light on the wrong side of a turned or mirrored face.
+ */
+describe('the light direction under the framing', () => {
+  const SOURCE_W = 4000;
+  const SOURCE_H = 3000;
+
+  function lightFor(geometry: Partial<Recipe['geometry']>, angle: number): [number, number] {
+    const base = neutralRecipe();
+    const recipe: Recipe = {
+      ...base,
+      geometry: { ...base.geometry, ...geometry },
+      relight: { ...base.relight, angle, frontal: 0 },
+    };
+    const [width, height] = croppedSize(SOURCE_W, SOURCE_H, recipe.geometry);
+    const ctx = {
+      width: Math.round(width),
+      height: Math.round(height),
+      geometry: outputToSource(SOURCE_W, SOURCE_H, recipe.geometry),
+      geometryKey: '',
+      source: { width: SOURCE_W, height: SOURCE_H },
+      face: null,
+    } as unknown as PassContext;
+    const [x, y] = relightUniforms(recipe, ctx).light;
+    return [x, y];
+  }
+
+  it('is the screen direction when nothing is framed', () => {
+    const [x, y] = lightFor({}, 90);
+    expect(x).toBeCloseTo(1, 6);
+    expect(y).toBeCloseTo(0, 6);
+  });
+
+  it('turns with a quarter turn', () => {
+    // Turned a quarter clockwise, the photograph's top is at the right of the
+    // screen, so a light from the right comes from the photograph's top.
+    const [x, y] = lightFor({ quarterTurns: 1 }, 90);
+    expect(x).toBeCloseTo(0, 6);
+    expect(y).toBeCloseTo(1, 6);
+  });
+
+  it('mirrors with a flip', () => {
+    const [x, y] = lightFor({ flipH: true }, 90);
+    expect(x).toBeCloseTo(-1, 6);
+    expect(y).toBeCloseTo(0, 6);
+    const [, up] = lightFor({ flipV: true }, 0);
+    expect(up).toBeCloseTo(-1, 6);
+  });
+
+  it('follows every combination of the framing to the source pixel it lands on', () => {
+    // Independently of how the uniform is built: step across the screen in the
+    // light's direction, map both ends through the framing, and the step in
+    // the photograph is the direction the normals must be dotted against.
+    for (const quarterTurns of [0, 1, 2, 3]) {
+      for (const flipH of [false, true]) {
+        for (const flipV of [false, true]) {
+          for (const straighten of [-12, 0, 7]) {
+            const geometry = { quarterTurns, flipH, flipV, straighten };
+            const base = neutralRecipe().geometry;
+            const full = { ...base, ...geometry };
+            const [w, h] = croppedSize(SOURCE_W, SOURCE_H, full);
+            const m = outputToSource(SOURCE_W, SOURCE_H, full);
+            const toSource = (px: number, py: number): [number, number] => {
+              const u = px / Math.round(w);
+              const v = py / Math.round(h);
+              return [
+                (m[0] * u + m[1] * v + m[2]) * SOURCE_W,
+                (m[3] * u + m[4] * v + m[5]) * SOURCE_H,
+              ];
+            };
+            for (const angle of [0, 45, 200]) {
+              const clock = (angle * Math.PI) / 180;
+              const [ax, ay] = toSource(100, 100);
+              // On screen y grows downward, so a light from above is a step up.
+              const [bx, by] = toSource(100 + Math.sin(clock), 100 - Math.cos(clock));
+              const length = Math.hypot(bx - ax, by - ay);
+              const [x, y] = lightFor(geometry, angle);
+              expect(x).toBeCloseTo((bx - ax) / length, 4);
+              expect(y).toBeCloseTo(-(by - ay) / length, 4);
+            }
+          }
+        }
+      }
+    }
   });
 });

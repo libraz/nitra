@@ -162,16 +162,20 @@ export class Program {
  * Reuse of half-float render targets.
  *
  * Allocating a 12-megapixel RGBA16F target costs about 96MB and a stall; a
- * slider drag would otherwise do it on every frame.
+ * slider drag would otherwise do it on every frame. Idle targets are kept only
+ * for sizes still being asked for: {@link TexturePool.trim} deletes the rest.
  */
 export class TexturePool {
   private readonly free = new Map<string, RenderTarget[]>();
   private readonly live = new Set<RenderTarget>();
+  /** Sizes acquired since the last trim. */
+  private readonly recent = new Set<string>();
 
   constructor(private readonly gl: WebGL2RenderingContext) {}
 
   acquire(width: number, height: number): RenderTarget {
     const key = `${width}x${height}`;
+    this.recent.add(key);
     const bucket = this.free.get(key);
     const reused = bucket?.pop();
     if (reused) {
@@ -191,10 +195,44 @@ export class TexturePool {
     else this.free.set(key, [target]);
   }
 
+  /**
+   * Delete idle targets of every size not acquired since the last trim.
+   *
+   * Targets in use are never touched. A previous photograph, crop shape or
+   * working area leaves buckets nobody will ask for again, and without this
+   * they stay allocated until the context goes.
+   *
+   * @param keepRecent Keep the idle targets of sizes acquired since the last
+   * trim. A replaced source passes false: what it was rendered at says nothing
+   * about the next photograph.
+   */
+  trim(keepRecent = true): void {
+    for (const [key, bucket] of this.free) {
+      if (keepRecent && this.recent.has(key)) continue;
+      for (const target of bucket) this.destroy(target);
+      this.free.delete(key);
+    }
+    this.recent.clear();
+  }
+
+  private destroy(target: RenderTarget): void {
+    this.gl.deleteTexture(target.texture);
+    this.gl.deleteFramebuffer(target.framebuffer);
+  }
+
   private allocate(width: number, height: number): RenderTarget {
     const gl = this.gl;
     const texture = gl.createTexture();
-    if (!texture) throw new GlError('could not create texture');
+    const framebuffer = gl.createFramebuffer();
+    // A failure deletes what was made first; nothing else holds a handle to it.
+    const fail = (message: string): never => {
+      if (texture) gl.deleteTexture(texture);
+      if (framebuffer) gl.deleteFramebuffer(framebuffer);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      throw new GlError(message);
+    };
+    if (!texture) return fail('could not create texture');
+    if (!framebuffer) return fail('could not create framebuffer');
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA16F, width, height);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -202,27 +240,75 @@ export class TexturePool {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    const framebuffer = gl.createFramebuffer();
-    if (!framebuffer) throw new GlError('could not create framebuffer');
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
     const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
     if (status !== gl.FRAMEBUFFER_COMPLETE) {
-      throw new GlError(`half-float render target unavailable (status 0x${status.toString(16)})`);
+      fail(`half-float render target unavailable (status 0x${status.toString(16)})`);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     return { texture, framebuffer, width, height };
   }
 
   dispose(): void {
-    const gl = this.gl;
-    const all = [...this.live, ...[...this.free.values()].flat()];
-    for (const t of all) {
-      gl.deleteTexture(t.texture);
-      gl.deleteFramebuffer(t.framebuffer);
-    }
+    for (const target of [...this.live, ...[...this.free.values()].flat()]) this.destroy(target);
     this.free.clear();
     this.live.clear();
+    this.recent.clear();
+  }
+}
+
+/**
+ * A keyed cache of GPU resources that holds at most `capacity` of them.
+ *
+ * A hit makes the entry the most recent, and what is evicted is the least
+ * recent — never the entry just stored. Every value leaving the cache, by
+ * eviction, replacement, deletion or clearing, is disposed exactly once.
+ */
+export class LruCache<V> {
+  private readonly entries = new Map<string, V>();
+
+  constructor(
+    private readonly capacity: number,
+    private readonly dispose: (value: V) => void,
+  ) {}
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  get(key: string): V | undefined {
+    const value = this.entries.get(key);
+    if (value === undefined) return undefined;
+    // Map iteration follows insertion order, so re-inserting marks it recent.
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    return value;
+  }
+
+  set(key: string, value: V): void {
+    const previous = this.entries.get(key);
+    this.entries.delete(key);
+    if (previous !== undefined && previous !== value) this.dispose(previous);
+    this.entries.set(key, value);
+    for (const [oldest, stale] of this.entries) {
+      if (this.entries.size <= this.capacity || oldest === key) break;
+      this.entries.delete(oldest);
+      this.dispose(stale);
+    }
+  }
+
+  delete(key: string): void {
+    const value = this.entries.get(key);
+    if (value === undefined) return;
+    this.entries.delete(key);
+    this.dispose(value);
+  }
+
+  clear(): void {
+    const values = [...this.entries.values()];
+    this.entries.clear();
+    for (const value of values) this.dispose(value);
   }
 }
 

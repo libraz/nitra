@@ -118,6 +118,27 @@ describe('resource handover', () => {
     expect(released).toHaveLength(3);
   });
 
+  it('holds one result per node however many framings a role has rendered', () => {
+    // A crop being dragged is a new signature on every frame. What stays
+    // resident has to be the latest one, not every one.
+    const made: string[] = [];
+    const released: string[] = [];
+    const nodes = chain([]).map((node) => ({
+      ...node,
+      evaluate: (ctx: null, inputs: readonly string[], params: Params) => {
+        const value = `${node.evaluate(ctx, inputs, params)}#${made.length}`;
+        made.push(value);
+        return value;
+      },
+    }));
+    const dag = new Dag(nodes, (value) => released.push(value));
+    for (let framing = 0; framing < 50; framing++) {
+      dag.evaluate(null, { a: framing, b: 1 }, 'light', 'proxy');
+    }
+    expect(made.length - released.length).toBe(nodes.length);
+    expect(new Set(released).size).toBe(released.length);
+  });
+
   it('releases only the named resolution', () => {
     const released: string[] = [];
     const dag = new Dag(chain([]), (value) => released.push(value));

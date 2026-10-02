@@ -4,8 +4,8 @@
  * It runs after the skin and before the grade, and both halves of that matter.
  * After the skin, because smoothing the face first means the light lands on a
  * smooth surface — the other way round, the gradient the light adds is itself
- * something for the filter to even out. Before the grade, because adding light
- * is a scene-referred operation and grading is a display-referred one; graded
+ * something for the filter to even out. Before the grade, because the grade is
+ * a decision about the whole scene and the light is part of the scene; graded
  * first, an exposure correction would be undoing the light that had just been
  * added to the picture.
  *
@@ -66,11 +66,9 @@ const WARM_HUE = 70;
  * the whole of the shading a face-width away from the face.
  *
  * Where the light reaches is the normal field's own alpha and nothing else. It
- * says how much of the mesh reached the pixel, which is the same question as
- * whether there is a surface here to shade, and it is smooth by construction —
- * one landmark's contribution goes to zero with zero slope at the edge of its
- * reach, so the field fades out over the outer part of a reach rather than
- * stopping.
+ * is the mesh's coverage, which is the same question as whether there is a
+ * surface here to shade, feathered so that its ramp is never the steepest change
+ * in brightness the stage draws: the field fades out rather than stopping.
  *
  * Confining it to the face outline instead was tried and is wrong twice over.
  * The outline is a polygon, so its coverage is antialiased but not feathered:

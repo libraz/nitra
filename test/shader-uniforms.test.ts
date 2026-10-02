@@ -163,6 +163,20 @@ describe('the stage shaders and the calls that drive them', () => {
       }
     });
 
+    it(`sets every uniform ${program} declares on every bind`, () => {
+      // Uniforms are per-program state and outlive a draw, so one draw that
+      // leaves a uniform unset reads whatever the last draw of that program
+      // left there. The union over all binds cannot see that.
+      const declared = declaredUniforms(source);
+      const call = new RegExp(`programs\\.${program}\\b\\s*\\.bind\\(\\)`);
+      for (const statement of renderCode.split(';').filter((part) => call.test(part))) {
+        const set = new Set([...statement.matchAll(/'(u[A-Z]\w*)'/g)].map(([, name]) => name));
+        for (const name of declared) {
+          expect(set.has(name), `a bind of ${program} leaves ${name} unset`).toBe(true);
+        }
+      }
+    });
+
     it(`sets nothing ${program} does not declare`, () => {
       const declared = declaredUniforms(source);
       for (const name of assignedUniforms(program)) {
@@ -191,6 +205,30 @@ describe('the stage shaders and the calls that drive them', () => {
     expect(missing).toEqual([]);
   });
 });
+
+/**
+ * Every `texture(sampler, ...)` read of `sampler` followed directly by a swizzle.
+ *
+ * Scanned with the parentheses balanced, since a coordinate is usually itself a
+ * call — `toRegion(warped(...))` — and a pattern stopping at the first closing
+ * parenthesis would never reach the swizzle.
+ */
+function swizzledReads(source: string, sampler: string): string[] {
+  const found: string[] = [];
+  const opening = new RegExp(`texture\\(${sampler}\\s*,`, 'g');
+  for (const match of source.matchAll(opening)) {
+    let depth = 1;
+    let at = match.index + match[0].length;
+    while (at < source.length && depth > 0) {
+      if (source[at] === '(') depth++;
+      else if (source[at] === ')') depth--;
+      at++;
+    }
+    const swizzle = source.slice(at).match(/^\.[xyzwrgba]+/);
+    if (swizzle) found.push(source.slice(match.index, at) + swizzle[0]);
+  }
+  return found;
+}
 
 /**
  * The body of every method of the `Pipeline` class, by name.
@@ -483,6 +521,19 @@ describe('the stage shaders themselves', () => {
     expect(graphSource).toMatch(/id: 'skin',\n\s*inputs: \['warp', 'faceCoeff', 'faceMeanV'/);
   });
 
+  it('finds a channel taken off a read however deeply its coordinate nests', () => {
+    const shader = [
+      'vec3 a = perSkin(texture(uMean, toRegion(warped(p))));',
+      'float b = texture(uMean, toRegion(warped(p))).x;',
+      'float c = texture(uMean, uv).w;',
+      'float d = texture(uMeanWide, uv).x;',
+    ].join('\n');
+    expect(swizzledReads(shader, 'uMean')).toEqual([
+      'texture(uMean, toRegion(warped(p))).x',
+      'texture(uMean, uv).w',
+    ]);
+  });
+
   it('divides every weighted average through before reading it', () => {
     // The statistics carry the skin they averaged over in the fourth channel, so
     // a reader that takes `.xyz` straight gets a lightness scaled by how much
@@ -516,10 +567,10 @@ describe('the stage shaders themselves', () => {
         // it, and both are fine. What is never fine is a channel taken straight
         // off the packed texture, and that is the one a reader writes by habit,
         // because it is what these textures held before they carried a weight.
-        const swizzled = new RegExp(`texture\\(${sampler},[^)]*\\)\\.[xyzwrgba]`);
-        expect(swizzled.test(source), `${name} takes a channel of ${sampler} undivided`).toBe(
-          false,
-        );
+        expect(
+          swizzledReads(source, sampler),
+          `${name} takes a channel of ${sampler} undivided`,
+        ).toEqual([]);
       }
     }
   });
@@ -537,9 +588,9 @@ describe('the stage shaders themselves', () => {
     // the graph can be read for. A lens is in front of the film, so raising the
     // exposure and then defocusing is not a photograph anything could have
     // taken — and the difference shows in the highlights, which is the one place
-    // the effect is judged. Adding light is scene-referred and grading is
-    // display-referred, so a light added after the grade is one the exposure
-    // correction has already finished arguing with.
+    // the effect is judged. The light is part of the scene the grade decides
+    // about, so a light added after the grade is one the exposure correction
+    // has already finished arguing with.
     expect(graphSource).toMatch(/id: 'relight',\s*inputs: \['bokeh', 'warpField'\]/);
     expect(graphSource).toMatch(/id: 'grade',\s*inputs: \['relight'\]/);
   });

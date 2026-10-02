@@ -62,6 +62,7 @@ import {
   createTextTexture,
   type GlContext,
   GlError,
+  LruCache,
   Program,
   type RenderTarget,
   updateSourceTexture,
@@ -183,16 +184,35 @@ export class Pipeline {
   private restored: Uint8ClampedArray | null = null;
   private restoreKey = 'none';
   private restoreReport: RestoreReport | null = null;
+  /** The skin's spread was measured on a face a restore has since replaced. */
+  private spreadStale = false;
   private generation = 0;
   private curveTexture: WebGLTexture | null = null;
   private curveKey = 'identity';
-  private textTexture: WebGLTexture | null = null;
-  private textKey = 'none';
-  private readonly byteTargets = new Map<string, RenderTarget>();
+  /**
+   * Text rasters, by size and content.
+   *
+   * Two, so that an export at its own size does not evict the one on screen.
+   */
+  private readonly textTextures = new LruCache<WebGLTexture>(2, (texture) =>
+    this.gl.deleteTexture(texture),
+  );
+  /**
+   * Eight-bit destinations for readback, by size.
+   *
+   * The measurement, the thumbnails and the tone probe all recur at their own
+   * sizes, so a single slot would reallocate a texture on every settle.
+   */
+  private readonly byteTargets = new LruCache<RenderTarget>(6, (target) => {
+    this.gl.deleteTexture(target.texture);
+    this.gl.deleteFramebuffer(target.framebuffer);
+  });
   private ramp: WebGLTexture | null = null;
   private face: FaceTextures | null = null;
   private subject: SubjectTextures | null = null;
   private fitScaleValue: number | null = null;
+  /** The code a full-scale source pixel is written as, once measured. */
+  private whiteCode: number | null = null;
 
   /**
    * CSS pixels the fitted picture occupies per pixel of the exported one.
@@ -273,6 +293,8 @@ export class Pipeline {
     this.dropHealed();
     // The masks describe the photo that is going away.
     this.setFaceAnalysis(null);
+    // Everything the old photograph was rendered at is idle now.
+    this.glctx.pool.trim(false);
     this.generation += 1;
     this.source = {
       texture: createSourceTexture(this.gl, image.width, image.height, image.data),
@@ -340,6 +362,12 @@ export class Pipeline {
   async syncPlate(recipe: Recipe): Promise<void> {
     this.syncRestore(recipe);
     await this.syncSpots(recipe);
+    // The skin threshold is a property of the face the filter reads, and only
+    // now is the restored one on the GPU to be measured.
+    if (this.spreadStale && this.face) {
+      this.face = { ...this.face, spread: this.measureSkinSpread() };
+    }
+    this.spreadStale = false;
   }
 
   /**
@@ -410,6 +438,7 @@ export class Pipeline {
     // every spot is filled again, since there is no fill to keep once what was
     // underneath it has changed.
     this.generation += 1;
+    this.spreadStale = true;
     this.plate = new SourcePlate(this.restored ?? decoded.data, decoded.width, decoded.height);
     // The texture is left to the fills to build, even though the pixels are
     // already here. Uploading them now would be uploading them twice whenever a
@@ -449,11 +478,11 @@ export class Pipeline {
     const plate = this.plate;
     const source = this.source;
     if (!plate || !source) return;
-    // The restore put faces back and left the upload to here, which is the one
-    // way the plate can be ahead of the GPU without a spot having moved. It is
-    // the same upload either way, and doing it in one place is what stops it
-    // from happening twice when both stages have something to say.
-    const pending = this.restored !== null && this.healed === null;
+    // The plate can be ahead of the GPU without a spot having moved: the restore
+    // left the upload to here, or the last upload failed after the plate had
+    // already taken the fills. Either way there are pixels and no texture, and
+    // doing the upload in one place stops it happening twice.
+    const pending = (plate.pixels ?? this.restored) !== null && this.healed === null;
     // This runs on the way to every settled render, and almost none of them
     // placed anything.
     const { spots: circles, amount } = recipe.conceal;
@@ -631,7 +660,7 @@ export class Pipeline {
       key: `faceRegion:${face.key}`,
     };
     const ctx = this.context(recipe, spec);
-    const variance = this.dag.evaluate(ctx, recipe, 'faceDeviationV', variantKey(spec));
+    const variance = this.dag.evaluate(ctx, recipe, 'faceDeviationV', 'faceRegion');
 
     const target = this.acquireByteTarget(variance.width, variance.height);
     this.programs.faceSpread
@@ -771,6 +800,16 @@ export class Pipeline {
     return vertical;
   }
 
+  /**
+   * Free the intermediate buffers of every size the last cycle did not use.
+   *
+   * Called once a settled render has been drawn and measured, so the sizes the
+   * drag and the settle both asked for are the ones that keep their buffers.
+   */
+  releaseIdle(): void {
+    this.glctx.pool.trim();
+  }
+
   /** Size of the source, before any framing. */
   sourceSize(): [number, number] {
     const source = this.requireSource();
@@ -796,10 +835,9 @@ export class Pipeline {
     const spec = this.frameSpec(recipe, scale, fullFrame);
     const ctx = this.context(recipe, spec, original);
     // The comparison is against the photograph, which since the Heal stage is a
-    // different picture from the one the edit is built on. It gets its own
-    // variant so that holding the button down does not evict the edit's chain:
-    // one slot per node per variant, and these two disagree about the source.
-    const variant = original ? `${variantKey(spec)}:decoded` : variantKey(spec);
+    // different picture from the one the edit is built on. It gets its own role
+    // so that holding the button down does not evict the edit's chain.
+    const variant = canvasRole(scale, fullFrame, original);
 
     const graded = original
       ? this.dag.evaluate(ctx, recipe, 'ingest', variant)
@@ -835,7 +873,18 @@ export class Pipeline {
     // is on screen: drawing it over a picture it does not belong to would put a
     // caption somewhere it will never appear.
     const text = original || fullFrame ? null : this.syncText(recipe, bufferWidth, bufferHeight);
-    this.runFinish(recipe, graded, low, text, null, bufferWidth, bufferHeight, true, original);
+    this.runFinish(
+      recipe,
+      graded,
+      low,
+      text,
+      null,
+      bufferWidth,
+      bufferHeight,
+      true,
+      original,
+      true,
+    );
   }
 
   /**
@@ -848,14 +897,19 @@ export class Pipeline {
   readFullResolution(recipe: Recipe): ImageData {
     const spec = this.frameSpec(recipe, 'full', false);
     const ctx = this.context(recipe, spec);
-    const variant = variantKey(spec);
+    // The settled render's role: the export is the same frame at the same size.
+    const variant = canvasRole('full', false, false);
     const graded = this.dag.evaluate(ctx, recipe, 'grade', variant);
     const low = this.dag.evaluate(ctx, recipe, 'low', variant);
     const text = this.syncText(recipe, spec.width, spec.height);
 
     const target = this.acquireByteTarget(spec.width, spec.height);
-    this.runFinish(recipe, graded, low, text, target, spec.width, spec.height, false, false);
+    this.runFinish(recipe, graded, low, text, target, spec.width, spec.height, false, false, true);
     const pixels = this.readBack(target, spec.width, spec.height);
+    // The export's own size does not recur, and at full resolution both of
+    // these are the largest things the caches would otherwise hold on to.
+    this.byteTargets.delete(`${spec.width}x${spec.height}`);
+    this.textTextures.delete(textSignature(recipe.text, spec.width, spec.height));
     return new ImageData(pixels, spec.width, spec.height, { colorSpace: recipe.output.space });
   }
 
@@ -878,12 +932,12 @@ export class Pipeline {
       key: geometrySignature(recipe.geometry),
     };
     const ctx = this.context(recipe, spec);
-    const variant = variantKey(spec);
+    const variant = 'thumbnail';
     const graded = this.dag.evaluate(ctx, recipe, 'grade', variant);
     const low = this.dag.evaluate(ctx, recipe, 'low', variant);
 
     const target = this.acquireByteTarget(width, height);
-    this.runFinish(recipe, graded, low, null, target, width, height, false, false);
+    this.runFinish(recipe, graded, low, null, target, width, height, false, false, true);
     const pixels = this.readBack(target, width, height);
     return new ImageData(pixels, width, height, { colorSpace: recipe.output.space });
   }
@@ -908,12 +962,14 @@ export class Pipeline {
       key: geometrySignature(recipe.geometry),
     };
     const ctx = this.context(recipe, spec);
-    const variant = variantKey(spec);
+    const variant = 'measure';
     const graded = this.dag.evaluate(ctx, recipe, 'grade', variant);
     const low = this.dag.evaluate(ctx, recipe, 'low', variant);
 
     const target = this.acquireByteTarget(width, height);
-    this.runFinish(recipe, graded, low, null, target, width, height, false, false);
+    // Undithered: the readings count codes, and noise across a threshold is
+    // noise in the count.
+    this.runFinish(recipe, graded, low, null, target, width, height, false, false, false);
 
     const pixels = new Uint8Array(width * height * 4);
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
@@ -921,7 +977,7 @@ export class Pipeline {
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
 
     return {
-      ...summarise(pixels),
+      ...summarise(pixels, this.whiteLevel()),
       textureRetention: this.measureTextureRetention(recipe),
       reshapeMagnitude: this.measureReshape(recipe, ctx),
     };
@@ -987,7 +1043,7 @@ export class Pipeline {
       key: `faceRegion:${face.key}`,
     };
     const ctx = this.context(recipe, spec);
-    const variant = variantKey(spec);
+    const variant = 'faceRegion';
     const before = this.dag.evaluate(ctx, recipe, 'warp', variant);
     const after = this.dag.evaluate(ctx, recipe, 'parts', variant);
     const field = this.dag.evaluate(ctx, recipe, 'warpField', variant);
@@ -1045,7 +1101,7 @@ export class Pipeline {
       key: geometrySignature(recipe.geometry),
     };
     const ctx = this.context(recipe, spec);
-    const variant = variantKey(spec);
+    const variant = 'measure';
     const image = this.dag.evaluate(ctx, recipe, 'ingest', variant);
     // Asked for by name, because under a neutral recipe the stages that would
     // otherwise pull these in are switched off.
@@ -1160,6 +1216,51 @@ export class Pipeline {
     return pixels;
   }
 
+  /**
+   * The code a full-scale source pixel comes out as.
+   *
+   * The highlight rolloff brings scene white below the top code, so clipping
+   * counted at the top of the range is never reached. Measured by pushing the
+   * ramp's last level through the finish shader rather than re-derived, for the
+   * reason the tone curve is; white is the same in either primaries, so the
+   * output space does not enter it.
+   */
+  private whiteLevel(): number {
+    if (this.whiteCode !== null) return this.whiteCode;
+    const width = 256;
+    const ramp = this.rampTexture();
+    const target = this.acquireByteTarget(width, 1);
+    this.programs.finish
+      .bind()
+      .texture('uSource', ramp)
+      .texture('uLow', ramp)
+      .texture('uText', ramp)
+      .float('uSharpen', 0)
+      .vec2('uSharpenStep', 0, 0)
+      .float('uClarity', 0)
+      .float('uGlow', 0)
+      .float('uGlowThreshold', 1)
+      .float('uGrain', 0)
+      .float('uGrainSize', 1)
+      .vec2('uResolution', width, 1)
+      .int('uToSrgb', 0)
+      .int('uFlipY', 0)
+      .int('uDither', 0)
+      .int('uHasText', 0);
+    this.glctx.draw(target, width, 1);
+    const pixels = new Uint8Array(width * 4);
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
+    this.gl.readPixels(0, 0, width, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+    const last = (width - 1) * 4;
+    this.whiteCode = Math.min(
+      pixels[last] as number,
+      pixels[last + 1] as number,
+      pixels[last + 2] as number,
+    );
+    return this.whiteCode;
+  }
+
   dispose(): void {
     this.dag.invalidate();
     this.setFaceAnalysis(null);
@@ -1167,11 +1268,7 @@ export class Pipeline {
     if (this.source) this.gl.deleteTexture(this.source.texture);
     this.dropHealed();
     if (this.curveTexture) this.gl.deleteTexture(this.curveTexture);
-    if (this.textTexture) this.gl.deleteTexture(this.textTexture);
-    for (const target of this.byteTargets.values()) {
-      this.gl.deleteTexture(target.texture);
-      this.gl.deleteFramebuffer(target.framebuffer);
-    }
+    this.textTextures.clear();
     this.byteTargets.clear();
     for (const program of Object.values(this.programs)) program.dispose();
     this.glctx.dispose();
@@ -1254,13 +1351,13 @@ export class Pipeline {
   private syncText(recipe: Recipe, width: number, height: number): WebGLTexture | null {
     const key = textSignature(recipe.text, width, height);
     if (key === 'none') return null;
-    if (key === this.textKey && this.textTexture) return this.textTexture;
+    const cached = this.textTextures.get(key);
+    if (cached) return cached;
     const data = rasterizeText(recipe.text, width, height);
     if (!data) return null;
-    if (this.textTexture) this.gl.deleteTexture(this.textTexture);
-    this.textTexture = createTextTexture(this.gl, width, height, data);
-    this.textKey = key;
-    return this.textTexture;
+    const texture = createTextTexture(this.gl, width, height, data);
+    this.textTextures.set(key, texture);
+    return texture;
   }
 
   /** A 256-step display-referred ramp, used to probe the tone response. */
@@ -1297,12 +1394,7 @@ export class Pipeline {
     return pixels;
   }
 
-  /**
-   * Eight-bit destinations for readback, kept per size.
-   *
-   * The measurement, the thumbnails and the export all want a different size and
-   * all recur, so a single slot would reallocate a texture on every settle.
-   */
+  /** An eight-bit readback destination of this size, reused while it recurs. */
   private acquireByteTarget(width: number, height: number): RenderTarget {
     const key = `${width}x${height}`;
     const existing = this.byteTargets.get(key);
@@ -1310,7 +1402,11 @@ export class Pipeline {
     const gl = this.gl;
     const texture = gl.createTexture();
     const framebuffer = gl.createFramebuffer();
-    if (!texture || !framebuffer) throw new GlError('could not create readback target');
+    if (!texture || !framebuffer) {
+      if (texture) gl.deleteTexture(texture);
+      if (framebuffer) gl.deleteFramebuffer(framebuffer);
+      throw new GlError('could not create readback target');
+    }
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -1319,14 +1415,6 @@ export class Pipeline {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const target: RenderTarget = { texture, framebuffer, width, height };
-    // Only the full-resolution export target is large; keeping a handful of the
-    // small ones costs little next to reallocating one every settle.
-    if (this.byteTargets.size >= 6) {
-      const [oldestKey, oldest] = [...this.byteTargets.entries()][0] as [string, RenderTarget];
-      gl.deleteTexture(oldest.texture);
-      gl.deleteFramebuffer(oldest.framebuffer);
-      this.byteTargets.delete(oldestKey);
-    }
     this.byteTargets.set(key, target);
     return target;
   }
@@ -1341,40 +1429,59 @@ export class Pipeline {
     height: number,
     flipY: boolean,
     original: boolean,
+    dither: boolean,
   ): void {
     const g = recipe.global;
-    // Sharpening works on neighbouring pixels, so its radius is scaled with the
-    // render size: without this the proxy would show a one-pixel effect standing
-    // in for the four-pixel one the export gets, and the preview would be a
-    // promise the file does not keep.
-    const radius = Math.max(1, Math.round(width / PROXY_LONG_EDGE));
+    // The sharpening reach and the grain cell are fractions of the long edge —
+    // a pixel of the proxy — at every size, unrounded and unfloored: anything
+    // else makes the preview a promise the file does not keep.
+    const scale = Math.max(width, height) / PROXY_LONG_EDGE;
     this.programs.finish
       .bind()
       .texture('uSource', graded.texture)
       .texture('uLow', low.texture)
       .texture('uText', text ?? graded.texture)
       .float('uSharpen', original ? 0 : g.sharpen)
-      .vec2('uSharpenStep', radius / width, radius / height)
+      .vec2('uSharpenStep', scale / width, scale / height)
       .float('uClarity', original ? 0 : g.clarity)
       .float('uGlow', original ? 0 : g.glow.amount)
       .float('uGlowThreshold', g.glow.threshold)
       .float('uGrain', original ? 0 : g.grain.amount)
-      .float('uGrainSize', g.grain.size * Math.max(1, width / PROXY_LONG_EDGE) * 2)
+      .float('uGrainSize', g.grain.size * scale * 2)
       .vec2('uResolution', width, height)
       .int('uToSrgb', recipe.output.space === 'srgb' || !this.glctx.wideGamut ? 1 : 0)
       .int('uFlipY', flipY ? 1 : 0)
-      .int('uDither', 1)
+      .int('uDither', dither ? 1 : 0)
       .int('uHasText', text ? 1 : 0);
     this.glctx.draw(target, width, height);
   }
 }
 
-function variantKey(spec: FrameSpec): string {
-  return `${spec.width}x${spec.height}:${spec.key}`;
+/**
+ * Which cached chain a render's results live in.
+ *
+ * One slot per node per role, and never one per framing or size: every
+ * signature already names the size and framing it was drawn at, so a crop that
+ * moves overwrites the role's previous result and hands it back to the pool
+ * instead of leaving it resident beside the new one.
+ */
+type RenderRole =
+  | `${RenderScale}:${'crop' | 'frame'}:${'edit' | 'decoded'}`
+  | 'thumbnail'
+  | 'measure'
+  | 'faceRegion';
+
+function canvasRole(scale: RenderScale, fullFrame: boolean, original: boolean): RenderRole {
+  return `${scale}:${fullFrame ? 'frame' : 'crop'}:${original ? 'decoded' : 'edit'}`;
 }
 
-/** Turn a small readback into the numbers the guardrails display. */
-function summarise(pixels: Uint8Array): Omit<RenderStats, 'textureRetention'> {
+/**
+ * Turn a small readback into the numbers the guardrails display.
+ *
+ * @param white The code scene white is written as. A highlight at or within a
+ * code of it is clipped; the rolloff keeps it short of the top of the range.
+ */
+function summarise(pixels: Uint8Array, white: number): Omit<RenderStats, 'textureRetention'> {
   const count = pixels.length / 4;
   const histogram = new Uint32Array(64);
   let highlight = 0;
@@ -1388,7 +1495,7 @@ function summarise(pixels: Uint8Array): Omit<RenderStats, 'textureRetention'> {
     const b = pixels[i + 2] as number;
     const max = Math.max(r, g, b);
     const min = Math.min(r, g, b);
-    if (max >= 254) highlight++;
+    if (max >= white - 1) highlight++;
     if (min <= 1) shadow++;
     // A channel pinned at an end while the others are not is what a colour
     // driven past the output gamut looks like once it has been clamped.

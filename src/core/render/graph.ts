@@ -583,9 +583,13 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     evaluate: (ctx) => {
       const [width, height] = subjectSize(ctx);
       const target = ctx.glctx.pool.acquire(width, height);
+      // Unweighted: the skin mask the face pass sets on this program is about
+      // the faces, not the frame, and would otherwise still be bound.
       ctx.programs.faceMean
         .bind()
         .texture('uSource', ctx.source.texture)
+        .texture('uMask', ctx.source.texture)
+        .int('uMasked', 0)
         .int('uFromSrgb', ctx.source.fromSrgb ? 1 : 0)
         .vec4('uRegion', 0, 0, 1, 1);
       ctx.glctx.draw(target, width, height);
@@ -858,8 +862,8 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
    *
    * After the defocus and before the grade, which is what the design fixes and
    * what the two neighbours are for. A lens is in front of the film, so the
-   * defocus happens first; adding light is scene-referred and grading is
-   * display-referred, so grading happens after.
+   * defocus happens first; the light is part of the scene the grade decides
+   * about, so grading happens after.
    *
    * Needs a face, and says so rather than reading the recipe alone: what it
    * shades is a surface, and the surface is the normal field the analysis left

@@ -154,5 +154,6 @@ export class RenderScheduler {
     });
     this.hooks.scaleChanged?.('full');
     if (this.hooks.stats) this.hooks.stats(this.pipeline.measure(recipe));
+    this.pipeline.releaseIdle();
   }
 }

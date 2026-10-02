@@ -213,7 +213,8 @@ export function packControlPoints(points: readonly ControlPoint[]): {
  * The filter radius, in texels of the working area.
  *
  * Two conversions, and each one is there for a reason: the recipe holds a
- * fraction of the face, and the face is a fraction of the working area. What
+ * fraction of the face — the widest one, since a single pass filters every
+ * face in the working area — and the face is a fraction of the working area. What
  * comes out is a radius that means the same retouch on the next photograph,
  * at the next resolution, with the face at the next size — which is the whole
  * point of holding the parameter as a fraction in the first place.
@@ -442,7 +443,11 @@ export function hairUniforms(recipe: Recipe, ctx: PassContext): HairUniforms {
 
 /** Everything the relight shader reads, on the same contract as the others. */
 export interface RelightUniforms {
-  /** Unit direction the light comes from, with y pointing up the picture. */
+  /**
+   * Unit direction the light comes from, in the source bitmap's frame with y
+   * pointing up — the frame the normals are in. The framing is folded into it,
+   * so it is also what keys the cache on the framing.
+   */
   light: [number, number, number];
   intensity: number;
   /** Exponent on the falloff, which is the reciprocal of the softness. */
@@ -450,7 +455,6 @@ export interface RelightUniforms {
   warmth: number;
   /** Which face analysis the normals and the outline came from. */
   face: string;
-  geometry: string;
 }
 
 /**
@@ -463,20 +467,38 @@ export interface RelightUniforms {
  * lifts the light out of the picture plane towards the lens. Both are in the
  * frame where y points up, so this is also the one place that convention is
  * written down for the light — the normal field carries the matching one.
+ *
+ * The normals are in the photograph's own frame, so the on-screen direction is
+ * carried there through the framing's linear part, in pixels so the two axes
+ * share a scale: a turned or mirrored photograph keeps its light where the
+ * screen says it is.
  */
 export function relightUniforms(recipe: Recipe, ctx: PassContext): RelightUniforms {
   const r = recipe.relight;
   const clock = (r.angle * Math.PI) / 180;
   const tilt = (r.frontal * Math.PI) / 2;
   const across = Math.cos(tilt);
+  const [x, y] = screenToSourceDirection(Math.sin(clock), Math.cos(clock), ctx);
   return {
-    light: [Math.sin(clock) * across, Math.cos(clock) * across, Math.sin(tilt)],
+    light: [x * across, y * across, Math.sin(tilt)],
     intensity: r.intensity,
     sharpness: 1 / r.softness,
     warmth: r.warmth,
     face: ctx.face?.key ?? 'none',
-    geometry: ctx.geometryKey,
   };
+}
+
+/** A unit direction on screen, y up, as a unit direction in the source bitmap, y up. */
+function screenToSourceDirection(x: number, y: number, ctx: PassContext): [number, number] {
+  const m = ctx.geometry;
+  // Output pixels, y down, to normalised output coordinates.
+  const u = x / Math.max(ctx.width, 1);
+  const v = -y / Math.max(ctx.height, 1);
+  // Normalised source coordinates back to source pixels, and y up again.
+  const sx = (m[0] * u + m[1] * v) * ctx.source.width;
+  const sy = -(m[3] * u + m[4] * v) * ctx.source.height;
+  const length = Math.hypot(sx, sy);
+  return length > 0 ? [sx / length, sy / length] : [0, 0];
 }
 
 /** Kernel radius, as a fraction of the rendered frame's width. */
