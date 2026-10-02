@@ -1,124 +1,43 @@
 # nitra
 
-Phone-camera retouching, applied after the shot. Photos never leave the device.
-
 [![CI](https://img.shields.io/github/actions/workflow/status/libraz/nitra/ci.yml?branch=main&label=CI)](https://github.com/libraz/nitra/actions)
-[![License](https://img.shields.io/badge/license-AGPL--3.0%20%2F%20Commercial-green)](https://github.com/libraz/nitra/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-green)](https://github.com/libraz/nitra/blob/main/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
+[![Platform](https://img.shields.io/badge/platform-browser%20%7C%20WebGL2-lightgrey)](https://nitra.libraz.net)
 [![Demo](https://img.shields.io/badge/demo-nitra.libraz.net-2563eb)](https://nitra.libraz.net)
 
-**Try it at [nitra.libraz.net](https://nitra.libraz.net).** The demo is the whole app, not a cut-down version, and it keeps the same promise: the page is static files, a photo you open is decoded and rendered in your browser, and nothing is uploaded. Close the tab and the edit is gone; what you keep is the file you export.
+**nitra applies phone-camera retouching after the shot, to a photo you already have, without it leaving your device.** It runs entirely in the browser on WebGL2: there is no server, nothing is uploaded, and the face-analysis models are served by the app itself.
 
-A phone applies its beauty processing while the shutter is open. nitra applies the same kind of processing afterwards, to any photo you already have — the one taken in the wrong mode, or the one somebody else took of you.
+**[Open nitra](https://nitra.libraz.net)** · **[Documentation](https://github.com/libraz/nitra/blob/main/docs/en/introduction.md)** · **[Getting started](https://github.com/libraz/nitra/blob/main/docs/en/getting-started.md)**
 
-Working after the fact removes the frame-rate budget. Passes can be as expensive as they need to be, and any value can be taken back.
+> **Status** — pre-1.0. The recipe format is versioned; the rest of the interface may still change.
 
-## What it does today
+## What it does
 
-- Opens JPEG, PNG, WebP, AVIF and HEIC. HEIC is decoded in the browser through libheif, because only Safari reads it natively.
-- Converts everything into linear Display-P3 and keeps every intermediate buffer at 16 bits per channel. An iPhone records wide-gamut colour; converting to sRGB on the way in throws it away.
-- Grades: exposure, contrast, highlight and shadow recovery, end points, white balance, vibrance and saturation, with a plot of the tone response those controls produce.
-- Scales saturation as Oklch chroma, with the gain attenuated inside the skin hue band. An HSV saturation multiplier rotates hue and drives skin into clipping ahead of everything else.
-- Adjusts hue, saturation and lightness per colour, across eight bands whose centres are derived from the primaries rather than typed in. Near-neutral pixels are left alone, because a grey sky has a hue only in the arithmetic sense.
-- Effects: split toning, monochrome with channel weights, matte fade, vignette, glow, sharpening, clarity and film grain.
-- Every render ends in the same output transform, untouched photos included: a soft highlight rolloff that sets scene white just under full scale rather than clipping it, then dithering on the way down to eight bits.
-- Fills a blemish where you click it. Skin from around the mark is copied in rather than smoothed over, so the pores come with it.
-- Blurs a bystander caught in a reflection — a corneal catchlight, a mirror, metal or glass — inside a circle you place. It is a blur filter run in a selection: the average reads the photograph around the circle so the edge does not show, and nothing outside the ring changes. The strength is a fraction of each circle's own radius, so one setting suits an eye and a mirror at once. One click on a detected iris places the circle at its width.
-- Retouches the person: skin, eyes, lips, teeth, cheeks, hair, the background behind them, one added light, and the shape of the face within a bound it reports (see below).
-- Puts the photographed face back into a picture an AI edit has redrawn, from the original photo (see below).
-- Frames: flips, quarter turns, straightening, and a crop that can be locked to a shape. Straightening trims the frame to keep it filled, so no corner comes out empty.
-- Crops to what a destination actually publishes — Instagram, X, Facebook, YouTube, TikTok — taking the shape and the size as one decision.
-- Adds text. Type is rasterised by the browser, so Japanese composes correctly, and it is composited after the output transform because a caption is not light that was in the room.
-- Sets that text in any typeface on the machine: load a font file and it joins the picker, sampled in itself. A face that has no glyph for a character in the caption says so, rather than letting the substitution be discovered in the exported file.
-- Splits one picture across a grid of posts, in the order they have to be uploaded (see below).
-- Suggests a starting grade from the image itself, and offers finishes as thumbnails of your own photo rather than as names.
-- Measures the result — skin texture kept, how far the face was moved, clipped highlights, blocked shadows, clipped chroma — and shows the numbers. Nothing is forbidden.
-- Removes the metadata, keeps it, or writes it field by field — location, capture time, camera, credit (see below).
-- Magnifies the picture to judge it, by scroll, pinch or the bar along the foot, and moves it by dragging. The canvas is given more pixels rather than the fitted picture being stretched, so at a hundred per cent one pixel of the exported file covers one pixel of the screen and what is soft on screen is soft in the file.
-- Offers the editor twice. Simple mode shows no numbers at all, which is what leaves showing the result as the only way to offer a choice; detail mode opens every parameter, and can list only the ones that have been changed.
-- Runs in light or dark, in English or Japanese.
+- **Opens and grades** — JPEG, PNG, WebP, AVIF and HEIC, worked on in linear Display-P3 at 16 bits per channel; exposure, contrast, highlights and shadows, white balance, saturation as Oklch chroma, per-colour hue/saturation/lightness and finishing effects. [Grading](https://github.com/libraz/nitra/blob/main/docs/en/grading.md)
+- **Retouches the person** — skin, eyes, lips, teeth, cheeks, hair, the background behind them, one added light, and the shape of the face within a bound it measures and shows. [Retouching a person](https://github.com/libraz/nitra/blob/main/docs/en/retouching-a-person.md)
+- **Removes blemishes and reflections** — fills a blemish from the skin around it, and blurs a bystander caught in a catchlight, mirror or glass inside a circle you place. [Blemishes and reflections](https://github.com/libraz/nitra/blob/main/docs/en/blemishes-and-reflections.md)
+- **Puts a face back after an AI edit** — restores the photographed face from the original into a picture a generative edit redrew. [Restoring a face](https://github.com/libraz/nitra/blob/main/docs/en/restoring-a-face.md)
+- **Frames and captions** — flips, turns, straightening, crops sized for Instagram, X, Facebook, YouTube and TikTok, and text in any typeface on your machine. [Framing and text](https://github.com/libraz/nitra/blob/main/docs/en/framing-and-text.md)
+- **Splits across a grid** — cuts one picture into profile-grid tiles named in the order they must be uploaded. [Grid split](https://github.com/libraz/nitra/blob/main/docs/en/grid-split.md)
+- **Controls metadata** — removes it on every export by default, or keeps or writes it field by field; the file carries exactly what the panel lists. [Metadata](https://github.com/libraz/nitra/blob/main/docs/en/metadata.md)
+- **Shows its work** — a starting grade suggested from the photo, finishes as thumbnails of your own picture, measurements of texture kept and how far the face moved, magnification to one screen pixel per file pixel, Simple and Detail modes, English and Japanese, light and dark. [Interface](https://github.com/libraz/nitra/blob/main/docs/en/interface.md)
 
-## Retouching a person
+Edits are non-destructive: the source is never modified, every amount is relative to the image, and an export is never enlarged. The edit lives only in the tab; what you keep is the exported file.
 
-The face analysis runs here. Its models are served by the app itself rather than fetched from somebody else's host when the page loads: the photo never leaves the device, and a request to a third party on load would still tell that third party the app is in use. They are pinned by URL and by digest, because a model that changes underneath the same URL changes what the app renders.
+## Getting started
 
-None of it works without a face, and the panel says which of three things happened — a face was found, there is no face in this photo, or the analysis could not run. A photograph of a landscape leaves the skin controls off instead of live and inert.
+Nothing needs installing to use it: [nitra.libraz.net](https://nitra.libraz.net) serves the same build this repository produces. Open a photo, adjust it, export.
 
-- **Skin.** Smoothing takes off fine texture and pushes down the slow unevenness that reads as blotchy, and a trim decides how much texture survives: the negative side is how plastic skin happens, the positive side is the repair for having gone too far without undoing the rest. Also shine on the forehead and nose, colour evened towards its own local average, and the shadow under the eyes lifted.
-- **Eyes, lips and cheeks.** The white of the eye is brightened without touching the iris, and the iris gains definition as local contrast, so a pale eye stays pale. The catchlight is the one the photograph already has, lifted rather than painted in — where a drawn highlight belongs is decided by a light nobody can see from the file, and in the wrong place it reads as a glass eye. Then yellow off the teeth, and colour on the lips and cheeks.
-- **Hair.** Sheen, grey strands taken back towards the colour around them, and a tint. It is keyed to the segmentation rather than to the landmarks, so it still holds on a head turned away from the camera. A strand that is only lighter than its surroundings is a highlight, and taking the colour out of a highlight is how hair comes out wet, so lightness alone is not enough to act on.
-- **Background.** The background goes out of focus while the person stays sharp, and the aperture is a choice — round, bladed or anamorphic — because the shape an out-of-focus highlight comes out as is what says a lens was involved. Highlights are lifted before the convolution: a real one is bright because the sensor saturated there, and convolving the recorded value spreads a dull grey disc. The background can also be darkened or desaturated to lift the person off it.
-- **Light.** One light, placed on the picture like a clock face, with how far round it stands towards the camera, how broad the source is, and its colour. It only ever adds. The lighting already in the photograph cannot be removed without separating reflectance from shading, so a light that is only added cannot contradict it — and it is added as a gain rather than a sum, which is what keeps the skin's texture instead of blowing out the dark half of a face.
-- **Shape.** Eight amounts: the outline, the jaw, the chin, the opening and tilt of the eyes, the width and bridge of the nose, and the width of the mouth.
-
-nitra retouches; it does not turn somebody into a different person. The outline, the body and a face swap are one mechanism, so where that line falls is a product decision rather than a technical limit, and it is easier to hold now than to draw back later.
-
-So the reshaping is bounded and says what it did. Every amount is a fraction of the face's own width, each displacement is clamped, and the reach of a control stops short of the frame, which is what keeps a doorway behind the face from bending. How far the face actually moved is measured and shown next to the other numbers, in the same units, and the reading passes its warning while a single slider is still at the top of its own track, rather than only once several are stacked.
-
-## Putting a face back after an AI edit
-
-A generative edit — a new background, a different outfit, a caption burnt in — redraws the whole frame, and the face comes back as somebody who looks a little like you. Open the edited picture as usual, then open the original photo in this panel: nitra finds the face in both, lines the original up with the edited one, and puts the photographed face back.
-
-Nothing is placed by hand and nothing is invented. Both images are the same photograph, so the alignment is a fit between the same 468 landmarks on each face, and it is limited to moving, turning and scaling: stretching the original onto the generated face's proportions would hand back the very face it is meant to replace. When the edit also changed the pose or the expression, the fit cannot absorb it, and the panel says how far off it is rather than refusing.
-
-The join sits a band inside the skin, never on the outline, so it crosses cheek rather than the hairline, the jaw and the ears. The light is matched as a gain in the frame's own colour space, and the face goes in before the grade and the grain, so both run over the join.
-
-Two limits are deliberate. Only the face comes back, not the hair, the body or the clothes; that boundary needs matting at the hairline, which nitra does not do. And every face it pairs is restored together, so in a group photo where one face survived the edit, all of them are put back. The original is pixels, so like a loaded font it does not survive a reload: open it again and the panel picks up where it was.
-
-## Splitting a picture across a grid
-
-A profile grid fills newest first: the post made last sits at the top left. So a picture cut into nine tiles has to be uploaded starting from the bottom right, and getting that backwards is only discovered once the posts are public.
-
-nitra computes the order and writes it into the front of every file name, so the tiles are uploaded by counting rather than by reasoning. All of them arrive as one archive.
-
-The cut happens after the render, not before it: each tile is a slice of one finished picture, so the grain, the vignette and the tone match across every seam. Rendering the tiles separately would centre each tile's vignette on the tile.
-
-## Metadata
-
-A portrait is about to be posted somewhere, and the home address in its GPS tag should not go with it. Removal is the default, visible on the first screen rather than behind a settings panel, and asserted against the exported bytes in the test suite. It is also what an untouched edit does: a recipe that says nothing about metadata exports a file with none.
-
-| Field | Handling |
-| --- | --- |
-| GPS coordinates, altitude, bearing | Removed |
-| Capture and digitisation timestamps | Removed |
-| Camera and lens model | Removed |
-| Body serial number | Removed |
-| Embedded thumbnail | Removed |
-| Author and copyright fields | Removed |
-| ICC colour profile | **Kept** — without it the file is displayed against the wrong primaries |
-| Orientation | Applied to the pixels, then discarded |
-
-A canvas encoder happens not to carry EXIF across today, so an export comes out clean whether or not this step runs. That is why it runs anyway: the protection is incidental, and swapping the encoder would remove it without anything failing.
-
-Sometimes the data is the point, so there are two other answers. **Keep** writes the photo's own values back. **Write** builds the block field by field — coordinates, capture time, camera and lens, exposure, artist and copyright — and a location can be pasted as the pair a map puts on the clipboard instead of typed into two boxes.
-
-In every case, what goes into the file is exactly what the panel lists. The original block is read into those fields and then discarded rather than passed through, which is what keeps the embedded thumbnail out of the export and means a file never carries a tag nobody was shown. Removal still runs first, so what is there was asked for.
-
-Text outside the Latin alphabet is written in both of the encodings readers expect. JPEG and PNG can be given a metadata block; WebP cannot in this build, and the panel says so rather than exporting without it. An edit in **Write** mode carries its coordinates, so the exported file hands them over — the panel says that too.
-
-## Editing is non-destructive
-
-The source image is never modified. An edit is a JSON recipe, and the picture is rendered from it every time.
-
-Every amount in a recipe is relative — radii as fractions of image size, coordinates normalised, type sized against the frame. A recipe holding absolute pixels means something different the moment it is applied to a second photo, which is what would make batch application and preset sharing possible later rather than impossible. It is also why a caption lands in the same place whether the export is four thousand pixels wide or one of nine tiles.
-
-An export is never enlarged. A size taken from a destination is a ceiling, not a target: a photo that cannot reach it is written at the size it has, and the panel says so. Inventing pixels to satisfy a preset produces a file that claims a resolution it does not have.
-
-The recipe carries no pixels and stays in the browser with the photo; there is no control for saving or loading one.
-
-## Running it
-
-Nothing needs installing to use it: [nitra.libraz.net](https://nitra.libraz.net) serves the same build this repository produces. To run it locally or work on it:
+To run it locally or work on it:
 
 ```bash
 bun install
-bun run dev
+bun run dev        # http://localhost:5173
 ```
 
-`bun run dev` serves it at `http://localhost:5173`. The first run downloads the face-analysis models and the runtime that drives them into `public/models` — around forty megabytes, pinned by digest, and not committed. Without them the app still runs; the face controls report that the analysis is unavailable.
-
-Requires a browser with WebGL2 and half-float render targets: current Chrome, Edge, Safari or Firefox.
+The first run downloads the face-analysis models into `public/models` (about forty megabytes, pinned by digest, not committed). Without them the app still runs and the face controls say the analysis is unavailable. A browser with WebGL2 and half-float render targets is required: current Chrome, Edge, Safari or Firefox.
 
 ```bash
 bun run check      # lint and format
@@ -127,29 +46,15 @@ bun run test
 bun run build      # static files in dist/, ready for any static host
 ```
 
-## Languages
+## Documentation
 
-The interface ships in English and Japanese and picks one from the browser. Adding a language is one file under `src/i18n/locales/` and one entry in the locale map; the catalogue is typed against English, so an untranslated message fails to compile.
-
-## Light and dark
-
-Both, and "match system" as a third option rather than a default that gets overwritten on the first click — an editor gets opened in daylight and again at night.
-
-The area immediately around the photo stays a neutral mid grey in either. Colour is judged against what is next to it, and a white surround makes every photo look darker and warmer than it is; only the chrome further out lightens.
+- **Learn** — [Introduction](https://github.com/libraz/nitra/blob/main/docs/en/introduction.md) · [Getting started](https://github.com/libraz/nitra/blob/main/docs/en/getting-started.md) · [Interface](https://github.com/libraz/nitra/blob/main/docs/en/interface.md)
+- **Guides** — [Grading](https://github.com/libraz/nitra/blob/main/docs/en/grading.md) · [Retouching a person](https://github.com/libraz/nitra/blob/main/docs/en/retouching-a-person.md) · [Blemishes and reflections](https://github.com/libraz/nitra/blob/main/docs/en/blemishes-and-reflections.md) · [Restoring a face](https://github.com/libraz/nitra/blob/main/docs/en/restoring-a-face.md) · [Framing and text](https://github.com/libraz/nitra/blob/main/docs/en/framing-and-text.md) · [Grid split](https://github.com/libraz/nitra/blob/main/docs/en/grid-split.md) · [Metadata](https://github.com/libraz/nitra/blob/main/docs/en/metadata.md)
 
 ## Non-goals
 
-- **No retouching that makes someone look like a different person.** Rebuilding bone structure, swapping faces, reshaping a body and filling anything in generatively are out of scope. So is replacing the background: a photograph that claims a place it was not taken in is over the same line. Putting a face back after an AI edit is the same line seen from the other side: the pixels it restores are ones the camera recorded.
-- **Blurring a reflection is not erasure, and nitra makes no claim about what could be recovered from the file.** How much detail is left is what the slider says and nothing more; this is not the ISO/IEC 27038 sense of removal. Judge the result by looking at it.
-- **At the top of that slider an eye loses its catchlight.** A reach wider than the circle flattens it to close to one tone, and nothing is drawn back in to replace it.
-- **No server.** There is no upload path, and none will be added.
-- **No accounts.** An edit is kept nowhere but in the file you export.
-- Video is out of scope for now. The pipeline is built so it can be extended to video later.
-
-## Status
-
-Pre-1.0. The recipe format is versioned, but the rest of the surface may change.
+nitra retouches; it does not make someone look like a different person. Rebuilding bone structure, swapping faces, reshaping a body, filling in generatively and replacing the background are out of scope. Blurring a reflection is not erasure, and nitra makes no claim about what could be recovered from the file. There is no server, no upload path and no accounts, and none will be added. Video is out of scope for now. See [Introduction](https://github.com/libraz/nitra/blob/main/docs/en/introduction.md#non-goals) for the reasons.
 
 ## License
 
-AGPL-3.0, with a commercial license available. See [LICENSE](LICENSE).
+[AGPL-3.0](LICENSE)
