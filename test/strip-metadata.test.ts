@@ -15,6 +15,8 @@ import {
 } from '../src/core/io/strip-metadata';
 import {
   ascii,
+  cleanJpeg,
+  concat,
   ICC_PAYLOAD,
   indexOfBytes,
   jpegWithMetadata,
@@ -116,5 +118,55 @@ describe('WebP', () => {
     const stripped = stripWebpMetadata(webpWithMetadata());
     const declared = new DataView(stripped.buffer, stripped.byteOffset).getUint32(4, true);
     expect(declared).toBe(stripped.length - 8);
+  });
+});
+
+describe('JPEG segment classes', () => {
+  function segmentOf(marker: number, payload: Uint8Array): Uint8Array {
+    const length = payload.length + 2;
+    return concat([Uint8Array.of(0xff, marker, length >> 8, length & 0xff), payload]);
+  }
+
+  /** A clean JPEG with one extra segment right behind the start-of-image marker. */
+  function withSegment(marker: number, payload: Uint8Array): Uint8Array {
+    const base = cleanJpeg();
+    return concat([base.subarray(0, 2), segmentOf(marker, payload), base.subarray(2)]);
+  }
+
+  const dropped: [string, number, Uint8Array][] = [
+    ['XMP', 0xe1, concat([ascii('http://ns.adobe.com/xap/1.0/\0'), ascii('<x:xmpmeta/>')])],
+    [
+      'extended XMP',
+      0xe1,
+      concat([ascii('http://ns.adobe.com/xmp/extension/\0'), ascii('more xmp')]),
+    ],
+    ['JFXX thumbnail', 0xe0, concat([ascii('JFXX\0'), Uint8Array.of(0x10), ascii('thumb')])],
+    ['APP3', 0xe3, ascii('Meta\0 private')],
+    ['APP12', 0xec, ascii('Ducky')],
+    ['APP14', 0xee, ascii('Adobe\0 transform')],
+    ['Photoshop', 0xed, concat([ascii('Photoshop 3.0\0'), ascii('8BIM')])],
+    ['comment', 0xfe, ascii('a note')],
+  ];
+
+  it.each(dropped)(
+    'removes %s and the verifier reports it beforehand',
+    (_name, marker, payload) => {
+      const bytes = withSegment(marker, payload);
+      expect(remainingMetadataBlocks(bytes).length).toBeGreaterThan(0);
+      const stripped = stripJpegMetadata(bytes);
+      expect(remainingMetadataBlocks(stripped)).toEqual([]);
+      expect(indexOfBytes(stripped, payload)).toBe(-1);
+    },
+  );
+
+  it('does not report the colour profile or a thumbnail-free JFIF', () => {
+    const jfif = concat([ascii('JFIF\0'), Uint8Array.of(1, 2, 1, 0, 72, 0, 72, 0, 0)]);
+    const bytes = concat([
+      cleanJpeg().subarray(0, 2),
+      segmentOf(0xe0, jfif),
+      segmentOf(0xe2, ICC_PAYLOAD),
+      cleanJpeg().subarray(2),
+    ]);
+    expect(remainingMetadataBlocks(bytes)).toEqual([]);
   });
 });

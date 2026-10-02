@@ -15,6 +15,8 @@ import {
   APP0,
   APP1,
   APP2,
+  APP13,
+  COM,
   EOI,
   isJpeg,
   jpegEndOfImage,
@@ -206,19 +208,31 @@ export function remainingMetadataBlocks(bytes: Uint8Array): string[] {
   const format = detectFormat(bytes);
 
   if (format === 'jpeg') {
+    // The complement of what stripJpegMetadata keeps: any application or
+    // comment segment other than the colour profile and a thumbnail-free JFIF.
     for (const seg of jpegSegments(bytes)) {
       if (seg.marker === SOS || seg.marker === EOI) break;
-      if (seg.marker === APP1 && payloadStartsWith(seg.payload, 'Exif\0\0')) found.push('Exif');
-      else if (seg.marker === APP1 && payloadStartsWith(seg.payload, 'http://ns.adobe.com/xap'))
-        found.push('XMP');
-      else if (seg.marker === 0xed) found.push('Photoshop');
-      else if (seg.marker === 0xfe) found.push('Comment');
-      else if (seg.marker === APP0 && payloadStartsWith(seg.payload, 'JFXX\0'))
-        found.push('JFIF-thumbnail');
-      else if (seg.marker === APP0 && payloadStartsWith(seg.payload, 'JFIF\0')) {
-        if ((seg.payload[12] ?? 0) !== 0 || (seg.payload[13] ?? 0) !== 0)
-          found.push('JFIF-thumbnail');
+      if (seg.marker < 0xe0 || seg.marker > 0xef) {
+        if (seg.marker === COM) found.push('Comment');
+        continue;
       }
+      if (seg.marker === APP2 && payloadStartsWith(seg.payload, 'ICC_PROFILE\0')) continue;
+      if (seg.marker === APP0 && payloadStartsWith(seg.payload, 'JFIF\0')) {
+        if (
+          seg.payload.length >= 14 &&
+          ((seg.payload[12] ?? 0) !== 0 || (seg.payload[13] ?? 0) !== 0)
+        )
+          found.push('JFIF-thumbnail');
+        continue;
+      }
+      if (seg.marker === APP0 && payloadStartsWith(seg.payload, 'JFXX\0'))
+        found.push('JFIF-thumbnail');
+      else if (seg.marker === APP1 && payloadStartsWith(seg.payload, 'Exif\0\0'))
+        found.push('Exif');
+      else if (seg.marker === APP1 && payloadStartsWith(seg.payload, 'http://ns.adobe.com/'))
+        found.push('XMP');
+      else if (seg.marker === APP13) found.push('Photoshop');
+      else found.push(`APP${seg.marker - 0xe0}`);
     }
     return found;
   }

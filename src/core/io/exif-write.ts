@@ -70,6 +70,7 @@ const TAG_XP_AUTHOR = 0x9c9d;
 const TAG_EXPOSURE_TIME = 0x829a;
 const TAG_F_NUMBER = 0x829d;
 const TAG_ISO = 0x8827;
+const TAG_ISO_SPEED = 0x8833;
 const TAG_EXIF_VERSION = 0x9000;
 const TAG_DATE_TIME_ORIGINAL = 0x9003;
 const TAG_DATE_TIME_DIGITIZED = 0x9004;
@@ -119,13 +120,18 @@ function ucs2Value(text: string): Uint8Array {
   return out;
 }
 
+const UINT16_MAX = 0xffff;
+const UINT32_MAX = 0xffff_ffff;
+
 function shortValue(n: number): Uint8Array {
+  if (!Number.isInteger(n) || n < 0 || n > UINT16_MAX) throw new RangeError(`${n} is not a SHORT`);
   const out = new Uint8Array(2);
   new DataView(out.buffer).setUint16(0, n, true);
   return out;
 }
 
 function longValue(n: number): Uint8Array {
+  if (!Number.isInteger(n) || n < 0 || n > UINT32_MAX) throw new RangeError(`${n} is not a LONG`);
   const out = new Uint8Array(4);
   new DataView(out.buffer).setUint32(0, n, true);
   return out;
@@ -135,8 +141,11 @@ function rationalValue(pairs: readonly (readonly [number, number])[]): Uint8Arra
   const out = new Uint8Array(pairs.length * 8);
   const view = new DataView(out.buffer);
   for (const [i, [numerator, denominator]] of pairs.entries()) {
-    view.setUint32(i * 8, Math.max(0, Math.round(numerator)), true);
-    view.setUint32(i * 8 + 4, Math.max(1, Math.round(denominator)), true);
+    const top = Math.max(0, Math.round(numerator));
+    const bottom = Math.max(1, Math.round(denominator));
+    if (top > UINT32_MAX || bottom > UINT32_MAX) throw new RangeError('rational exceeds 32 bits');
+    view.setUint32(i * 8, top, true);
+    view.setUint32(i * 8 + 4, bottom, true);
   }
   return out;
 }
@@ -156,9 +165,15 @@ function gcd(a: number, b: number): number {
  */
 export function toRational(value: number): [number, number] {
   if (!Number.isFinite(value) || value <= 0) return [0, 1];
+  if (value > UINT32_MAX) return [UINT32_MAX, 1];
   if (Number.isInteger(value)) return [value, 1];
-  const denominator = 1_000_000;
-  const numerator = Math.round(value * denominator);
+  // Precision is dropped a decimal at a time until the numerator fits 32 bits.
+  let denominator = 1_000_000;
+  let numerator = Math.round(value * denominator);
+  while (numerator > UINT32_MAX) {
+    denominator /= 10;
+    numerator = Math.round(value * denominator);
+  }
   const divisor = gcd(numerator, denominator);
   return [numerator / divisor, denominator / divisor];
 }
@@ -246,7 +261,22 @@ function buildExifIfd(fields: ExifFields): Entry[] {
     });
   }
   if (fields.iso && fields.iso > 0) {
-    entries.push({ tag: TAG_ISO, type: SHORT, count: 1, value: shortValue(fields.iso) });
+    // SHORT holds 65535; beyond that ISOSpeed carries the value as a LONG.
+    if (fields.iso > UINT16_MAX) {
+      entries.push({
+        tag: TAG_ISO_SPEED,
+        type: LONG,
+        count: 1,
+        value: longValue(Math.min(Math.round(fields.iso), UINT32_MAX)),
+      });
+    } else {
+      entries.push({
+        tag: TAG_ISO,
+        type: SHORT,
+        count: 1,
+        value: shortValue(Math.round(fields.iso)),
+      });
+    }
   }
   if (stamp) {
     entries.push(...plainText(TAG_DATE_TIME_ORIGINAL, stamp));

@@ -10,9 +10,10 @@
 import type { ColorSpaceName } from '../color/spaces';
 import {
   type Orientation,
+  orientationMatrix,
   orientationSwapsAxes,
   readImageExif,
-  readJpegOrientation,
+  readImageOrientation,
   type SourceExif,
 } from './exif';
 import { detectFormat } from './strip-metadata';
@@ -68,19 +69,44 @@ function canvasSupportsP3(): boolean {
   }
 }
 
-/** HEIF is identified by its `ftyp` brand, never by the file extension. */
-export function isHeif(bytes: Uint8Array): boolean {
-  if (bytes.length < 12) return false;
+const AVIF_BRANDS = ['avif', 'avis'];
+const HEIF_BRANDS = ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'];
+
+/** The `ftyp` major brand of an ISO base media file, or null. */
+function heifBrand(bytes: Uint8Array): string | null {
+  if (bytes.length < 12) return null;
   if (
     bytes[4] !== 0x66 ||
     bytes[5] !== 0x74 ||
     bytes[6] !== 0x79 ||
     bytes[7] !== 0x70 // 'ftyp'
   ) {
-    return false;
+    return null;
   }
-  const brand = String.fromCharCode(...bytes.subarray(8, 12));
-  return ['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1', 'avif'].includes(brand);
+  return String.fromCharCode(...bytes.subarray(8, 12));
+}
+
+/** HEIF is identified by its `ftyp` brand, never by the file extension. */
+export function isHeif(bytes: Uint8Array): boolean {
+  const brand = heifBrand(bytes);
+  return brand !== null && (HEIF_BRANDS.includes(brand) || AVIF_BRANDS.includes(brand));
+}
+
+/**
+ * Which decoder a file goes to, decided once from its codec.
+ *
+ * `browser` is the platform's own decoder. `avif` is tried there first, because
+ * libheif's wasm build is HEVC-only and cannot read AV1. `heif` is libheif
+ * first, for HEVC brands that most browsers cannot open.
+ */
+export type DecoderRoute = 'browser' | 'avif' | 'heif';
+
+export function routeDecoder(bytes: Uint8Array): DecoderRoute {
+  if (detectFormat(bytes) !== null) return 'browser';
+  const brand = heifBrand(bytes);
+  if (brand !== null && AVIF_BRANDS.includes(brand)) return 'avif';
+  if (brand !== null && HEIF_BRANDS.includes(brand)) return 'heif';
+  return 'browser';
 }
 
 /**
@@ -126,33 +152,10 @@ function drawUpright(
   const ctx = context2d(canvas, space);
   if (!ctx) throw new Error('2D canvas unavailable');
 
-  // The affine below maps stored pixels onto upright ones; it is the inverse of
-  // what the orientation tag describes, expressed in device pixels.
-  switch (orientation) {
-    case 2:
-      ctx.transform(-1, 0, 0, 1, width, 0);
-      break;
-    case 3:
-      ctx.transform(-1, 0, 0, -1, width, height);
-      break;
-    case 4:
-      ctx.transform(1, 0, 0, -1, 0, height);
-      break;
-    case 5:
-      ctx.transform(0, 1, 1, 0, 0, 0);
-      break;
-    case 6:
-      ctx.transform(0, 1, -1, 0, width, 0);
-      break;
-    case 7:
-      ctx.transform(0, -1, -1, 0, width, height);
-      break;
-    case 8:
-      ctx.transform(0, -1, 1, 0, 0, height);
-      break;
-    default:
-      break;
-  }
+  // The matrix maps stored pixels onto upright ones; its translation is a
+  // fraction of the output size.
+  const [a, b, c, d, tx, ty] = orientationMatrix(orientation);
+  ctx.transform(a, b, c, d, tx * width, ty * height);
   ctx.drawImage(source, 0, 0);
   return ctx.getImageData(0, 0, width, height, { colorSpace: space });
 }
@@ -168,16 +171,34 @@ export async function decodeSourceFile(file: File | Blob, fileName: string): Pro
   const space: ColorSpaceName = canvasSupportsP3() ? 'display-p3' : 'srgb';
 
   let orientation: Orientation = 1;
-  let source: CanvasImageSource;
-  let width: number;
-  let height: number;
+  let source: CanvasImageSource | undefined;
+  let width = 0;
+  let height = 0;
 
   // HEIF keeps its metadata in the ISO container rather than in a block this
   // walker understands, so a HEIF photo opens with no tags to show. Nothing is
   // carried across silently either, which is the direction that matters.
   const exif = readImageExif(bytes);
 
-  if (isHeif(bytes) && detectFormat(bytes) === null) {
+  const route = routeDecoder(bytes);
+  if (route === 'browser' || route === 'avif') {
+    orientation = readImageOrientation(bytes);
+    // Orientation is applied here rather than by the decoder so that the result
+    // does not depend on which browser is running.
+    try {
+      const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]), {
+        imageOrientation: 'none',
+        colorSpaceConversion: 'default',
+      });
+      source = bitmap;
+      width = bitmap.width;
+      height = bitmap.height;
+    } catch (err) {
+      // Only an AVIF file has a second decoder to fall back to.
+      if (route === 'browser') throw err;
+    }
+  }
+  if (!source) {
     const decoded = await decodeHeif(bytes);
     const holder = makeCanvas(decoded.width, decoded.height);
     const ctx = context2d(holder, 'srgb');
@@ -186,17 +207,6 @@ export async function decodeSourceFile(file: File | Blob, fileName: string): Pro
     source = holder as unknown as CanvasImageSource;
     width = decoded.width;
     height = decoded.height;
-  } else {
-    if (detectFormat(bytes) === 'jpeg') orientation = readJpegOrientation(bytes);
-    // Orientation is applied here rather than by the decoder so that the result
-    // does not depend on which browser is running.
-    const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]), {
-      imageOrientation: 'none',
-      colorSpaceConversion: 'default',
-    });
-    source = bitmap;
-    width = bitmap.width;
-    height = bitmap.height;
   }
 
   const imageData = drawUpright(source, width, height, orientation, space);

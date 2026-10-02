@@ -485,7 +485,7 @@ export const en = {
   'metadata.recipeCarries':
     'These values are part of the edit. A recipe shared while this is on carries the coordinates with it.',
   'metadata.webpUnsupported':
-    'A WebP cannot be given a metadata block by this build. Export as JPEG or PNG, or the file comes out with none.',
+    'A WebP cannot be given a metadata block by this build. Export as JPEG or PNG; a WebP export with metadata is refused.',
 
   'metadata.gps': 'Location',
   'metadata.gpsHint': 'Written as GPS coordinates, the way a camera records them.',

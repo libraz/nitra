@@ -223,7 +223,7 @@ function readIfd(tiff: Uint8Array, at: number, le: boolean): Map<number, TagValu
             values.push(view.getUint32(off, le));
             break;
           case 5:
-            values.push(view.getUint32(off, le) / (view.getUint32(off + 4, le) || 1));
+            values.push(view.getUint32(off, le) / view.getUint32(off + 4, le));
             break;
           case 8:
             values.push(view.getInt16(off, le));
@@ -232,7 +232,7 @@ function readIfd(tiff: Uint8Array, at: number, le: boolean): Map<number, TagValu
             values.push(view.getInt32(off, le));
             break;
           case 10:
-            values.push(view.getInt32(off, le) / (view.getInt32(off + 4, le) || 1));
+            values.push(view.getInt32(off, le) / view.getInt32(off + 4, le));
             break;
           default:
             break;
@@ -272,11 +272,11 @@ function localDateTime(stamp: string): string {
 }
 
 /** Degrees, minutes and seconds back to a signed decimal degree. */
-function decimalDegrees(parts: TagValue | undefined, ref: string): number | null {
+function decimalDegrees(parts: TagValue | undefined, ref: string, limit: number): number | null {
   if (!Array.isArray(parts) || parts.length < 3) return null;
   const [degrees = 0, minutes = 0, seconds = 0] = parts;
   const magnitude = degrees + minutes / 60 + seconds / 3600;
-  if (!Number.isFinite(magnitude)) return null;
+  if (!Number.isFinite(magnitude) || magnitude > limit) return null;
   return ref === 'S' || ref === 'W' ? -magnitude : magnitude;
 }
 
@@ -298,12 +298,13 @@ export function readExifFromTiff(tiff: Uint8Array): SourceExif {
   if (view.getUint16(2, le) !== 42) return out;
 
   const ifd0 = readIfd(tiff, view.getUint32(4, le), le);
-  out.description = wide(ifd0, 0x9c9b) || text(ifd0, 0x010e);
+  // The XP tags are Windows-only duplicates, read only when the standard tag is empty.
+  out.description = text(ifd0, 0x010e) || wide(ifd0, 0x9c9b);
   out.make = text(ifd0, 0x010f);
   out.model = text(ifd0, 0x0110);
   out.software = text(ifd0, 0x0131);
-  out.artist = wide(ifd0, 0x9c9d) || text(ifd0, 0x013b);
-  out.copyright = wide(ifd0, 0x9c9c) || text(ifd0, 0x8298);
+  out.artist = text(ifd0, 0x013b) || wide(ifd0, 0x9c9d);
+  out.copyright = text(ifd0, 0x8298) || wide(ifd0, 0x9c9c);
   out.taken = localDateTime(text(ifd0, 0x0132));
 
   const exifPointer = numeric(ifd0, 0x8769);
@@ -322,8 +323,8 @@ export function readExifFromTiff(tiff: Uint8Array): SourceExif {
   const gpsPointer = numeric(ifd0, 0x8825);
   if (gpsPointer > 0) {
     const gps = readIfd(tiff, gpsPointer, le);
-    const latitude = decimalDegrees(gps.get(0x0002), text(gps, 0x0001));
-    const longitude = decimalDegrees(gps.get(0x0004), text(gps, 0x0003));
+    const latitude = decimalDegrees(gps.get(0x0002), text(gps, 0x0001), 90);
+    const longitude = decimalDegrees(gps.get(0x0004), text(gps, 0x0003), 180);
     if (latitude !== null && longitude !== null) {
       const below = (gps.get(0x0005) as Uint8Array | undefined)?.[0] === 1;
       const altitude = numeric(gps, 0x0006);
@@ -364,6 +365,15 @@ function findWebpTiff(bytes: Uint8Array): Uint8Array | null {
   return null;
 }
 
+/** The TIFF block of whichever container can carry one, or null. */
+function findImageTiff(bytes: Uint8Array): Uint8Array | null {
+  const format = detectFormat(bytes);
+  if (format === 'jpeg') return findExifTiff(bytes);
+  if (format === 'png') return findPngTiff(bytes);
+  if (format === 'webp') return findWebpTiff(bytes);
+  return null;
+}
+
 /**
  * Read the editable tags from an encoded image.
  *
@@ -373,17 +383,19 @@ function findWebpTiff(bytes: Uint8Array): Uint8Array | null {
  */
 export function readImageExif(bytes: Uint8Array): SourceExif {
   try {
-    const format = detectFormat(bytes);
-    const tiff =
-      format === 'jpeg'
-        ? findExifTiff(bytes)
-        : format === 'png'
-          ? findPngTiff(bytes)
-          : format === 'webp'
-            ? findWebpTiff(bytes)
-            : null;
+    const tiff = findImageTiff(bytes);
     return tiff ? readExifFromTiff(tiff) : emptyExif();
   } catch {
     return emptyExif();
+  }
+}
+
+/** Read orientation from a JPEG, PNG or WebP, defaulting to upright. */
+export function readImageOrientation(bytes: Uint8Array): Orientation {
+  try {
+    const tiff = findImageTiff(bytes);
+    return tiff ? readOrientationFromTiff(tiff) : 1;
+  } catch {
+    return 1;
   }
 }

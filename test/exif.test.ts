@@ -4,7 +4,9 @@ import {
   isEmptyExif,
   orientationMatrix,
   orientationSwapsAxes,
+  readExifFromTiff,
   readImageExif,
+  readImageOrientation,
   readJpegOrientation,
   readOrientationFromTiff,
 } from '../src/core/io/exif';
@@ -116,5 +118,219 @@ describe('reading the editable tags', () => {
     expect(isEmptyExif(emptyExif())).toBe(true);
     expect(isEmptyExif({ ...emptyExif(), iso: 100 })).toBe(false);
     expect(isEmptyExif({ ...emptyExif(), artist: 'somebody' })).toBe(false);
+  });
+});
+
+/** A little-endian TIFF whose IFD0 holds the given tags, values stored behind it. */
+function tiffWithTags(tags: { tag: number; type: number; count: number; data: Uint8Array }[]) {
+  const head = 8 + 2 + tags.length * 12 + 4;
+  const total = head + tags.reduce((n, t) => n + (t.data.length > 4 ? t.data.length : 0), 0);
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  out.set([0x49, 0x49]);
+  view.setUint16(2, 42, true);
+  view.setUint32(4, 8, true);
+  view.setUint16(8, tags.length, true);
+  let dataAt = head;
+  for (const [i, t] of tags.entries()) {
+    const at = 10 + i * 12;
+    view.setUint16(at, t.tag, true);
+    view.setUint16(at + 2, t.type, true);
+    view.setUint32(at + 4, t.count, true);
+    if (t.data.length <= 4) {
+      out.set(t.data, at + 8);
+      continue;
+    }
+    view.setUint32(at + 8, dataAt, true);
+    out.set(t.data, dataAt);
+    dataAt += t.data.length;
+  }
+  return out;
+}
+
+function ascii0(text: string) {
+  return { type: 2, count: text.length + 1, data: Uint8Array.of(...ascii(text), 0) };
+}
+
+function ucs2(text: string) {
+  const data = new Uint8Array((text.length + 1) * 2);
+  for (let i = 0; i < text.length; i++)
+    new DataView(data.buffer).setUint16(i * 2, text.charCodeAt(i), true);
+  return { type: 1, count: data.length, data };
+}
+
+describe('standard tags outrank the Windows XP duplicates', () => {
+  it('reads copyright, artist and description from their standard tags when both exist', () => {
+    const exif = readExifFromTiff(
+      tiffWithTags([
+        { tag: 0x010e, ...ascii0('real description') },
+        { tag: 0x013b, ...ascii0('real artist') },
+        { tag: 0x8298, ...ascii0('real copyright') },
+        { tag: 0x9c9b, ...ucs2('xp title') },
+        { tag: 0x9c9c, ...ucs2('private comment') },
+        { tag: 0x9c9d, ...ucs2('xp author') },
+      ]),
+    );
+    expect(exif.description).toBe('real description');
+    expect(exif.artist).toBe('real artist');
+    expect(exif.copyright).toBe('real copyright');
+  });
+
+  it('falls back to an XP tag only when the standard one is absent or empty', () => {
+    const exif = readExifFromTiff(
+      tiffWithTags([
+        { tag: 0x8298, ...ascii0('') },
+        { tag: 0x9c9b, ...ucs2('xp title') },
+        { tag: 0x9c9c, ...ucs2('fallback') },
+      ]),
+    );
+    expect(exif.copyright).toBe('fallback');
+    expect(exif.description).toBe('xp title');
+  });
+});
+
+describe('orientation transform', () => {
+  // Where the stored top-left, top-right and bottom-left corners land, as
+  // [x, y] in units of the upright frame, for each of EXIF orientations 1-8.
+  const expected: Record<number, [number[], number[], number[]]> = {
+    1: [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+    ],
+    2: [
+      [1, 0],
+      [0, 0],
+      [1, 1],
+    ],
+    3: [
+      [1, 1],
+      [0, 1],
+      [1, 0],
+    ],
+    4: [
+      [0, 1],
+      [1, 1],
+      [0, 0],
+    ],
+    5: [
+      [0, 0],
+      [0, 1],
+      [1, 0],
+    ],
+    6: [
+      [1, 0],
+      [1, 1],
+      [0, 0],
+    ],
+    7: [
+      [1, 1],
+      [1, 0],
+      [0, 1],
+    ],
+    8: [
+      [0, 1],
+      [0, 0],
+      [1, 1],
+    ],
+  };
+
+  it('puts the stored corners where the EXIF specification says, for all eight', () => {
+    const storedW = 4;
+    const storedH = 2;
+    for (const o of [1, 2, 3, 4, 5, 6, 7, 8] as const) {
+      const swap = orientationSwapsAxes(o);
+      const outW = swap ? storedH : storedW;
+      const outH = swap ? storedW : storedH;
+      const [a, b, c, d, tx, ty] = orientationMatrix(o);
+      const map = (x: number, y: number) => [
+        (a * x + c * y + tx * outW) / outW,
+        (b * x + d * y + ty * outH) / outH,
+      ];
+      const [tl, tr, bl] = expected[o] as [number[], number[], number[]];
+      expect(map(0, 0), `orientation ${o} top-left`).toEqual(tl);
+      expect(map(storedW, 0), `orientation ${o} top-right`).toEqual(tr);
+      expect(map(0, storedH), `orientation ${o} bottom-left`).toEqual(bl);
+    }
+  });
+});
+
+describe('orientation in every container that carries it', () => {
+  it('reads the tag from JPEG, PNG and WebP', () => {
+    expect(readImageOrientation(jpegWithMetadata().bytes)).toBe(6);
+    expect(readImageOrientation(pngWithMetadata())).toBe(6);
+    expect(readImageOrientation(webpWithMetadata())).toBe(6);
+  });
+
+  it('is upright for anything else', () => {
+    expect(readImageOrientation(cleanJpeg())).toBe(1);
+    expect(readImageOrientation(ascii('nothing'))).toBe(1);
+  });
+});
+
+describe('malformed input', () => {
+  const sources = {
+    jpeg: jpegWithMetadata().bytes,
+    png: pngWithMetadata(),
+    webp: webpWithMetadata(),
+  };
+
+  it('never throws on any truncation of a container', () => {
+    for (const [name, bytes] of Object.entries(sources)) {
+      for (let n = 0; n <= bytes.length; n++) {
+        const cut = bytes.subarray(0, n);
+        expect(() => readImageExif(cut), `${name} ${n}`).not.toThrow();
+        expect(() => readImageOrientation(cut), `${name} ${n}`).not.toThrow();
+        expect(() => readJpegOrientation(cut), `${name} ${n}`).not.toThrow();
+      }
+    }
+  });
+
+  it('never throws on a TIFF block cut anywhere or corrupted at any byte', () => {
+    const tiff = exifTiffWithGps();
+    for (let n = 0; n <= tiff.length; n++) {
+      expect(() => readExifFromTiff(tiff.subarray(0, n))).not.toThrow();
+      expect(() => readOrientationFromTiff(tiff.subarray(0, n))).not.toThrow();
+    }
+    for (const fill of [0x00, 0xff, 0x7f]) {
+      for (let at = 0; at < tiff.length; at++) {
+        const bad = tiff.slice();
+        bad[at] = fill;
+        expect(() => readExifFromTiff(bad), `${fill} at ${at}`).not.toThrow();
+        expect(() => readOrientationFromTiff(bad), `${fill} at ${at}`).not.toThrow();
+      }
+    }
+  });
+
+  it('survives entry counts, offsets and type codes pointing outside the block', () => {
+    const base = exifTiffWithGps();
+    const view = (b: Uint8Array) => new DataView(b.buffer);
+    const huge = base.slice();
+    view(huge).setUint32(4, 0xffff_fff0, true);
+    const count = base.slice();
+    view(count).setUint16(8, 0xffff, true);
+    const type = base.slice();
+    view(type).setUint16(10 + 2, 99, true);
+    for (const bad of [huge, count, type]) {
+      expect(() => readExifFromTiff(bad)).not.toThrow();
+      expect(() => readOrientationFromTiff(bad)).not.toThrow();
+    }
+  });
+
+  it('keeps a GPS fix in range, or drops it, when a denominator is zero', () => {
+    const tiff = exifTiffWithGps();
+    const view = new DataView(tiff.buffer);
+    // Zero every rational denominator the fixture wrote.
+    for (let at = 0; at + 8 <= tiff.length; at++) {
+      const bytes = tiff.slice();
+      new DataView(bytes.buffer).setUint32(at, 0, true);
+      const gps = readExifFromTiff(bytes).gps;
+      if (gps) {
+        expect(Math.abs(gps.latitude)).toBeLessThanOrEqual(90);
+        expect(Math.abs(gps.longitude)).toBeLessThanOrEqual(180);
+        expect(Number.isFinite(gps.altitude)).toBe(true);
+      }
+    }
+    expect(view.byteLength).toBeGreaterThan(0);
   });
 });

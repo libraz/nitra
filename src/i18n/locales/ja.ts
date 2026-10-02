@@ -481,7 +481,7 @@ export const ja: Messages = {
   'metadata.recipeCarries':
     'ここの値は編集内容の一部です。この状態でレシピを共有すると、座標も一緒に渡ります。',
   'metadata.webpUnsupported':
-    'この版では WebP にメタデータを書き込めません。JPEG か PNG で書き出してください。このままだと情報の入らないファイルになります。',
+    'この版では WebP にメタデータを書き込めません。JPEG か PNG で書き出してください。WebP のままメタデータ付きで書き出すことはできません。',
 
   'metadata.gps': '位置情報',
   'metadata.gpsHint': 'カメラが記録するのと同じ GPS 座標として書き込みます。',

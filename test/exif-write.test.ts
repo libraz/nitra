@@ -269,3 +269,29 @@ describe('putting the block into a file', () => {
     expect(() => embedExif(Uint8Array.of(1, 2, 3, 4), buildExifTiff(fields))).toThrow();
   });
 });
+
+describe('field widths', () => {
+  it('round-trips every ISO up to the schema maximum without wrapping', () => {
+    for (const iso of [400, 65535, 65536, 102400, 409600, 4_194_304]) {
+      expect(readExifFromTiff(buildExifTiff({ iso })).iso).toBe(iso);
+    }
+  });
+
+  it('keeps a large altitude with a fractional part inside 32 bits', () => {
+    const [numerator, denominator] = toRational(4300.123457);
+    expect(numerator).toBeLessThanOrEqual(0xffff_ffff);
+    expect(numerator / denominator).toBeCloseTo(4300.123457, 3);
+    const back = readExifFromTiff(
+      buildExifTiff({ gps: { latitude: 1, longitude: 1, altitude: 30000.987654 } }),
+    );
+    expect(back.gps?.altitude).toBeCloseTo(30000.987654, 2);
+  });
+
+  it('never returns a fraction that wraps', () => {
+    for (const v of [4294967.295, 4294967295.5, 1e12, 0.000001234, 123456.789012]) {
+      const [n, d] = toRational(v);
+      expect(n).toBeLessThanOrEqual(0xffff_ffff);
+      expect(d).toBeLessThanOrEqual(0xffff_ffff);
+    }
+  });
+});

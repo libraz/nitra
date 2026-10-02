@@ -113,6 +113,9 @@ export function ExportPanel({
             mode={output.metadata.mode}
             onMode={(mode) => onOutput({ metadata: { ...output.metadata, mode } })}
           />
+          {output.format === 'webp' && output.metadata.mode !== 'strip' && (
+            <p className="warn">{t('metadata.webpUnsupported')}</p>
+          )}
           <button type="button" className="tomore" onClick={onMetadataTool}>
             {t('metadata.toTool')}
           </button>

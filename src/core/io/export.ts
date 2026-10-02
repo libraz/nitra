@@ -10,17 +10,11 @@
 
 import type { TileRect } from '../geometry/tiles';
 import { tileFileName } from '../geometry/tiles';
-import type { OutputParams, Recipe } from '../recipe/schema';
+import type { Recipe } from '../recipe/schema';
 import { encodeImage, type MetadataOutcome } from './encode';
 import type { SourceExif } from './exif';
 import { metadataFields } from './metadata';
 import { buildZip, type ZipEntry } from './zip';
-
-const EXTENSION: Record<OutputParams['format'], string> = {
-  jpeg: 'jpg',
-  png: 'png',
-  webp: 'webp',
-};
 
 export interface ExportedFile {
   name: string;
@@ -76,7 +70,6 @@ export async function exportImage(
   sourceExif: SourceExif | null = null,
 ): Promise<ExportResult> {
   const stem = exportStem(sourceName);
-  const extension = EXTENSION[recipe.output.format];
   const files: ExportedFile[] = [];
   let mime = '';
   let metadata: MetadataOutcome = 'removed';
@@ -84,7 +77,7 @@ export async function exportImage(
   if (tiles.length <= 1) {
     const fields = metadataFields(recipe.output.metadata, sourceExif, pixels.width, pixels.height);
     const encoded = await encodeImage(pixels, recipe.output, fields);
-    files.push({ name: `${stem}.${extension}`, blob: encoded.blob });
+    files.push({ name: `${stem}.${encoded.extension}`, blob: encoded.blob });
     return {
       files,
       archive: null,
@@ -99,7 +92,7 @@ export async function exportImage(
   for (const tile of tiles) {
     const fields = metadataFields(recipe.output.metadata, sourceExif, tile.width, tile.height);
     const encoded = await encodeImage(sliceImageData(pixels, tile), recipe.output, fields);
-    const name = tileFileName(stem, extension, tile, tiles.length);
+    const name = tileFileName(stem, encoded.extension, tile, tiles.length);
     files.push({ name, blob: encoded.blob });
     entries.push({ name, data: new Uint8Array(await encoded.blob.arrayBuffer()) });
     mime = encoded.mime;

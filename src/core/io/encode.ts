@@ -13,12 +13,18 @@
 
 import type { OutputParams } from '../recipe/schema';
 import { buildExifTiff, type ExifFields, embedExif, hasExifFields } from './exif-write';
-import { remainingMetadataBlocks, stripMetadata } from './strip-metadata';
+import {
+  detectFormat,
+  type ImageFormat,
+  remainingMetadataBlocks,
+  stripMetadata,
+} from './strip-metadata';
 
-const MIME: Record<OutputParams['format'], string> = {
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
+/** The one place a container's MIME type and file extension are written down. */
+const CONTAINER: Record<ImageFormat, { mime: string; extension: string }> = {
+  jpeg: { mime: 'image/jpeg', extension: 'jpg' },
+  png: { mime: 'image/png', extension: 'png' },
+  webp: { mime: 'image/webp', extension: 'webp' },
 };
 
 /** What happened to the exported file's metadata block. */
@@ -28,6 +34,8 @@ export interface EncodedImage {
   blob: Blob;
   /** What the encoder actually produced, which may not be what was asked for. */
   mime: string;
+  /** File extension of the container actually produced. */
+  extension: string;
   metadata: MetadataOutcome;
 }
 
@@ -76,11 +84,16 @@ export async function encodeImage(
   if (!ctx) throw new Error('2D canvas unavailable');
   ctx.putImageData(pixels, 0, 0);
 
-  const wanted = MIME[output.format];
-  const encoded = await toBlob(canvas, wanted, output.quality);
-  const mime = encoded.type || wanted;
+  const encoded = await toBlob(canvas, CONTAINER[output.format].mime, output.quality);
 
-  const cleaned = stripMetadata(new Uint8Array(await encoded.arrayBuffer()));
+  // A browser that cannot encode the requested type hands back another one, so
+  // everything downstream follows the bytes rather than the request.
+  const raw = new Uint8Array(await encoded.arrayBuffer());
+  const container = detectFormat(raw);
+  if (!container) throw new Error('encoder produced an unrecognised image format');
+  const { mime, extension } = CONTAINER[container];
+
+  const cleaned = stripMetadata(raw);
   const left = remainingMetadataBlocks(cleaned);
   if (left.length > 0) {
     throw new Error(`metadata removal incomplete: ${left.join(', ')}`);
@@ -88,14 +101,24 @@ export async function encodeImage(
 
   if (fields && hasExifFields(fields)) {
     const written = embedExif(cleaned, buildExifTiff(fields));
-    return { blob: new Blob([written as BlobPart], { type: mime }), mime, metadata: 'written' };
+    return {
+      blob: new Blob([written as BlobPart], { type: mime }),
+      mime,
+      extension,
+      metadata: 'written',
+    };
   }
 
-  return { blob: new Blob([cleaned as BlobPart], { type: mime }), mime, metadata: 'removed' };
+  return {
+    blob: new Blob([cleaned as BlobPart], { type: mime }),
+    mime,
+    extension,
+    metadata: 'removed',
+  };
 }
 
 /** Suggested file name for an export, derived from the source name. */
 export function exportFileName(sourceName: string, format: OutputParams['format']): string {
   const stem = sourceName.replace(/\.[^.]+$/, '') || 'nitra';
-  return `${stem}-nitra.${format === 'jpeg' ? 'jpg' : format}`;
+  return `${stem}-nitra.${CONTAINER[format].extension}`;
 }
