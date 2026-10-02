@@ -50,8 +50,12 @@ export interface ParamGroup {
  * them and only sharpens the narrow ranges — the fractions of an image, where
  * the interesting part of the range is a long way inside a hundredth.
  */
-export function granularity(span: number): { step: number; decimals: number } {
-  const step = 10 ** Math.floor(Math.log10(span / 100));
+export function granularity(span: number, neutralOffset = 0): { step: number; decimals: number } {
+  let step = 10 ** Math.floor(Math.log10(span / 100));
+  // Finer still where the default sits between steps, so a reset lands on it exactly.
+  while (step > 1e-6 && Math.abs(neutralOffset / step - Math.round(neutralOffset / step)) > 1e-6) {
+    step /= 10;
+  }
   return { step, decimals: Math.max(0, Math.min(6, -Math.floor(Math.log10(step)))) };
 }
 

@@ -6,7 +6,7 @@
  * under each thumbnail is looked up from the message catalogue by `key`.
  */
 
-import type { FaceParams, GlobalParams } from './schema';
+import { type FaceParams, type GlobalParams, neutralRecipe, type Recipe } from './schema';
 
 export interface Look {
   key: string;
@@ -341,15 +341,8 @@ export function applyStrength(
  */
 const FACE_EXEMPT = new Set<string>(['radius']);
 
-/**
- * Whether one face parameter is left alone by the strength dial.
- *
- * Exported so the editor can keep the dial meaningful after a manual edit
- * without keeping its own copy of this list. Two copies of a rule like this
- * drift, and the drift shows up as a slider that jumps when the dial is next
- * touched.
- */
-export function isFaceStrengthExempt(key: string): boolean {
+/** Whether one face parameter is left alone by the strength dial. */
+function isFaceStrengthExempt(key: string): boolean {
   return FACE_EXEMPT.has(key);
 }
 
@@ -392,4 +385,110 @@ export function applyFaceStrength(
 
 export function lookByKey(key: string): Look | undefined {
   return LOOKS.find((look) => look.key === key);
+}
+
+/**
+ * What the strength dial owns: a finish, and any Auto suggestion layered on it,
+ * at the reference strength.
+ *
+ * A field it does not name is not the dial's, and nothing the dial, a finish or
+ * Auto does may touch it. A field set by hand leaves it through `releaseParam`:
+ * the value the user chose is a fact about this photo, like an exposure
+ * correction, and scaling it would move a slider nobody touched back off it.
+ */
+export interface Baseline {
+  global: Partial<GlobalParams>;
+  face: Partial<FaceParams>;
+}
+
+export const EMPTY_BASELINE: Baseline = { global: {}, face: {} };
+
+export function lookBaseline(look: Look): Baseline {
+  return { global: structuredClone(look.params), face: structuredClone(look.face ?? {}) };
+}
+
+/** Both baselines, `top` winning where they name the same field. */
+export function mergeBaselines(under: Baseline, top: Baseline): Baseline {
+  return {
+    global: layer(under.global, top.global) as Partial<GlobalParams>,
+    face: layer(under.face, top.face) as Partial<FaceParams>,
+  };
+}
+
+/** The baseline without one dotted recipe path, so the dial stops moving it. */
+export function releaseParam(baseline: Baseline, path: string): Baseline {
+  const [section, ...keys] = path.split('.');
+  if ((section !== 'global' && section !== 'face') || keys.length === 0) return baseline;
+  const next = structuredClone(baseline);
+  without(next[section] as Record<string, unknown>, keys);
+  return next;
+}
+
+/**
+ * Put `next` on the recipe at a strength, in place of `previous`.
+ *
+ * Fields only `previous` named go back to neutral; fields neither names keep
+ * whatever the recipe holds. Moving the dial is the case where both are the
+ * same baseline.
+ */
+export function applyBaseline(
+  recipe: Recipe,
+  previous: Baseline,
+  next: Baseline,
+  strength: number,
+): Recipe {
+  const fresh = neutralRecipe();
+  const global = layer(
+    layer(recipe.global, neutralAt(previous.global, fresh.global, next.global)),
+    applyStrength(next.global, strength),
+  ) as GlobalParams;
+  const face = layer(
+    layer(recipe.face, neutralAt(previous.face, fresh.face, next.face)),
+    applyFaceStrength(next.face, strength),
+  ) as FaceParams;
+  return { ...recipe, global, face };
+}
+
+type Tree = Record<string, unknown>;
+
+function isGroup(value: unknown): value is Tree {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Deep copy of `base` with every leaf `patch` names replaced. */
+function layer(base: object, patch: object): Tree {
+  const out: Tree = structuredClone(base) as Tree;
+  for (const [key, value] of Object.entries(patch)) {
+    out[key] =
+      isGroup(value) && isGroup(out[key]) ? layer(out[key], value) : structuredClone(value);
+  }
+  return out;
+}
+
+/** The neutral value of every leaf `named` holds and `kept` does not. */
+function neutralAt(named: object, neutral: object, kept: object | undefined): Tree {
+  const out: Tree = {};
+  const from = neutral as Tree;
+  const still = (kept ?? {}) as Tree;
+  for (const [key, value] of Object.entries(named)) {
+    if (isGroup(value) && isGroup(from[key])) {
+      const inner = neutralAt(value, from[key], isGroup(still[key]) ? still[key] : undefined);
+      if (Object.keys(inner).length > 0) out[key] = inner;
+    } else if (!(key in still) && key in from) {
+      out[key] = structuredClone(from[key]);
+    }
+  }
+  return out;
+}
+
+function without(tree: Tree, keys: string[]): void {
+  const [key, ...rest] = keys;
+  if (key === undefined || !(key in tree)) return;
+  const child = tree[key];
+  if (rest.length === 0 || !isGroup(child)) {
+    delete tree[key];
+    return;
+  }
+  without(child, rest);
+  if (Object.keys(child).length === 0) delete tree[key];
 }

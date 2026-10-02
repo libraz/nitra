@@ -28,6 +28,7 @@ const BACKGROUND = spec('text.background', 'text.background');
 const WEIGHT_NAMES: Partial<Record<number, MessageKey>> = {
   300: 'text.weightLight',
   500: 'text.weightRegular',
+  600: 'text.weightSemibold',
   700: 'text.weightBold',
 };
 

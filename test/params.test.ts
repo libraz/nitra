@@ -19,16 +19,19 @@ describe('slider granularity', () => {
     // the way from where it belongs — at the very bottom of the track.
     for (const def of paramDefs().values()) {
       const span = def.max - def.min;
-      const { step } = granularity(span);
+      const { step } = granularity(span, def.neutral - def.min);
       const snapped = def.min + Math.round((def.neutral - def.min) / step) * step;
       expect(Math.abs(snapped - def.neutral) / span, def.path).toBeLessThan(0.01);
+      // Within a hundredth of the track still leaves the thumb off the default:
+      // the slider has to be able to come back to it exactly.
+      expect(Math.abs(snapped - def.neutral), def.path).toBeLessThan(1e-9);
     }
   });
 
   it('can reach both ends of every parameter, in useful steps', () => {
     for (const def of paramDefs().values()) {
       const span = def.max - def.min;
-      const { step } = granularity(span);
+      const { step } = granularity(span, def.neutral - def.min);
       const stops = span / step;
       expect(Math.abs(stops - Math.round(stops)), `${def.path} at ${step}`).toBeLessThan(1e-6);
       // Fewer than this and a drag skips over values somebody would want.
@@ -38,7 +41,7 @@ describe('slider granularity', () => {
 
   it('shows enough decimals to tell one step from the next', () => {
     for (const def of paramDefs().values()) {
-      const { step, decimals } = granularity(def.max - def.min);
+      const { step, decimals } = granularity(def.max - def.min, def.neutral - def.min);
       // A readout rounded coarser than the step is a number that stops moving
       // while the slider is still moving.
       expect(10 ** -decimals, `${def.path} at ${step}`).toBeLessThanOrEqual(step);

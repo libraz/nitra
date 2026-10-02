@@ -294,7 +294,7 @@ export const ja: Messages = {
   'restore.mismatch':
     'この編集は {wanted} を使って作られていますが、いま開かれているのは {open} です。{wanted} を開き直すか、この編集に {open} を使ってください。',
   'restore.unused':
-    '{open} は開かれていますが、この編集では使われていません。開くより前まで操作を取り消すと、編集から参照されないまま残ります。',
+    '{open} は開かれていますが、この編集では使われていません。顔を戻すには、この編集に使うことを選んでください。',
   'restore.adopt': 'この編集に {name} を使う',
   'restore.noFaceHere': 'いまの絵から顔が見つからないので、戻す場所がありません。',
   'restore.edge': '境界の位置',
@@ -405,6 +405,7 @@ export const ja: Messages = {
   'text.weight': '太さ',
   'text.weightLight': '細',
   'text.weightRegular': '標準',
+  'text.weightSemibold': 'セミボールド',
   'text.weightBold': '太',
   'text.align': '揃え',
   'text.alignLeft': '左',
@@ -479,7 +480,7 @@ export const ja: Messages = {
     '元写真が持っていた情報を書き戻します。書き戻すのは以下の項目だけで、元のメタデータの残りは読み込んだ時点で消えています。',
   'metadata.sourceEmpty': 'この写真はメタデータを持っていないので、引き継ぐものがありません。',
   'metadata.recipeCarries':
-    'ここの値は編集内容の一部です。この状態でレシピを共有すると、座標も一緒に渡ります。',
+    'ここの値は編集内容の一部です。これがオンの間、書き出したファイルに座標も入ります。',
   'metadata.webpUnsupported':
     'この版では WebP にメタデータを書き込めません。JPEG か PNG で書き出してください。WebP のままメタデータ付きで書き出すことはできません。',
 
@@ -556,6 +557,8 @@ export const ja: Messages = {
     '{count}個置きました。残り{overflow}個は上限{limit}を超えるため置いていません',
   'toast.concealTooSmall':
     'この写真ではその円が1ピクセル未満になり、何もぼけません。もう少し大きくしてください。',
+  'toast.healTooSmall':
+    'この写真ではその範囲が6ピクセル未満になり、何も埋まりません。もう少し大きくしてください。',
   'toast.fontLoaded': '{name} を読み込みました',
   'toast.fontFailed': 'このフォントファイルは読み込めませんでした',
   'toast.framingReset': '構図をリセットしました',

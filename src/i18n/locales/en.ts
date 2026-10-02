@@ -298,7 +298,7 @@ export const en = {
   'restore.mismatch':
     'This edit was made with {wanted}, but the photo that is open is {open}. Open {wanted} again, or use {open} for this edit.',
   'restore.unused':
-    '{open} is open but this edit is not using it. Undoing past the point where it was opened leaves it here without the edit asking for it.',
+    '{open} is open but this edit is not using it. Use it for this edit to restore the face.',
   'restore.adopt': 'Use {name} for this edit',
   'restore.noFaceHere': 'No face was found in the picture, so there is nowhere to put one back.',
   'restore.edge': 'Edge',
@@ -409,6 +409,7 @@ export const en = {
   'text.weight': 'Weight',
   'text.weightLight': 'Light',
   'text.weightRegular': 'Regular',
+  'text.weightSemibold': 'Semibold',
   'text.weightBold': 'Bold',
   'text.align': 'Alignment',
   'text.alignLeft': 'Left',
@@ -483,7 +484,7 @@ export const en = {
     'What the photo arrived with is written back — these fields and nothing else. The rest of the original block does not survive being opened.',
   'metadata.sourceEmpty': 'This photo carries no metadata, so there is nothing to keep.',
   'metadata.recipeCarries':
-    'These values are part of the edit. A recipe shared while this is on carries the coordinates with it.',
+    'These values are part of the edit. The exported file carries the coordinates with it while this is on.',
   'metadata.webpUnsupported':
     'A WebP cannot be given a metadata block by this build. Export as JPEG or PNG; a WebP export with metadata is refused.',
 
@@ -560,6 +561,8 @@ export const en = {
   'toast.concealSeedOverflow': 'Placed {count}; {overflow} more would pass the limit of {limit}',
   'toast.concealTooSmall':
     'That circle is under a pixel wide on this photo, so nothing would be blurred. Make it larger.',
+  'toast.healTooSmall':
+    'That spot is under six pixels across on this photo, so nothing would be filled. Make it larger.',
   'toast.fontLoaded': 'Loaded {name}',
   'toast.fontFailed': 'Could not read that font file',
   'toast.framingReset': 'Framing reset',

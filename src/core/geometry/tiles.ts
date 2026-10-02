@@ -37,10 +37,18 @@ export const TILE_SHAPES: readonly TileShape[] = [
 
 /**
  * The shape the whole picture has to be for every tile of a grid to come out at
- * `tileRatio`.
+ * `tileRatio`, with the gutter `tileRects` takes out of it.
+ *
+ * The gutter is a fraction of the short edge, so which edge is short decides
+ * the equation; the two solutions meet at a square picture.
  */
-export function cropRatioForTiles(tileRatio: number, cols: number, rows: number): number {
-  return (tileRatio * cols) / rows;
+export function cropRatioForTiles(tileRatio: number, tiles: TileParams): number {
+  const { cols, rows, gap } = tiles;
+  // Landscape: the gutter is a fraction of the height.
+  const wide = (tileRatio * cols * (1 - gap * (rows - 1))) / rows + gap * (cols - 1);
+  if (wide >= 1) return wide;
+  // Portrait: the gutter is a fraction of the width.
+  return (tileRatio * cols) / (rows * (1 - gap * (cols - 1)) + tileRatio * cols * gap * (rows - 1));
 }
 
 export interface TileRect {
@@ -109,17 +117,52 @@ export function planExport(sourceWidth: number, sourceHeight: number, recipe: Re
   const tiles = recipe.tiles;
   const limit = recipe.output.longEdge;
 
-  let scale = 1;
+  const width = Math.max(tiles.cols, Math.round(cropW));
+  const height = Math.max(tiles.rows, Math.round(cropH));
   if (limit > 0) {
-    const tileLong = Math.max(cropW / tiles.cols, cropH / tiles.rows);
+    const gap = tiles.gap * Math.min(cropW, cropH);
+    const cellW = (cropW - gap * (tiles.cols - 1)) / tiles.cols;
+    const cellH = (cropH - gap * (tiles.rows - 1)) / tiles.rows;
     // Never enlarged: a photo that cannot reach the ceiling is exported at the
     // size it has, and the panel reports that size rather than the one asked for.
-    scale = Math.min(1, limit / Math.max(tileLong, 1));
+    if (Math.max(cellW, cellH) > limit) {
+      const shrunk = sizeForCell(cellW, cellH, limit, tiles);
+      if (shrunk[0] <= width && shrunk[1] <= height) {
+        return { width: shrunk[0], height: shrunk[1], tiles: tileRects(...shrunk, tiles) };
+      }
+    }
   }
-
-  const width = Math.max(tiles.cols, Math.round(cropW * scale));
-  const height = Math.max(tiles.rows, Math.round(cropH * scale));
   return { width, height, tiles: tileRects(width, height, tiles) };
+}
+
+/**
+ * The whole-picture size at which every tile's long edge is exactly `limit`.
+ *
+ * Built from the tile outwards rather than by scaling the picture, because
+ * rounding the picture and then the gutter can leave a tile a pixel short of
+ * the ceiling, which the panel would report as a photo too small to reach it.
+ */
+function sizeForCell(
+  cellW: number,
+  cellH: number,
+  limit: number,
+  tiles: TileParams,
+): [number, number] {
+  const tileW = cellW >= cellH ? limit : Math.max(1, Math.round((limit * cellW) / cellH));
+  const tileH = cellW >= cellH ? Math.max(1, Math.round((limit * cellH) / cellW)) : limit;
+  const at = (gap: number): [number, number] => [
+    tiles.cols * tileW + (tiles.cols - 1) * gap,
+    tiles.rows * tileH + (tiles.rows - 1) * gap,
+  ];
+  // The gutter is a fraction of the short edge it is part of; it settles in a
+  // step or two because it is at most a few tenths of that edge.
+  let gap = 0;
+  for (let step = 0; step < 8; step++) {
+    const next = Math.round(tiles.gap * Math.min(...at(gap)));
+    if (next === gap) break;
+    gap = next;
+  }
+  return at(gap);
 }
 
 /**

@@ -9,7 +9,6 @@ import {
   cropRatioForTiles,
   planExport,
   TILE_SHAPES,
-  type TileRect,
   tileFileName,
   tileRects,
 } from '../src/core/geometry/tiles';
@@ -186,42 +185,85 @@ describe('cutting a tile out of a rendered picture', () => {
 
 describe('shaping a crop for a grid', () => {
   it('works out the whole shape from the shape of one tile', () => {
-    expect(cropRatioForTiles(1, 3, 3)).toBeCloseTo(1, 5);
-    expect(cropRatioForTiles(3 / 4, 3, 3)).toBeCloseTo(0.75, 5);
+    expect(cropRatioForTiles(1, { cols: 3, rows: 3, gap: 0 })).toBeCloseTo(1, 5);
+    expect(cropRatioForTiles(3 / 4, { cols: 3, rows: 3, gap: 0 })).toBeCloseTo(0.75, 5);
     // Three tiles across and one down at 3:4 each is a wide picture.
-    expect(cropRatioForTiles(3 / 4, 3, 1)).toBeCloseTo(2.25, 5);
+    expect(cropRatioForTiles(3 / 4, { cols: 3, rows: 1, gap: 0 })).toBeCloseTo(2.25, 5);
   });
 
   it('gives every tile the shape that was asked for', () => {
     // Every combination rather than a sample: the shape of a tile falls out of
-    // the tile shape, the grid and the shape of the photo together, and it is
-    // the interactions that go wrong. A grid cut to the wrong tile shape only
-    // shows itself once all of the posts are public.
+    // the tile shape, the grid, the gutter and the shape of the photo together,
+    // and it is the interactions that go wrong. A grid cut to the wrong tile
+    // shape only shows itself once all of the posts are public.
     for (const shape of TILE_SHAPES) {
       for (const cols of [1, 2, 3, 4]) {
         for (const rows of [1, 2, 3]) {
-          for (const [width, height] of [
-            [4000, 3000],
-            [3000, 4000],
-            [2000, 2000],
-          ] as const) {
-            const base = neutralRecipe();
-            const crop = fitCropToAspect(
-              base.geometry.crop,
-              cropRatioForTiles(shape.ratio, cols, rows),
-              width / height,
-            );
-            const plan = planExport(width, height, {
-              ...base,
-              geometry: { ...base.geometry, crop },
-              tiles: { cols, rows, gap: 0 },
-            });
-            const tile = plan.tiles[0] as TileRect;
-            const where = `${shape.key} ${cols}x${rows} ${width}x${height}`;
-            expect(tile.width / tile.height, where).toBeCloseTo(shape.ratio, 1);
+          for (const gap of [0, 0.01, 0.05, 0.1]) {
+            for (const [width, height] of [
+              [4000, 3000],
+              [3000, 4000],
+              [2000, 2000],
+            ] as const) {
+              for (const longEdge of [0, 1080]) {
+                const base = neutralRecipe();
+                const tiles = { cols, rows, gap };
+                const crop = fitCropToAspect(
+                  base.geometry.crop,
+                  cropRatioForTiles(shape.ratio, tiles),
+                  width / height,
+                );
+                const plan = planExport(width, height, {
+                  ...base,
+                  geometry: { ...base.geometry, crop },
+                  tiles,
+                  output: { ...base.output, longEdge },
+                });
+                const where = `${shape.key} ${cols}x${rows} gap ${gap} ${width}x${height} ${longEdge}`;
+                for (const tile of plan.tiles) {
+                  // Within a pixel of rounding on either edge.
+                  const off = Math.abs(tile.width - shape.ratio * tile.height);
+                  expect(off, where).toBeLessThanOrEqual(1 + shape.ratio);
+                }
+              }
+            }
           }
         }
       }
     }
+  });
+
+  it('brings every tile to the ceiling whatever the gutter', () => {
+    // A tile a pixel under the ceiling is reported as a photo too small to
+    // reach it, which this photo is not.
+    for (const gap of [0, 0.01, 0.03, 0.05, 0.1]) {
+      for (const [cols, rows] of [
+        [3, 1],
+        [3, 2],
+        [3, 3],
+        [2, 2],
+        [4, 3],
+      ] as const) {
+        for (const [width, height] of [
+          [9000, 7000],
+          [6000, 9000],
+          [8000, 8000],
+        ] as const) {
+          for (const longEdge of [1080, 1350, 1440]) {
+            const plan = planExport(width, height, recipe({ cols, rows, gap, longEdge }));
+            const where = `${cols}x${rows} gap ${gap} ${width}x${height} ${longEdge}`;
+            for (const tile of plan.tiles) {
+              expect(Math.max(tile.width, tile.height), where).toBe(longEdge);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it('still never enlarges with a gutter', () => {
+    const plan = planExport(1200, 900, recipe({ cols: 3, rows: 3, gap: 0.05, longEdge: 1080 }));
+    expect(plan.width).toBe(1200);
+    expect(plan.height).toBe(900);
   });
 });

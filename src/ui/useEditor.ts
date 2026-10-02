@@ -2,8 +2,8 @@
  * Editor state.
  *
  * The recipe is the only description of the edit; the canvas is a view of it.
- * Nothing here holds a modified copy of the image, which is what makes every
- * step reversible and the history unbounded.
+ * Nothing here holds a modified copy of the image. There is no undo history:
+ * an edit is taken back by setting its control again.
  */
 
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,22 +21,24 @@ import {
   geometrySignature,
   outputToSource,
 } from '../core/geometry/transform';
+import { healSpotTooSmall } from '../core/heal/inpaint';
 import { decodeSourceFile, type SourceImage } from '../core/io/decode';
 import { exportImage } from '../core/io/export';
 import {
-  applyFaceStrength,
-  applyStrength,
-  isFaceStrengthExempt,
+  applyBaseline,
+  type Baseline,
+  EMPTY_BASELINE,
   LOOKS,
+  lookBaseline,
   lookByKey,
+  mergeBaselines,
   REFERENCE_STRENGTH,
+  releaseParam,
 } from '../core/recipe/presets';
 import {
   CONCEAL_LIMIT,
   type DepthParams,
-  type FaceParams,
   type GeometryParams,
-  type GlobalParams,
   HEAL_LIMIT,
   type MetadataParams,
   neutralRecipe,
@@ -60,6 +62,13 @@ import { clampView, FIT_VIEW, maxZoom, type View } from './view';
 
 /** Longest edge of a finish thumbnail. */
 const THUMBNAIL_EDGE = 220;
+
+/**
+ * What the pipeline works in, whatever the display can show: ingest converts
+ * every source to linear Display-P3, and the context refuses to start without
+ * half-float targets.
+ */
+const WORKING_SPACE = 'linear Display-P3 / f16';
 
 /** The panels the tool rail switches between. */
 export type Tool =
@@ -92,18 +101,6 @@ export interface MetadataPatch {
 }
 
 export type CropRect = GeometryParams['crop'];
-
-/** Parameters the strength dial leaves alone, mirrored for manual edits. */
-const STRENGTH_EXEMPT = new Set<string>([
-  'global.exposure',
-  'global.highlights',
-  'global.shadows',
-  'global.whites',
-  'global.blacks',
-  'global.temperature',
-  'global.tint',
-  'global.skinHueProtect',
-]);
 
 /**
  * Where the face analysis has got to.
@@ -288,6 +285,45 @@ function asImageData(image: SourceImage): ImageData {
   return new ImageData(pixels, image.width, image.height, { colorSpace: image.space });
 }
 
+/**
+ * The framing mirrored across one axis of the screen.
+ *
+ * Toggling the stored flip alone mirrors the photo underneath the straightening
+ * and the crop, which doubles the tilt and leaves the crop on the same side.
+ * The straightening turns the other way and the crop is reflected with it.
+ */
+export function flipGeometry(geometry: GeometryParams, axis: 'h' | 'v'): GeometryParams {
+  const field = flipFieldFor(geometry.quarterTurns, axis);
+  const { crop } = geometry;
+  return {
+    ...geometry,
+    [field]: !geometry[field],
+    straighten: geometry.straighten === 0 ? 0 : -geometry.straighten,
+    crop: axis === 'h' ? { ...crop, x: 1 - crop.x - crop.w } : { ...crop, y: 1 - crop.y - crop.h },
+  };
+}
+
+/**
+ * Tickets for requests where only the newest of a kind may land.
+ *
+ * Decoding is as slow as the file is large, so a photo opened first can finish
+ * after one opened later; its result has to be dropped rather than replace the
+ * one the user chose second.
+ */
+export function requestTokens<Kind extends string>() {
+  const latest = new Map<Kind, number>();
+  return {
+    issue(kind: Kind): number {
+      const ticket = (latest.get(kind) ?? 0) + 1;
+      latest.set(kind, ticket);
+      return ticket;
+    },
+    isCurrent(kind: Kind, ticket: number): boolean {
+      return latest.get(kind) === ticket;
+    },
+  };
+}
+
 function newLayerId(): string {
   return `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -309,8 +345,7 @@ export function useEditor(): Editor {
   recipeRef.current = recipe;
 
   /** The finish before the strength dial stretched it. */
-  const baselineRef = useRef<Partial<GlobalParams>>({});
-  const baselineFaceRef = useRef<Partial<FaceParams>>({});
+  const baselineRef = useRef<Baseline>(EMPTY_BASELINE);
 
   /**
    * The last analysis, kept so a remount does not mean running the models again.
@@ -329,6 +364,12 @@ export function useEditor(): Editor {
    * back — exactly the failure the stage exists to undo.
    */
   const referenceRef = useRef<RestoreReference | null>(null);
+
+  const openSeq = useRef(requestTokens<'photo' | 'reference'>());
+  const isCurrent = useCallback(
+    (kind: 'photo' | 'reference', ticket: number) => openSeq.current.isCurrent(kind, ticket),
+    [],
+  );
 
   const [source, setSource] = useState<SourceImage | null>(null);
   const sourceRef = useRef<SourceImage | null>(null);
@@ -358,7 +399,6 @@ export function useEditor(): Editor {
   const viewRef = useRef(view);
   viewRef.current = view;
   const [fitScale, setFitScale] = useState<number | null>(null);
-  const [workingSpace, setWorkingSpace] = useState('linear P3 / f16');
   // The brush size is not part of the edit: it is the size the next spot gets,
   // and each spot carries the size it was placed at.
   const [healRadius, setHealRadius] = useState(() => paramDef('heal.r').neutral);
@@ -392,7 +432,6 @@ export function useEditor(): Editor {
       return;
     }
     pipelineRef.current = pipeline;
-    setWorkingSpace(pipeline.wideGamut ? 'linear P3 / f16' : 'linear sRGB / f16');
 
     const scheduler = new RenderScheduler(pipeline, {
       recipe: () => recipeRef.current,
@@ -493,29 +532,13 @@ export function useEditor(): Editor {
   const setParam = useCallback(
     (path: string, value: number) => {
       const next = writeParam(recipeRef.current, path, value);
-      // Keep the strength dial meaningful after a manual edit by recording the
-      // value as it would be at the reference strength.
-      const factor = Math.max(0.02, strength / REFERENCE_STRENGTH);
-      if (path.startsWith('global.') && !path.startsWith('global.grain')) {
-        const key = path.slice('global.'.length);
-        if (!key.includes('.')) {
-          Object.assign(baselineRef.current, {
-            [key]: STRENGTH_EXEMPT.has(path) ? value : value / factor,
-          });
-        }
-      }
-      if (path.startsWith('face.')) {
-        const key = path.slice('face.'.length);
-        if (!key.includes('.')) {
-          Object.assign(baselineFaceRef.current, {
-            [key]: isFaceStrengthExempt(key) ? value : value / factor,
-          });
-        }
-      }
+      // A value set by hand is the user's from here on, so the dial stops
+      // scaling it rather than moving the slider off where it was left.
+      baselineRef.current = releaseParam(baselineRef.current, path);
       setLookState('custom');
       commit(next);
     },
-    [commit, strength],
+    [commit],
   );
 
   const setDepth = useCallback(
@@ -619,9 +642,7 @@ export function useEditor(): Editor {
 
   const flip = useCallback(
     (axis: 'h' | 'v') => {
-      const geometry = recipeRef.current.geometry;
-      const field = flipFieldFor(geometry.quarterTurns, axis);
-      setGeometry({ [field]: !geometry[field] });
+      setGeometry(flipGeometry(recipeRef.current.geometry, axis));
     },
     [setGeometry],
   );
@@ -656,7 +677,7 @@ export function useEditor(): Editor {
       const [w, h] = frameSize(image.width, image.height, current.geometry);
       const crop = fitCropToAspect(
         current.geometry.crop,
-        cropRatioForTiles(tileRatio, current.tiles.cols, current.tiles.rows),
+        cropRatioForTiles(tileRatio, current.tiles),
         w / h,
       );
       commit({ ...current, geometry: { ...current.geometry, aspect: 'free', crop } });
@@ -708,10 +729,15 @@ export function useEditor(): Editor {
   const addHealSpot = useCallback(
     (x: number, y: number) => {
       const current = recipeRef.current;
-      if (current.heal.length >= HEAL_LIMIT) return;
+      const image = sourceRef.current;
+      if (!image || current.heal.length >= HEAL_LIMIT) return;
+      if (healSpotTooSmall(healRadius, image.width)) {
+        notify(t('toast.healTooSmall'), 'alert');
+        return;
+      }
       commit({ ...current, heal: [...current.heal, { x, y, r: healRadius }] });
     },
-    [commit, healRadius],
+    [commit, healRadius, notify, t],
   );
 
   const removeHealSpot = useCallback(
@@ -849,11 +875,14 @@ export function useEditor(): Editor {
    */
   const loadReference = useCallback(
     (file: File) => {
+      const ticket = openSeq.current.issue('reference');
       setReferenceBusy(true);
       void (async () => {
         try {
           const image = await decodeSourceFile(file, file.name);
+          if (!isCurrent('reference', ticket)) return;
           const analysis = await analyzeFace(asImageData(image));
+          if (!isCurrent('reference', ticket)) return;
           const next: RestoreReference = {
             image: {
               data: image.data,
@@ -883,14 +912,15 @@ export function useEditor(): Editor {
             analysis.faces.length > 0 ? 'normal' : 'alert',
           );
         } catch (err) {
+          if (!isCurrent('reference', ticket)) return;
           const detail = err instanceof Error ? ` — ${err.message}` : '';
           notify(`${t('restore.toastFailed')}${detail}`, 'alert');
         } finally {
-          setReferenceBusy(false);
+          if (isCurrent('reference', ticket)) setReferenceBusy(false);
         }
       })();
     },
-    [notify, setRestore, t],
+    [isCurrent, notify, setRestore, t],
   );
 
   const clearReference = useCallback(() => {
@@ -938,13 +968,10 @@ export function useEditor(): Editor {
    * where there is.
    */
   const applyLook = useCallback(
-    (base: Partial<GlobalParams>, face: Partial<FaceParams>, nextStrength: number) => {
-      const fresh = neutralRecipe();
-      commit({
-        ...recipeRef.current,
-        global: { ...fresh.global, ...applyStrength(base, nextStrength) },
-        face: { ...fresh.face, ...applyFaceStrength(face, nextStrength) },
-      });
+    (next: Baseline, nextStrength: number) => {
+      const previous = baselineRef.current;
+      baselineRef.current = next;
+      commit(applyBaseline(recipeRef.current, previous, next, nextStrength));
     },
     [commit],
   );
@@ -953,10 +980,8 @@ export function useEditor(): Editor {
     (key: string) => {
       const entry = lookByKey(key);
       if (!entry) return;
-      baselineRef.current = { ...entry.params };
-      baselineFaceRef.current = { ...entry.face };
       setLookState(key);
-      applyLook(entry.params, baselineFaceRef.current, strength);
+      applyLook(lookBaseline(entry), strength);
       notify(t('toast.lookApplied', { name: t(`looks.${key}` as MessageKey) }));
     },
     [applyLook, notify, strength, t],
@@ -965,7 +990,7 @@ export function useEditor(): Editor {
   const setStrength = useCallback(
     (value: number) => {
       setStrengthState(value);
-      applyLook(baselineRef.current, baselineFaceRef.current, value);
+      applyLook(baselineRef.current, value);
     },
     [applyLook],
   );
@@ -1022,9 +1047,11 @@ export function useEditor(): Editor {
     (files: FileList) => {
       const file = files[0];
       if (!file) return;
+      const ticket = openSeq.current.issue('photo');
       void (async () => {
         try {
           const image = await decodeSourceFile(file, file.name);
+          if (!isCurrent('photo', ticket)) return;
           const pipeline = pipelineRef.current;
           if (!pipeline) return;
           pipeline.setSource(image);
@@ -1065,12 +1092,13 @@ export function useEditor(): Editor {
             }),
           );
         } catch (err) {
+          if (!isCurrent('photo', ticket)) return;
           const detail = err instanceof Error ? ` — ${err.message}` : '';
           notify(`${t('toast.loadFailed')}${detail}`, 'alert');
         }
       })();
     },
-    [notify, resetView, runFaceAnalysis, t],
+    [isCurrent, notify, resetView, runFaceAnalysis, t],
   );
 
   const runAuto = useCallback(() => {
@@ -1085,12 +1113,11 @@ export function useEditor(): Editor {
     // Null whenever there is no face to measure, which is what makes the
     // suggestion treat the frame as the subject rather than guess at one.
     const suggestion = suggestGrade(pipeline.measure(probe), pipeline.measureFace(probe));
-    const base = { ...baselineRef.current, ...suggestion.params };
-    const face = { ...baselineFaceRef.current, ...suggestion.face };
-    baselineRef.current = base;
-    baselineFaceRef.current = face;
     setLookState('custom');
-    applyLook(base, face, strength);
+    applyLook(
+      mergeBaselines(baselineRef.current, { global: suggestion.params, face: suggestion.face }),
+      strength,
+    );
     notify(
       t('toast.autoApplied', {
         notes: suggestion.notes.map((note) => formatNote(note, t)).join(' / '),
@@ -1182,10 +1209,8 @@ export function useEditor(): Editor {
           entry.key,
           pipeline.renderThumbnail(
             {
-              ...base,
+              ...applyBaseline(base, EMPTY_BASELINE, lookBaseline(entry), strength),
               geometry: framing,
-              global: { ...base.global, ...applyStrength(entry.params, strength) },
-              face: { ...base.face, ...applyFaceStrength(entry.face ?? {}, strength) },
               output: recipeRef.current.output,
             },
             THUMBNAIL_EDGE,
@@ -1255,7 +1280,7 @@ export function useEditor(): Editor {
       thumbnails,
       scale,
       previewSize,
-      workingSpace,
+      workingSpace: WORKING_SPACE,
       view,
       fitScale,
       toast,
@@ -1329,7 +1354,6 @@ export function useEditor(): Editor {
       thumbnails,
       scale,
       previewSize,
-      workingSpace,
       view,
       fitScale,
       toast,
