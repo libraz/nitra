@@ -15,7 +15,7 @@ Working after the fact removes the frame-rate budget. Passes can be as expensive
 
 - Opens JPEG, PNG, WebP, AVIF and HEIC. HEIC is decoded in the browser through libheif, because only Safari reads it natively.
 - Converts everything into linear Display-P3 and keeps every intermediate buffer at 16 bits per channel. An iPhone records wide-gamut colour; converting to sRGB on the way in throws it away.
-- Grades: exposure, contrast, highlight and shadow recovery, end points, white balance, vibrance and saturation, and a tone curve.
+- Grades: exposure, contrast, highlight and shadow recovery, end points, white balance, vibrance and saturation, with a plot of the tone response those controls produce.
 - Scales saturation as Oklch chroma, with the gain attenuated inside the skin hue band. An HSV saturation multiplier rotates hue and drives skin into clipping ahead of everything else.
 - Adjusts hue, saturation and lightness per colour, across eight bands whose centres are derived from the primaries rather than typed in. Near-neutral pixels are left alone, because a grey sky has a hue only in the arithmetic sense.
 - Effects: split toning, monochrome with channel weights, matte fade, vignette, glow, sharpening, clarity, film grain, highlight rolloff, and dithering on the way down to eight bits.
@@ -80,17 +80,17 @@ Sometimes the data is the point, so there are two other answers. **Keep** writes
 
 In every case, what goes into the file is exactly what the panel lists. The original block is read into those fields and then discarded rather than passed through, which is what keeps the embedded thumbnail out of the export and means a file never carries a tag nobody was shown. Removal still runs first, so what is there was asked for.
 
-Text outside the Latin alphabet is written in both of the encodings readers expect. JPEG and PNG can be given a metadata block; WebP cannot in this build, and the panel says so rather than exporting without it. An edit in **Write** mode carries its coordinates, so a recipe shared in that state hands them over — the panel says that too.
+Text outside the Latin alphabet is written in both of the encodings readers expect. JPEG and PNG can be given a metadata block; WebP cannot in this build, and the panel says so rather than exporting without it. An edit in **Write** mode carries its coordinates, so the exported file hands them over — the panel says that too.
 
 ## Editing is non-destructive
 
 The source image is never modified. An edit is a JSON recipe, and the picture is rendered from it every time.
 
-Every amount in a recipe is relative — radii as fractions of image size, coordinates normalised, type sized against the frame. A recipe holding absolute pixels means something different the moment it is applied to a second photo, which is what makes batch application and preset sharing possible later rather than impossible. It is also why a caption lands in the same place whether the export is four thousand pixels wide or one of nine tiles.
+Every amount in a recipe is relative — radii as fractions of image size, coordinates normalised, type sized against the frame. A recipe holding absolute pixels means something different the moment it is applied to a second photo, which is what would make batch application and preset sharing possible later rather than impossible. It is also why a caption lands in the same place whether the export is four thousand pixels wide or one of nine tiles.
 
 An export is never enlarged. A size taken from a destination is a ceiling, not a target: a photo that cannot reach it is written at the size it has, and the panel says so. Inventing pixels to satisfy a preset produces a file that claims a resolution it does not have.
 
-The recipe carries no pixels, so it can be shared while the photo stays on the device.
+The recipe carries no pixels and stays in the browser with the photo; there is no control for saving or loading one.
 
 ## Running it
 
@@ -131,7 +131,7 @@ The area immediately around the photo stays a neutral mid grey in either. Colour
 
 ## Status
 
-Pre-1.0. The recipe format is versioned and migrated on load, but the rest of the surface may change.
+Pre-1.0. The recipe format is versioned, but the rest of the surface may change.
 
 ## License
 
