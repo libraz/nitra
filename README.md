@@ -6,6 +6,9 @@ Phone-camera retouching, applied after the shot. Photos never leave the device.
 [![License](https://img.shields.io/badge/license-AGPL--3.0%20%2F%20Commercial-green)](https://github.com/libraz/nitra/blob/main/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
+[![Demo](https://img.shields.io/badge/demo-nitra.libraz.net-2563eb)](https://nitra.libraz.net)
+
+**Try it at [nitra.libraz.net](https://nitra.libraz.net).** The demo is the whole app, not a cut-down version, and it keeps the same promise: the page is static files, a photo you open is decoded and rendered in your browser, and nothing is uploaded. Close the tab and the edit is gone; what you keep is the file you export.
 
 A phone applies its beauty processing while the shutter is open. nitra applies the same kind of processing afterwards, to any photo you already have — the one taken in the wrong mode, or the one somebody else took of you.
 
@@ -23,6 +26,7 @@ Working after the fact removes the frame-rate budget. Passes can be as expensive
 - Fills a blemish where you click it. Skin from around the mark is copied in rather than smoothed over, so the pores come with it.
 - Blurs a bystander caught in a reflection — a corneal catchlight, a mirror, metal or glass — inside a circle you place. It is a blur filter run in a selection: the average reads the photograph around the circle so the edge does not show, and nothing outside the ring changes. The strength is a fraction of each circle's own radius, so one setting suits an eye and a mirror at once. One click on a detected iris places the circle at its width.
 - Retouches the person: skin, eyes, lips, teeth, cheeks, hair, the background behind them, one added light, and the shape of the face within a bound it reports (see below).
+- Puts the photographed face back into a picture an AI edit has redrawn, from the original photo (see below).
 - Frames: flips, quarter turns, straightening, and a crop that can be locked to a shape. Straightening trims the frame to keep it filled, so no corner comes out empty.
 - Crops to what a destination actually publishes — Instagram, X, Facebook, YouTube, TikTok — taking the shape and the size as one decision.
 - Adds text. Type is rasterised by the browser, so Japanese composes correctly, and it is composited after the output transform because a caption is not light that was in the room.
@@ -51,6 +55,16 @@ None of it works without a face, and the panel says which of three things happen
 nitra retouches; it does not turn somebody into a different person. The outline, the body and a face swap are one mechanism, so where that line falls is a product decision rather than a technical limit, and it is easier to hold now than to draw back later.
 
 So the reshaping is bounded and says what it did. Every amount is a fraction of the face's own width, each displacement is clamped, and the reach of a control stops short of the frame, which is what keeps a doorway behind the face from bending. How far the face actually moved is measured and shown next to the other numbers, in the same units, and the reading passes its warning while a single slider is still at the top of its own track, rather than only once several are stacked.
+
+## Putting a face back after an AI edit
+
+A generative edit — a new background, a different outfit, a caption burnt in — redraws the whole frame, and the face comes back as somebody who looks a little like you. Open the edited picture as usual, then open the original photo in this panel: nitra finds the face in both, lines the original up with the edited one, and puts the photographed face back.
+
+Nothing is placed by hand and nothing is invented. Both images are the same photograph, so the alignment is a fit between the same 468 landmarks on each face, and it is limited to moving, turning and scaling: stretching the original onto the generated face's proportions would hand back the very face it is meant to replace. When the edit also changed the pose or the expression, the fit cannot absorb it, and the panel says how far off it is rather than refusing.
+
+The join sits a band inside the skin, never on the outline, so it crosses cheek rather than the hairline, the jaw and the ears. The light is matched as a gain in the frame's own colour space, and the face goes in before the grade and the grain, so both run over the join.
+
+Two limits are deliberate. Only the face comes back, not the hair, the body or the clothes; that boundary needs matting at the hairline, which nitra does not do. And every face it pairs is restored together, so in a group photo where one face survived the edit, all of them are put back. The original is pixels, so like a loaded font it does not survive a reload: open it again and the panel picks up where it was.
 
 ## Splitting a picture across a grid
 
@@ -95,12 +109,14 @@ The recipe carries no pixels and stays in the browser with the photo; there is n
 
 ## Running it
 
+Nothing needs installing to use it: [nitra.libraz.net](https://nitra.libraz.net) serves the same build this repository produces. To run it locally or work on it:
+
 ```bash
 bun install
 bun run dev
 ```
 
-The first run downloads the face-analysis models and the runtime that drives them into `public/models` — around forty megabytes, pinned by digest, and not committed. Without them the app still runs; the face controls report that the analysis is unavailable.
+`bun run dev` serves it at `http://localhost:5173`. The first run downloads the face-analysis models and the runtime that drives them into `public/models` — around forty megabytes, pinned by digest, and not committed. Without them the app still runs; the face controls report that the analysis is unavailable.
 
 Requires a browser with WebGL2 and half-float render targets: current Chrome, Edge, Safari or Firefox.
 
@@ -108,7 +124,7 @@ Requires a browser with WebGL2 and half-float render targets: current Chrome, Ed
 bun run check      # lint and format
 bun run typecheck
 bun run test
-bun run build
+bun run build      # static files in dist/, ready for any static host
 ```
 
 ## Languages
@@ -123,11 +139,11 @@ The area immediately around the photo stays a neutral mid grey in either. Colour
 
 ## Non-goals
 
-- **No retouching that makes someone look like a different person.** Rebuilding bone structure, swapping faces, reshaping a body and filling anything in generatively are out of scope. So is replacing the background: a photograph that claims a place it was not taken in is over the same line.
+- **No retouching that makes someone look like a different person.** Rebuilding bone structure, swapping faces, reshaping a body and filling anything in generatively are out of scope. So is replacing the background: a photograph that claims a place it was not taken in is over the same line. Putting a face back after an AI edit is the same line seen from the other side: the pixels it restores are ones the camera recorded.
 - **Blurring a reflection is not erasure, and nitra makes no claim about what could be recovered from the file.** How much detail is left is what the slider says and nothing more; this is not the ISO/IEC 27038 sense of removal. Judge the result by looking at it.
 - **At the top of that slider an eye loses its catchlight.** A reach wider than the circle flattens it to close to one tone, and nothing is drawn back in to replace it.
 - **No server.** There is no upload path, and none will be added.
-- **No accounts.** Saving and sharing happen through files.
+- **No accounts.** An edit is kept nowhere but in the file you export.
 - Video is out of scope for now. The pipeline is built so it can be extended to video later.
 
 ## Status
