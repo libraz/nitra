@@ -161,7 +161,8 @@ export function suggestGrade(stats: RenderStats, face: FaceStats | null = null):
 
   if (Math.abs(exposure) > 0.02) {
     params.exposure = exposure;
-    notes.push({ kind: 'exposure', stops });
+    // What is applied, after the clamps and the backlit share, not what was measured.
+    notes.push({ kind: 'exposure', stops: exposure * 3 });
   }
   if (highlights < 0) params.highlights = highlights;
   if (shadows > 0) params.shadows = shadows;

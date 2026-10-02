@@ -1,8 +1,8 @@
 /**
  * The trust boundary for recipes.
  *
- * Recipes arrive from a URL, a file or local storage — all outside the program —
- * so validation happens here and only here. Out-of-range numbers are the reason:
+ * A recipe is read from outside the program, so validation happens here and
+ * only here. Out-of-range numbers are the reason:
  * left alone they travel straight into a shader uniform and the render falls
  * apart somewhere far from the input that caused it.
  *
@@ -18,7 +18,8 @@ import { type Recipe, recipeSchema } from './schema';
 export interface Repair {
   path: string;
   from: unknown;
-  to: number;
+  /** The value that was written: the clamped number, or the truncated string or array. */
+  to: unknown;
 }
 
 export type LoadResult =
@@ -45,19 +46,31 @@ function readAtPath(root: Record<string, unknown>, path: PropertyKey[]): unknown
   return cur;
 }
 
-/** The bound an out-of-range issue was measured against, if it carries one. */
-function boundOf(issue: ZodIssue): number | undefined {
-  if (issue.code === 'too_big' && typeof issue.maximum === 'number') return issue.maximum;
-  if (issue.code === 'too_small' && typeof issue.minimum === 'number') return issue.minimum;
+/**
+ * The in-range value for an out-of-range one, of the same type as the original.
+ *
+ * Numbers are clamped; strings and arrays that run over are truncated. A string
+ * or array that is too short cannot be lengthened without inventing content, so
+ * it is left to fail with its own message.
+ */
+function repairedValue(issue: ZodIssue, from: unknown): { to: unknown } | undefined {
+  if (issue.code === 'too_big' && typeof issue.maximum === 'number') {
+    if (typeof from === 'number') return { to: issue.maximum };
+    if (typeof from === 'string' || Array.isArray(from))
+      return { to: from.slice(0, issue.maximum) };
+  }
+  if (issue.code === 'too_small' && typeof issue.minimum === 'number' && typeof from === 'number') {
+    return { to: issue.minimum };
+  }
   return undefined;
 }
 
 /**
  * Read a recipe from outside the program.
  *
- * A shared preset written against a build with wider ranges should not be lost
+ * A recipe written against a build with wider ranges should not be lost
  * wholesale over one slider, so values that merely sit outside their range are
- * clamped and reported. Anything that is not a range problem — a string where a
+ * clamped or truncated and reported. Anything that is not a range problem — a string where a
  * number belongs, a missing anchor — still fails.
  */
 export function loadRecipe(input: unknown): LoadResult {
@@ -76,14 +89,12 @@ export function loadRecipe(input: unknown): LoadResult {
 
   const repairs: Repair[] = [];
   for (const issue of first.error.issues) {
-    const bound = boundOf(issue);
-    if (bound === undefined) continue;
     const path = issue.path as PropertyKey[];
     const from = readAtPath(migrated, path);
-    // A `too_big` array issue carries a count, not a replacement value: truncate rather than overwrite.
-    const to = Array.isArray(from) ? from.slice(0, bound) : bound;
-    setAtPath(migrated, path, to);
-    repairs.push({ path: issue.path.join('.'), from, to: bound });
+    const fix = repairedValue(issue, from);
+    if (fix === undefined) continue;
+    setAtPath(migrated, path, fix.to);
+    repairs.push({ path: issue.path.join('.'), from, to: fix.to });
   }
 
   const second = recipeSchema.safeParse(migrated);
@@ -98,8 +109,8 @@ export function loadRecipe(input: unknown): LoadResult {
 /**
  * Validate on the way out.
  *
- * Everything saved or shared goes through a strict parse so a file on disk is
- * always a file this program can read back.
+ * Everything written out goes through a strict parse so what is stored is
+ * always something this program can read back.
  */
 export function serializeRecipe(recipe: Recipe): string {
   return JSON.stringify(recipeSchema.parse(recipe));

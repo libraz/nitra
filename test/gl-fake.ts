@@ -70,6 +70,9 @@ export function fakeGl(): FakeGl {
   const gl = new Proxy(
     {},
     {
+      has(_target, prop) {
+        return typeof prop === 'string' && prop in fields;
+      },
       get(_target, prop) {
         if (typeof prop !== 'string') return undefined;
         if (prop in fields) return fields[prop];

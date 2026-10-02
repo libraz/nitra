@@ -28,8 +28,17 @@ const REGION_MARGIN = 1.6;
 /** Softness of the join, as a fraction of the spot's radius. */
 const FEATHER = 0.35;
 
-/** Smallest spot worth running the fill for, in pixels of radius. */
-const LEAST_RADIUS = 1.5;
+/**
+ * Smallest spot the fill acts on, in pixels of radius. Measured: below about 3.07,
+ * depending on where the centre falls within a pixel, no patch fits clear of the
+ * hole inside the region, so the fill would copy nothing.
+ */
+const LEAST_RADIUS = 3.1;
+
+/** Whether a spot of radius `r` (image widths) is too small for the fill to touch a pixel. */
+export function healSpotTooSmall(r: number, imageWidth: number): boolean {
+  return Math.max(1, r * imageWidth) < LEAST_RADIUS;
+}
 
 /** A spot as the recipe holds it: normalised centre, radius in image widths. */
 export interface HealSpot {
@@ -83,7 +92,7 @@ export function healSpot(
   spot: HealSpot,
 ): number {
   const { region, centre, radius } = regionFor(spot, imageWidth, imageHeight);
-  if (radius < LEAST_RADIUS) return 0;
+  if (healSpotTooSmall(spot.r, imageWidth)) return 0;
 
   // Cut out rather than filled where it lies. The region is not a working copy
   // the fill happens to need — it is the bound on what the search may copy from,

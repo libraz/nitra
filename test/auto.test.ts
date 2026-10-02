@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type AutoNote, suggestGrade } from '../src/core/analysis/auto';
+import { transferToLinear } from '../src/core/color/spaces';
 import {
   applyFaceStrength,
   applyStrength,
@@ -8,6 +9,7 @@ import {
 } from '../src/core/recipe/presets';
 import { paramDefs } from '../src/core/recipe/schema';
 import type { FaceStats, RenderStats } from '../src/core/render/pipeline';
+import { GRADE_FRAGMENT } from '../src/core/render/shaders/passes';
 
 /**
  * A histogram weighted around `level` that still reaches both ends.
@@ -481,5 +483,45 @@ describe('the strength dial over the face block', () => {
     expect(withFace.length).toBeGreaterThan(LOOKS.length / 2);
     // Except the one that means "leave it alone".
     expect(LOOKS.find((look) => look.key === 'none')?.face).toBeUndefined();
+  });
+});
+
+describe('what Auto applies', () => {
+  it('reports the exposure it applied rather than the measurement behind it', () => {
+    const cases = [0.01, 0.1, 0.3, 0.46, 0.8, 0.98].map((meanLuma) =>
+      suggestGrade(stats({ meanLuma, histogram: histogramAt(meanLuma) })),
+    );
+    // Backlit: part of the exposure comes from the face, after the first clamp.
+    cases.push(
+      suggestGrade(
+        stats({ meanLuma: 0.7, histogram: histogramAt(0.7) }),
+        faceStats({ skinLightness: 0.3, surroundLightness: 0.8 }),
+      ),
+    );
+    for (const { params, notes } of cases) {
+      const note = notes.find((n) => n.kind === 'exposure');
+      if (params.exposure === undefined) {
+        expect(note).toBeUndefined();
+        continue;
+      }
+      expect(note).toEqual({ kind: 'exposure', stops: params.exposure * 3 });
+      expect(Math.abs((note as { stops: number }).stops)).toBeLessThanOrEqual(1.8);
+    }
+  });
+
+  it('darkens the shadows with the blacks it suggests for a raised black point', () => {
+    const lifted = new Uint32Array(64);
+    lifted.fill(100, 20, 60);
+    const { params } = suggestGrade(stats({ histogram: lifted, meanLuma: 0.46 }));
+    const blacks = params.blacks as number;
+
+    // The grade shader's end-point step, as it is written.
+    expect(GRADE_FRAGMENT).toContain('float black = -uBlacks * 0.06;');
+    expect(GRADE_FRAGMENT).toContain('c = (c - black) / max(1.0 - black, 1e-3);');
+    const black = -blacks * 0.06;
+    for (const code of [0.1, 0.2, 0.35]) {
+      const c = transferToLinear(code);
+      expect((c - black) / Math.max(1 - black, 1e-3)).toBeLessThan(c);
+    }
   });
 });

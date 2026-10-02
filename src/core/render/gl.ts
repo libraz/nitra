@@ -327,6 +327,23 @@ export interface GlContext {
  * sRGB costs the wide-gamut colours an iPhone records, which is visible on the
  * saturated end of a photo, so the choice is reported rather than hidden.
  */
+/**
+ * Ask for a Display-P3 drawing buffer and report whether it was granted.
+ *
+ * Where the property does not exist, assigning it creates a plain field that
+ * reads back whatever was written, so it is looked for before the write: the
+ * read alone would claim a wide-gamut buffer the browser never made.
+ */
+export function requestWideGamut(gl: WebGL2RenderingContext): boolean {
+  if (!('drawingBufferColorSpace' in gl)) return false;
+  try {
+    gl.drawingBufferColorSpace = 'display-p3';
+    return gl.drawingBufferColorSpace === 'display-p3';
+  } catch {
+    return false;
+  }
+}
+
 export function createGlContext(canvas: HTMLCanvasElement): GlContext & { wideGamut: boolean } {
   const gl = canvas.getContext('webgl2', {
     alpha: false,
@@ -347,13 +364,7 @@ export function createGlContext(canvas: HTMLCanvasElement): GlContext & { wideGa
   }
   gl.getExtension('OES_texture_float_linear');
 
-  let wideGamut = false;
-  try {
-    gl.drawingBufferColorSpace = 'display-p3';
-    wideGamut = gl.drawingBufferColorSpace === 'display-p3';
-  } catch {
-    wideGamut = false;
-  }
+  const wideGamut = requestWideGamut(gl);
 
   const vao = gl.createVertexArray();
   if (!vao) throw new GlError('could not create vertex array');

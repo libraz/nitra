@@ -9,6 +9,7 @@
 
 import type { FaceMaskRegion } from '../face/raster';
 import { type ControlPoint, MAX_CONTROL_POINTS } from '../face/warp';
+import { fitLongEdge } from '../geometry/fit';
 import {
   type DepthParams,
   type FaceParams,
@@ -61,11 +62,6 @@ export const MAX_BLUR_RADIUS = 64;
  * because it is a statement about the filter rather than about either mask.
  */
 export const MASK_EPSILON = 1e-3;
-
-export function fitLongEdge(width: number, height: number, longEdge: number): [number, number] {
-  const scale = Math.min(1, longEdge / Math.max(width, height));
-  return [Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))];
-}
 
 export function fitWidth(width: number, height: number, target: number): [number, number] {
   const scale = Math.min(1, target / width);

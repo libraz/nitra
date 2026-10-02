@@ -115,6 +115,19 @@ export const MAX_CONTROL_POINTS = 64;
  */
 const FIXED_PER_FACE = 16;
 
+/** Support radius of an outline point, as a fraction of the face width. */
+const OUTLINE_RADIUS = 0.18;
+
+/**
+ * The outline's length in face widths, rounded up.
+ *
+ * Neighbouring outline points have to sit within twice their radius of each
+ * other for the field to carry on from one to the next, which fixes how few
+ * points an outline can be described with. Thinning picks vertices unevenly, so
+ * the radius is also widened to the widest gap actually left.
+ */
+const OUTLINE_PERIMETER = 4;
+
 /** Ring points per eye when the eyes are being opened. */
 const EYE_RING = 4;
 
@@ -225,8 +238,15 @@ function outlinePoints(
   for (const p of face.oval) reach = Math.max(reach, Math.abs(dot(sub(p, centre), axes.right)));
   if (reach < 1e-9) return [];
   const points: ControlPoint[] = [];
+  const ring = thinned(face.oval, budget);
+  let gap = 0;
+  ring.forEach((p, i) => {
+    const next = ring[(i + 1) % ring.length] as Point;
+    gap = Math.max(gap, length(sub(next, p)));
+  });
+  const radius = Math.max(width * OUTLINE_RADIUS, gap / 2);
 
-  for (const p of thinned(face.oval, budget)) {
+  for (const p of ring) {
     const offset = sub(p, centre);
     const lateral = dot(offset, axes.right) / reach;
     // Zero above the eye line, one at the bottom of the outline.
@@ -242,10 +262,24 @@ function outlinePoints(
       delta: limited(scale(axes.right, amount), width),
       // Wide enough that neighbouring vertices overlap, which is what makes the
       // outline move as an outline rather than as a row of dents.
-      radius: width * 0.18,
+      radius,
     });
   }
   return points;
+}
+
+/**
+ * A point whose support stops at the frame's border, or nothing if it has none left.
+ *
+ * The border has to stay where it is: a field reaching the edge of the frame
+ * bends whatever straight line runs along it. A face whose outline crosses the
+ * edge has points there, and those lose their reach rather than their place.
+ */
+function withinFrame(point: ControlPoint, aspect: number): ControlPoint[] {
+  const { x, y } = point.centre;
+  const room = Math.min(x, 1 - x, y, aspect - y);
+  const radius = Math.min(point.radius, room);
+  return radius > 1e-6 ? [{ ...point, radius }] : [];
 }
 
 /** The chin, shortened or lengthened along the face's own vertical. */
@@ -386,8 +420,10 @@ function mouthPoints(face: FaceRegions, warp: FaceParams['warp']): ControlPoint[
  */
 export function warpBudget(faceCount: number): { faces: number; outline: number } {
   if (faceCount <= 0) return { faces: 0, outline: 0 };
-  // At least four outline points, or the outline is not an outline.
-  const most = Math.max(1, Math.floor(MAX_CONTROL_POINTS / (FIXED_PER_FACE + 4)));
+  // Fewer outline points than this and the gaps between them are wider than
+  // their supports, which moves the outline as a row of dents.
+  const fewest = Math.ceil(OUTLINE_PERIMETER / (2 * OUTLINE_RADIUS));
+  const most = Math.max(1, Math.floor(MAX_CONTROL_POINTS / (FIXED_PER_FACE + fewest)));
   const faces = Math.min(faceCount, most);
   const outline = Math.floor(MAX_CONTROL_POINTS / faces) - FIXED_PER_FACE;
   return { faces, outline };
@@ -446,7 +482,7 @@ export function warpControlPoints(
       ...mouthPoints(face, warp),
     ];
     magnitude = Math.max(magnitude, warpMagnitude(own, face.width));
-    points.push(...own);
+    points.push(...own.flatMap((p) => withinFrame(p, face.aspect)));
   }
   if (points.length > MAX_CONTROL_POINTS) {
     // The allocation above is what keeps this from happening. Reaching it means

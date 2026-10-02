@@ -109,7 +109,7 @@ void main() {
   // than to black, which is both what skin does — light goes into it and comes
   // back out somewhere else — and what stops the terminator from being a line.
   vec3 normal = normalize(packed.xyz * 2.0 - 1.0);
-  float lit = pow(dot(normal, uLight) * 0.5 + 0.5, uSharpness);
+  float lit = pow(max(dot(normal, uLight) * 0.5 + 0.5, 0.0), uSharpness);
   float gain = lit * uIntensity * ${LIGHT_GAIN.toFixed(3)} * face;
 
   vec3 lab = linearToOklab(c);

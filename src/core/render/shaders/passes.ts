@@ -118,6 +118,15 @@ uniform int   uUseCurve;
 
 const float MID_GREY = 0.18;
 
+// Table entry i is the curve at i/(size-1), and a texel's centre is (i+0.5)/size.
+// Past white the curve carries on at unit slope from where it ended, so scene
+// highlights above it reach the rolloff as distinct values rather than one.
+float curveAt(sampler2D lut, float d) {
+  float size = float(textureSize(lut, 0).x);
+  float u = (clamp(d, 0.0, 1.0) * (size - 1.0) + 0.5) / size;
+  return texture(lut, vec2(u, 0.5)).r + max(d - 1.0, 0.0);
+}
+
 void main() {
   vec3 c = texture(uSource, vUv).rgb;
 
@@ -145,8 +154,9 @@ void main() {
   float loMask = 1.0 - smoothstep(0.0, 0.58, t);
   c *= exp2(uHighlights * hiMask * 1.1 + uShadows * loMask * 1.1);
 
-  // End points.
-  float black = uBlacks * 0.06;
+  // End points. Both sliders brighten upwards, so a negative Blacks pulls the
+  // black point down into the shadows.
+  float black = -uBlacks * 0.06;
   c = (c - black) / max(1.0 - black, 1e-3);
   c /= max(1.0 - uWhites * 0.20, 1e-3);
 
@@ -244,12 +254,8 @@ void main() {
   // Tone curve, evaluated display-referred because that is the domain its
   // control points are drawn in. It runs last so it always has the final say.
   if (uUseCurve == 1) {
-    vec3 d = clamp(encodeTransfer(max(c, 0.0)), 0.0, 1.0);
-    d = vec3(
-      texture(uCurve, vec2(d.r, 0.5)).r,
-      texture(uCurve, vec2(d.g, 0.5)).r,
-      texture(uCurve, vec2(d.b, 0.5)).r
-    );
+    vec3 d = encodeTransfer(max(c, 0.0));
+    d = vec3(curveAt(uCurve, d.r), curveAt(uCurve, d.g), curveAt(uCurve, d.b));
     c = decodeTransfer(d);
   }
 

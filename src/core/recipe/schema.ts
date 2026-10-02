@@ -19,6 +19,7 @@
  */
 
 import { z } from 'zod';
+import { buildCurveLut } from './curve';
 
 /** The range and neutral value of one numeric parameter. */
 export interface ParamDef {
@@ -146,6 +147,7 @@ const globalSchema = z.object({
   mono: z
     .object({
       amount: num('global.mono.amount', 0, 1, 0),
+      // Luma weights rounded to the slider's step so the default is a stop on its track.
       red: num('global.mono.red', -1, 2, 0.2126),
       green: num('global.mono.green', -1, 2, 0.7152),
       blue: num('global.mono.blue', -1, 2, 0.0722),
@@ -263,8 +265,8 @@ const concealSchema = z
      * reads as what it was drawn over — on an eye, the iris keeps its colour and
      * the pupil and the catchlight are still there. Towards the top the reach
      * passes the circle's own width and what comes back is close to one flat
-     * tone, since a normalised average whose window is wider than its mask
-     * weights the whole mask almost evenly.
+     * tone, since the average is taken freely over the photograph around the
+     * circle and a reach that wide leaves nothing but its mean.
      */
     amount: num('conceal.amount', 0.02, 1, 0.15),
     /** Order does not matter: each circle reads the same pristine source. */
@@ -326,11 +328,11 @@ const restoreSchema = z
 /**
  * The face stages: what happens inside a skin mask, and to the parts.
  *
- * Every radius is a fraction of the width of the face it is applied to, never
- * of the image and never in pixels. A face fills a tenth of a group photo and
- * most of a portrait, and an amount keyed to the image would mean two different
- * things; keyed to the face it means the same one, which is what lets a finish
- * carry these values at all.
+ * Every radius is a fraction of the width of the widest face in the frame,
+ * never of the image and never in pixels. A face fills a tenth of a group photo
+ * and most of a portrait, and an amount keyed to the image would mean two
+ * different things; keyed to the face it means the same one, which is what lets
+ * a finish carry these values at all.
  *
  * Nothing here does anything without an analysis to act on. The parameters are
  * still read and still carried, so a recipe written on a photo with a face in
@@ -925,7 +927,12 @@ export function isFaceNeutral(face: FaceParams): boolean {
   return isSkinNeutral(face) && isPartsNeutral(face) && isWarpNeutral(face);
 }
 
-/** True when the curve is the identity and the shader can skip the lookup. */
+/** Largest deviation from the ramp, in display-referred units, still treated as the identity. */
+const IDENTITY_CURVE_TOLERANCE = 1e-4;
+
+/** True when the sampled curve is the identity ramp, so the shader can skip the lookup. */
 export function isIdentityCurve(points: GlobalParams['curve']): boolean {
-  return points.every(([x, y]) => Math.abs(x - y) < 1e-6);
+  const lut = buildCurveLut(points);
+  const last = lut.length - 1;
+  return lut.every((y, i) => Math.abs(y - i / last) < IDENTITY_CURVE_TOLERANCE);
 }

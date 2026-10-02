@@ -11,8 +11,8 @@
  * The two are applied in that order, fills and then circles, because inside a
  * circle the conceal is the last word: a fill placed under one must not put
  * sharp structure back into a ring the user blurred. Each circle reads
- * the pristine source rather than the plate, which is what lets one be applied
- * again as often as the fills beneath it change.
+ * the pristine source rather than the plate, so the result depends only on the
+ * two lists and never on the order they were built up in.
  *
  * The copy is only made when the first spot or circle is placed. A photograph
  * nobody works on pays nothing for the stages existing, which matters at twelve
@@ -115,6 +115,11 @@ export class SourcePlate {
    * including every change to the circles and to the amount they were blurred
    * by: a circle is applied over the pristine source, so there is nothing to
    * undo it with short of starting again.
+   *
+   * A fill whose region reaches a circle is a rebuild as well. The search copies
+   * from the plate as it stands, and in a rebuild that is the photograph before
+   * the circle, so appending would copy from blurred pixels and the same recipe
+   * would come out differently after a reload.
    */
   apply(
     conceal: readonly ConcealSpot[],
@@ -128,7 +133,7 @@ export class SourcePlate {
       return { rebuilt: true, rects: [] };
     }
 
-    const appended =
+    let appended =
       conceal.length === this.appliedConceal.length &&
       // Same reason {@link matches} skips it: with no circle in the list there
       // is nothing the amount has applied to, so moving it is not a change.
@@ -136,6 +141,18 @@ export class SourcePlate {
       prefixOf(this.appliedConceal, conceal) &&
       heal.length > this.appliedHeal.length &&
       prefixOf(this.appliedHeal, heal);
+    if (appended && this.appliedConceal.length > 0) {
+      const writes = this.appliedConceal.map(
+        (spot) => concealRegion(spot, this.width, this.height, amount).written,
+      );
+      appended = !heal
+        .slice(this.appliedHeal.length)
+        .some((spot) =>
+          writes.some((written) =>
+            overlaps(regionFor(spot, this.width, this.height).region, written),
+          ),
+        );
+    }
     if (!appended) this.drop();
     this.appliedAmount = amount;
 
@@ -153,31 +170,13 @@ export class SourcePlate {
       filled.push(regionFor(spot, this.width, this.height).region);
     }
 
-    const rects: Region[] = [...filled];
-    if (!appended) {
-      for (const spot of conceal) {
-        this.appliedConceal.push(spot);
-        concealSpot(plate, this.pristine, this.width, this.height, spot, amount);
-      }
-      return { rebuilt: true, rects };
-    }
+    if (appended) return { rebuilt: false, rects: filled };
 
-    // A fill that reached a circle put sharp structure back inside a ring the
-    // user blurred, so the circle has the last word again. Running it a second
-    // time is exact rather than approximate because it reads the pristine
-    // source, so what comes out does not depend on how many fills it has
-    // outlived. Circles the fills did not reach are left alone, which is every
-    // one of them in the ordinary case.
-    for (const spot of this.appliedConceal) {
-      // What decides this is where the circle writes, not the wider rectangle
-      // the blur reads over: a circle takes its light from the pristine source,
-      // so a fill it merely read past cannot have changed what it produces.
-      const written = concealRegion(spot, this.width, this.height, amount).written;
-      if (!filled.some((rect) => overlaps(rect, written))) continue;
+    for (const spot of conceal) {
+      this.appliedConceal.push(spot);
       concealSpot(plate, this.pristine, this.width, this.height, spot, amount);
-      rects.push(written);
     }
-    return { rebuilt: false, rects };
+    return { rebuilt: true, rects: filled };
   }
 
   /** Back to the photograph, and back to costing nothing. */

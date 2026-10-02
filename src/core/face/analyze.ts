@@ -15,6 +15,7 @@
  */
 
 import { FaceLandmarker, FilesetResolver, ImageSegmenter } from '@mediapipe/tasks-vision';
+import { fitLongEdge } from '../geometry/fit';
 import { MESH_TRIANGLES } from './contours';
 import { type FaceRegions, faceRegions } from './geometry';
 import type { NormalBitmap } from './normals';
@@ -165,11 +166,6 @@ function loadModels(): Promise<Models> {
   return models;
 }
 
-function fitWithin(width: number, height: number, longEdge: number): [number, number] {
-  const scale = Math.min(1, longEdge / Math.max(width, height));
-  return [Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))];
-}
-
 type Canvas2D = OffscreenCanvas | HTMLCanvasElement;
 
 function makeCanvas(width: number, height: number): Canvas2D {
@@ -209,7 +205,7 @@ interface Region {
 
 /** Draw one region of the photo into a canvas no larger than `longEdge`. */
 function excerpt(full: Canvas2D, region: Region, longEdge: number): Canvas2D {
-  const [width, height] = fitWithin(region.width, region.height, longEdge);
+  const [width, height] = fitLongEdge(region.width, region.height, longEdge);
   const canvas = makeCanvas(width, height);
   const ctx = canvas.getContext('2d', { colorSpace: 'srgb' }) as CanvasRenderingContext2D | null;
   if (!ctx) throw new FaceAnalysisError('a 2D canvas is not available');
@@ -263,16 +259,24 @@ function regionsOf(width: number, height: number): Region[] {
   return windows;
 }
 
+/** A face as one search window found it, with how much of that window it filled. */
+export interface Detection {
+  face: FaceRegions;
+  /** The face's width as a fraction of the window's width. */
+  share: number;
+}
+
 /**
  * Two detections of the same face, merged down to the better one.
  *
  * Better means larger in the window it was found in: the mesh is fitted to a
- * crop of whatever it was handed, so the detection with more of the frame given
- * over to the face is the one with more pixels behind every landmark.
+ * crop of whatever it was handed, so the detection with more of the window given
+ * over to the face is the one with more pixels behind every landmark. Absolute
+ * width would favour the whole-frame pass, whose crop gives the face the fewest.
  */
-function merge(found: FaceRegions[]): FaceRegions[] {
+export function merge(found: Detection[]): FaceRegions[] {
   const kept: FaceRegions[] = [];
-  for (const face of [...found].sort((a, b) => b.width - a.width)) {
+  for (const { face } of [...found].sort((a, b) => b.share - a.share)) {
     const duplicate = kept.some((other) => {
       const apart = Math.hypot(face.centre.x - other.centre.x, face.centre.y - other.centre.y);
       return apart < Math.min(face.width, other.width) * 0.5;
@@ -309,7 +313,7 @@ export async function analyzeFace(image: ImageData): Promise<FaceAnalysis> {
   const aspect = image.height / image.width;
 
   const full = toCanvas(image);
-  const found: FaceRegions[] = [];
+  const found: Detection[] = [];
   for (const [index, region] of regionsOf(image.width, image.height).entries()) {
     const whole = index === 0;
     const canvas = excerpt(full, region, whole ? LANDMARK_EDGE : TILE_EDGE);
@@ -318,22 +322,21 @@ export async function analyzeFace(image: ImageData): Promise<FaceAnalysis> {
       // The landmarks are normalised against the window they were found in, so
       // they are put back into the frame's own coordinates before anything
       // downstream sees them.
-      found.push(
-        faceRegions(
-          landmarks.map((point) => ({
-            x: (region.x + point.x * region.width) / image.width,
-            y: (region.y + point.y * region.height) / image.height,
-            // The depth is normalised to the width of the window it was found
-            // in, so it scales with that window and does not shift with it:
-            // it is measured from the middle of the head rather than from a
-            // corner of the picture. Scaled with the height instead, a face
-            // found in one tile of a wide photograph would come out with a
-            // nose several times too long.
-            z: (point.z * region.width) / image.width,
-          })),
-          aspect,
-        ),
+      const face = faceRegions(
+        landmarks.map((point) => ({
+          x: (region.x + point.x * region.width) / image.width,
+          y: (region.y + point.y * region.height) / image.height,
+          // The depth is normalised to the width of the window it was found
+          // in, so it scales with that window and does not shift with it:
+          // it is measured from the middle of the head rather than from a
+          // corner of the picture. Scaled with the height instead, a face
+          // found in one tile of a wide photograph would come out with a
+          // nose several times too long.
+          z: (point.z * region.width) / image.width,
+        })),
+        aspect,
       );
+      found.push({ face, share: (face.width * image.width) / region.width });
     }
   }
   const faces = merge(found);

@@ -15,6 +15,7 @@
  * overlapping in the frame do not produce a region twice as strong as one.
  */
 
+import { fitLongEdge } from '../geometry/fit';
 import type { Disc, FaceRegions, Point } from './geometry';
 
 /** Eight bits per channel, RGBA, the layout {@link FACE_MASK_CHANNELS} names. */
@@ -128,11 +129,7 @@ export function maskSize(
   regionHeight: number,
   longEdge: number = MASK_LONG_EDGE,
 ): [number, number] {
-  const scale = Math.min(1, longEdge / Math.max(regionWidth, regionHeight));
-  return [
-    Math.max(1, Math.round(regionWidth * scale)),
-    Math.max(1, Math.round(regionHeight * scale)),
-  ];
+  return fitLongEdge(regionWidth, regionHeight, longEdge);
 }
 
 function blank(width: number, height: number): MaskBitmap {

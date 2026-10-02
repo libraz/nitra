@@ -7,6 +7,7 @@
  */
 
 import { warpControlPoints } from '../face/warp';
+import { fitLongEdge } from '../geometry/fit';
 import type { DagNode } from '../graph/dag';
 import { isPartsNeutral, isRelightNeutral, isSkinNeutral, type Recipe } from '../recipe/schema';
 import type { FaceTextures, PassContext, Programs, SubjectTextures } from './context';
@@ -17,7 +18,6 @@ import {
   bokehSize,
   clampRadius,
   faceFilterSize,
-  fitLongEdge,
   type GradeUniforms,
   gradeUniforms,
   hairMeanRadius,

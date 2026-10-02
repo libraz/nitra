@@ -13,8 +13,10 @@
  * byte buffer when exporting or measuring.
  */
 
+import type { ColorSpaceName } from '../color/spaces';
 import type { FaceAnalysis } from '../face/analyze';
 import { warpControlPoints } from '../face/warp';
+import { fitLongEdge } from '../geometry/fit';
 import { planExport } from '../geometry/tiles';
 import {
   croppedSize,
@@ -104,7 +106,6 @@ import {
 import {
   clampRadius,
   FACE_FILTER_EDGE,
-  fitLongEdge,
   fitWidth,
   gradeUniforms,
   isWarping,
@@ -123,6 +124,44 @@ export type {
 
 /** Longest edge of the interactive proxy. */
 export const PROXY_LONG_EDGE = 1024;
+
+/** What the finish shader does to the picture ahead of the output transform. */
+interface FinishAmounts {
+  sharpen: number;
+  sharpenStep: [number, number];
+  clarity: number;
+  glow: number;
+  glowThreshold: number;
+  grain: number;
+  grainSize: number;
+}
+
+/** Every finish operation off, for probes that read a level rather than a picture. */
+const FINISH_OFF: FinishAmounts = {
+  sharpen: 0,
+  sharpenStep: [0, 0],
+  clarity: 0,
+  glow: 0,
+  glowThreshold: 1,
+  grain: 0,
+  grainSize: 1,
+};
+
+/**
+ * The primaries a finish pass writes.
+ *
+ * The screen shows what its drawing buffer holds, which is Display-P3 only where
+ * the context took it. A byte target becomes a file or a reading tagged with the
+ * output space, so it is written in that space whatever the screen can do.
+ */
+export function destinationSpace(
+  target: RenderTarget | null,
+  output: ColorSpaceName,
+  wideGamut: boolean,
+): ColorSpaceName {
+  if (target === null) return wideGamut ? 'display-p3' : 'srgb';
+  return output;
+}
 
 /**
  * How the skin's spread is packed into eight bits on the way back.
@@ -904,13 +943,24 @@ export class Pipeline {
     const text = this.syncText(recipe, spec.width, spec.height);
 
     const target = this.acquireByteTarget(spec.width, spec.height);
-    this.runFinish(recipe, graded, low, text, target, spec.width, spec.height, false, false, true);
+    const space = this.runFinish(
+      recipe,
+      graded,
+      low,
+      text,
+      target,
+      spec.width,
+      spec.height,
+      false,
+      false,
+      true,
+    );
     const pixels = this.readBack(target, spec.width, spec.height);
     // The export's own size does not recur, and at full resolution both of
     // these are the largest things the caches would otherwise hold on to.
     this.byteTargets.delete(`${spec.width}x${spec.height}`);
     this.textTextures.delete(textSignature(recipe.text, spec.width, spec.height));
-    return new ImageData(pixels, spec.width, spec.height, { colorSpace: recipe.output.space });
+    return new ImageData(pixels, spec.width, spec.height, { colorSpace: space });
   }
 
   /**
@@ -937,9 +987,20 @@ export class Pipeline {
     const low = this.dag.evaluate(ctx, recipe, 'low', variant);
 
     const target = this.acquireByteTarget(width, height);
-    this.runFinish(recipe, graded, low, null, target, width, height, false, false, true);
+    const space = this.runFinish(
+      recipe,
+      graded,
+      low,
+      null,
+      target,
+      width,
+      height,
+      false,
+      false,
+      true,
+    );
     const pixels = this.readBack(target, width, height);
-    return new ImageData(pixels, width, height, { colorSpace: recipe.output.space });
+    return new ImageData(pixels, width, height, { colorSpace: space });
   }
 
   /**
@@ -1189,24 +1250,18 @@ export class Pipeline {
     drawGrade(this.programs, this.glctx, uniforms, this.curveTexture, ramp, graded, width, 1);
 
     const target = this.acquireByteTarget(width, 1);
-    this.programs.finish
-      .bind()
-      .texture('uSource', graded.texture)
-      .texture('uLow', graded.texture)
-      .texture('uText', graded.texture)
-      .float('uSharpen', 0)
-      .vec2('uSharpenStep', 0, 0)
-      .float('uClarity', 0)
-      .float('uGlow', 0)
-      .float('uGlowThreshold', 1)
-      .float('uGrain', 0)
-      .float('uGrainSize', 1)
-      .vec2('uResolution', width, 1)
-      .int('uToSrgb', recipe.output.space === 'srgb' || !this.glctx.wideGamut ? 1 : 0)
-      .int('uFlipY', 0)
-      .int('uDither', 0)
-      .int('uHasText', 0);
-    this.glctx.draw(target, width, 1);
+    this.drawFinish(
+      graded.texture,
+      graded.texture,
+      null,
+      FINISH_OFF,
+      recipe.output.space,
+      target,
+      width,
+      1,
+      false,
+      false,
+    );
 
     const pixels = new Uint8Array(width * 4);
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
@@ -1230,24 +1285,7 @@ export class Pipeline {
     const width = 256;
     const ramp = this.rampTexture();
     const target = this.acquireByteTarget(width, 1);
-    this.programs.finish
-      .bind()
-      .texture('uSource', ramp)
-      .texture('uLow', ramp)
-      .texture('uText', ramp)
-      .float('uSharpen', 0)
-      .vec2('uSharpenStep', 0, 0)
-      .float('uClarity', 0)
-      .float('uGlow', 0)
-      .float('uGlowThreshold', 1)
-      .float('uGrain', 0)
-      .float('uGrainSize', 1)
-      .vec2('uResolution', width, 1)
-      .int('uToSrgb', 0)
-      .int('uFlipY', 0)
-      .int('uDither', 0)
-      .int('uHasText', 0);
-    this.glctx.draw(target, width, 1);
+    this.drawFinish(ramp, ramp, null, FINISH_OFF, 'display-p3', target, width, 1, false, false);
     const pixels = new Uint8Array(width * 4);
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
     this.gl.readPixels(0, 0, width, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
@@ -1430,30 +1468,73 @@ export class Pipeline {
     flipY: boolean,
     original: boolean,
     dither: boolean,
-  ): void {
+  ): ColorSpaceName {
     const g = recipe.global;
     // The sharpening reach and the grain cell are fractions of the long edge —
     // a pixel of the proxy — at every size, unrounded and unfloored: anything
     // else makes the preview a promise the file does not keep.
     const scale = Math.max(width, height) / PROXY_LONG_EDGE;
+    const amounts: FinishAmounts = {
+      sharpen: original ? 0 : g.sharpen,
+      sharpenStep: [scale / width, scale / height],
+      clarity: original ? 0 : g.clarity,
+      glow: original ? 0 : g.glow.amount,
+      glowThreshold: g.glow.threshold,
+      grain: original ? 0 : g.grain.amount,
+      grainSize: g.grain.size * scale * 2,
+    };
+    return this.drawFinish(
+      graded.texture,
+      low.texture,
+      text,
+      amounts,
+      recipe.output.space,
+      target,
+      width,
+      height,
+      flipY,
+      dither,
+    );
+  }
+
+  /**
+   * Draw the finish shader into a destination and return the primaries it wrote.
+   *
+   * The one place the output transform's primaries are chosen, so that a byte
+   * target is never tagged with a space other than the one its values are in.
+   */
+  private drawFinish(
+    source: WebGLTexture,
+    low: WebGLTexture,
+    text: WebGLTexture | null,
+    amounts: FinishAmounts,
+    output: ColorSpaceName,
+    target: RenderTarget | null,
+    width: number,
+    height: number,
+    flipY: boolean,
+    dither: boolean,
+  ): ColorSpaceName {
+    const space = destinationSpace(target, output, this.glctx.wideGamut);
     this.programs.finish
       .bind()
-      .texture('uSource', graded.texture)
-      .texture('uLow', low.texture)
-      .texture('uText', text ?? graded.texture)
-      .float('uSharpen', original ? 0 : g.sharpen)
-      .vec2('uSharpenStep', scale / width, scale / height)
-      .float('uClarity', original ? 0 : g.clarity)
-      .float('uGlow', original ? 0 : g.glow.amount)
-      .float('uGlowThreshold', g.glow.threshold)
-      .float('uGrain', original ? 0 : g.grain.amount)
-      .float('uGrainSize', g.grain.size * scale * 2)
+      .texture('uSource', source)
+      .texture('uLow', low)
+      .texture('uText', text ?? source)
+      .float('uSharpen', amounts.sharpen)
+      .vec2('uSharpenStep', amounts.sharpenStep[0], amounts.sharpenStep[1])
+      .float('uClarity', amounts.clarity)
+      .float('uGlow', amounts.glow)
+      .float('uGlowThreshold', amounts.glowThreshold)
+      .float('uGrain', amounts.grain)
+      .float('uGrainSize', amounts.grainSize)
       .vec2('uResolution', width, height)
-      .int('uToSrgb', recipe.output.space === 'srgb' || !this.glctx.wideGamut ? 1 : 0)
+      .int('uToSrgb', space === 'srgb' ? 1 : 0)
       .int('uFlipY', flipY ? 1 : 0)
       .int('uDither', dither ? 1 : 0)
       .int('uHasText', text ? 1 : 0);
     this.glctx.draw(target, width, height);
+    return space;
   }
 }
 

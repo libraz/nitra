@@ -126,9 +126,13 @@ float bandWeight(int i, float hue) {
 export const GLSL_TONEMAP = `
 const float SHOULDER = 0.72;
 
+// tanh is 1 in single precision long before 15, and an implementation taking it
+// as a ratio of exponentials overflows to NaN past about 88.
+const float ROLLOFF_REACH = 15.0;
+
 vec3 toneMap(vec3 c) {
   vec3 over = max(c - SHOULDER, 0.0);
-  vec3 rolled = (1.0 - SHOULDER) * tanh(over / max(1.0 - SHOULDER, 1e-4));
+  vec3 rolled = (1.0 - SHOULDER) * tanh(min(over / max(1.0 - SHOULDER, 1e-4), ROLLOFF_REACH));
   return min(c, SHOULDER) + rolled;
 }
 `;

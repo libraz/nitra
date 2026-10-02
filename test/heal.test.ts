@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { type HealSpot, healSpot, regionFor } from '../src/core/heal/inpaint';
+import { type HealSpot, healSpot, healSpotTooSmall, regionFor } from '../src/core/heal/inpaint';
 import { inpaint } from '../src/core/heal/patchmatch';
 import { cutOut, pasteInto, type Region } from '../src/core/plate/region';
 
@@ -278,5 +278,86 @@ describe('filling a blemish', () => {
     const before = new Uint8ClampedArray(patch);
     expect(inpaint(patch, size, size, size / 2, size / 2, size, 1)).toBe(0);
     expect([...patch]).toEqual([...before]);
+  });
+});
+
+describe('the soft edge of a fill', () => {
+  const SIZE = 64;
+  const CENTRE = 32;
+  const RADIUS = 8;
+  const FEATHER = 2.8;
+
+  /** Mean absolute change in the red channel over the pixels a distance range picks out. */
+  function change(
+    before: Uint8ClampedArray,
+    after: Uint8ClampedArray,
+    from: number,
+    to: number,
+  ): { mean: number; changed: number; count: number } {
+    let total = 0;
+    let changed = 0;
+    let count = 0;
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        const d = Math.hypot(x + 0.5 - CENTRE, y + 0.5 - CENTRE);
+        if (d <= from || d >= to) continue;
+        const i = (y * SIZE + x) * 4;
+        const delta = Math.abs((after[i] as number) - (before[i] as number));
+        total += delta;
+        changed += delta > 0 ? 1 : 0;
+        count += 1;
+      }
+    }
+    return { mean: total / count, changed, count };
+  }
+
+  it('moves the pixels just outside the hole, by less than it moves the centre', () => {
+    const before = skin(SIZE, { cx: CENTRE, cy: CENTRE, r: 6 });
+    const after = new Uint8ClampedArray(before);
+    expect(inpaint(after, SIZE, SIZE, CENTRE, CENTRE, RADIUS, FEATHER)).toBeGreaterThan(0);
+
+    const centre = change(before, after, 0, RADIUS);
+    const band = change(before, after, RADIUS, RADIUS + FEATHER);
+    expect(band.count).toBeGreaterThan(20);
+    expect(band.changed / band.count).toBeGreaterThan(0.5);
+    expect(band.mean).toBeGreaterThan(0);
+    expect(band.mean).toBeLessThan(centre.mean);
+  });
+
+  it('fades towards the outside: the inner half of the band moves more than the outer', () => {
+    const before = skin(SIZE, { cx: CENTRE, cy: CENTRE, r: 6 });
+    const after = new Uint8ClampedArray(before);
+    inpaint(after, SIZE, SIZE, CENTRE, CENTRE, RADIUS, FEATHER);
+    const inner = change(before, after, RADIUS, RADIUS + FEATHER / 2);
+    const outer = change(before, after, RADIUS + FEATHER / 2, RADIUS + FEATHER);
+    expect(inner.mean).toBeGreaterThan(outer.mean);
+  });
+
+  it('leaves everything past the band untouched', () => {
+    const before = skin(SIZE, { cx: CENTRE, cy: CENTRE, r: 6 });
+    const after = new Uint8ClampedArray(before);
+    inpaint(after, SIZE, SIZE, CENTRE, CENTRE, RADIUS, FEATHER);
+    expect(change(before, after, RADIUS + FEATHER, Infinity).changed).toBe(0);
+  });
+});
+
+describe('the smallest spot the editor accepts', () => {
+  it('is exactly the smallest spot the fill acts on, wherever the centre falls', () => {
+    const width = 200;
+    const height = 60;
+    for (let px = 1; px <= 5; px += 0.1) {
+      for (const offset of [0, 0.25, 0.5, 0.75]) {
+        const spot: HealSpot = {
+          x: (100 + offset) / width,
+          y: (30 + offset) / height,
+          r: px / width,
+        };
+        const plate = new Uint8ClampedArray(width * height * 4);
+        for (let i = 0; i < plate.length; i++) plate[i] = (i * 37) % 251;
+        const filled = healSpot(plate, width, height, spot);
+        // Accepted means filled, refused means skipped: no spot is kept that changes nothing.
+        expect(healSpotTooSmall(spot.r, width)).toBe(filled === 0);
+      }
+    }
   });
 });

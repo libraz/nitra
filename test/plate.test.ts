@@ -8,12 +8,12 @@
  * is no inverse of a fill, so the pixels have to come from the decoded
  * photograph.
  *
- * The circles are asserted as an order and a re-application: they go over the
- * fills, they read what the stage under the plate left rather than the plate
- * itself, and a fill that reaches one has to run it again — otherwise a fill
- * lands under a circle the user blurred and puts sharp structure back inside
- * it. The amount is bookkeeping here too: changing it cannot be appended to
- * what is already in the plate.
+ * The circles are asserted as an order: they go over the fills, they read what
+ * the stage under the plate left rather than the plate itself, and a fill that
+ * reaches one starts the plate again — otherwise the fill would copy from
+ * pixels the circle had already blurred, and the same recipe would come out
+ * differently after a reload. The amount is bookkeeping here too: changing it
+ * cannot be appended to what is already in the plate.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -313,23 +313,39 @@ describe('the plate and the circles over it', () => {
     expect(meanAt(pixels, BESIDE)).toBeGreaterThan(meanAt(RESTORED, BESIDE) + 20);
   });
 
-  it('runs a circle again when a fill reaches it', () => {
+  it('rebuilds when a fill reaches a circle, and the ring keeps what it held', () => {
     const plate = new SourcePlate(RESTORED, SIZE, SIZE);
     plate.apply([CIRCLE, OTHER_CIRCLE], AMOUNT, []);
     const concealed = disc(plate.pixels as Uint8ClampedArray, CIRCLE);
 
+    // The fill searches the plate as it stands, so appending it would copy from
+    // pixels the circle has already blurred.
     const update = plate.apply([CIRCLE, OTHER_CIRCLE], AMOUNT, [UNDER]);
-    // Still the append path — the fill is not redone and the circles are not
-    // all replayed. What comes back is the fill's own rectangle and the one
-    // circle it reached; the other circle is not in the list, because nothing
-    // near it changed.
-    expect(update?.rebuilt).toBe(false);
-    expect(update?.rects).toEqual([
-      regionFor(UNDER, SIZE, SIZE).region,
-      concealRegion(CIRCLE, SIZE, SIZE, AMOUNT).written,
-    ]);
-    // And the ring holds what it held before the fill went under it.
+    expect(update?.rebuilt).toBe(true);
     expect(disc(plate.pixels as Uint8ClampedArray, CIRCLE)).toEqual(concealed);
+  });
+
+  it('comes out byte for byte the same whether a fill was appended or built from scratch', () => {
+    // Includes a fill under a circle, one in the reach of its blur and one clear
+    // of it, at both ends of the amount.
+    for (const base of [DECODED, RESTORED]) {
+      for (const amount of [AMOUNT, WIDE_AMOUNT]) {
+        for (const fill of [UNDER, AROUND, BESIDE]) {
+          const grown = new SourcePlate(base, SIZE, SIZE);
+          grown.apply([CIRCLE], amount, []);
+          grown.apply([CIRCLE], amount, [fill]);
+
+          const fresh = new SourcePlate(base, SIZE, SIZE);
+          fresh.apply([CIRCLE], amount, [fill]);
+
+          const label = `${JSON.stringify(fill)} at ${amount}`;
+          expect(
+            grown.pixels?.every((v, i) => v === (fresh.pixels as Uint8ClampedArray)[i]),
+            label,
+          ).toBe(true);
+        }
+      }
+    }
   });
 
   it('keeps a fill that sits outside a circle but inside its reach', () => {
@@ -345,7 +361,7 @@ describe('the plate and the circles over it', () => {
     const { region, written } = concealRegion(CIRCLE, SIZE, SIZE, WIDE_AMOUNT);
     expect(gap + AROUND.r * SIZE).toBeLessThan(region.x + region.width - CIRCLE.x * SIZE);
     // And the fill's own rectangle still meets the box the circle writes, which
-    // is what puts the circle back on the list below.
+    // is what makes the plate start again below.
     const reached = regionFor(AROUND, SIZE, SIZE).region;
     expect(reached.x).toBeLessThan(written.x + written.width);
     expect(written.x).toBeLessThan(reached.x + reached.width);
@@ -353,10 +369,9 @@ describe('the plate and the circles over it', () => {
     expect(written.y).toBeLessThan(reached.y + reached.height);
 
     const update = plate.apply([CIRCLE], WIDE_AMOUNT, [AROUND]);
-    // The circle is applied again — and what it writes must not take the fill
-    // with it.
-    expect(update?.rebuilt).toBe(false);
-    expect(update?.rects).toHaveLength(2);
+    // The circle is applied after the fill — and what it writes must not take
+    // the fill with it.
+    expect(update?.rebuilt).toBe(true);
     const pixels = plate.pixels as Uint8ClampedArray;
     expect(meanAt(pixels, AROUND)).toBeGreaterThan(meanAt(restored, AROUND) + 20);
   });
@@ -468,7 +483,7 @@ const TRANSITIONS: readonly {
     name: 'a circle to a fill under it',
     start: [[[CIRCLE], []]],
     next: [[CIRCLE], [UNDER]],
-    update: { rebuilt: false, rects: 2 },
+    update: { rebuilt: true, rects: 1 },
     copied: true,
   },
   {
@@ -482,7 +497,7 @@ const TRANSITIONS: readonly {
     name: 'a circle to a speck under it',
     start: [[[CIRCLE], []]],
     next: [[CIRCLE], [{ x: 0.3, y: 0.4, r: 0.002 }]],
-    update: { rebuilt: false, rects: 0 },
+    update: { rebuilt: true, rects: 0 },
     copied: true,
   },
   {

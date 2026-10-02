@@ -79,6 +79,8 @@ export interface FaceRegions {
   width: number;
   /** Centre of the face outline. */
   centre: Point;
+  /** Image height divided by width: the frame is `[0, 1] x [0, aspect]` in these units. */
+  aspect: number;
   /**
    * The mesh itself, for the one thing that needs a surface rather than an
    * outline: the normals the relighting works from.
@@ -357,6 +359,7 @@ export function faceRegions(landmarks: readonly NormalisedLandmark[], aspect: nu
     irises,
     width,
     centre,
+    aspect,
     surface: landmarks.slice(0, MESH_POINTS).map((l) => ({ x: l.x, y: l.y * aspect, z: l.z })),
     axes: { right, down },
   };

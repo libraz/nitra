@@ -494,3 +494,100 @@ describe('the measured magnitude the guardrail reports', () => {
     expect(RESHAPE_WARNING).toBeLessThan(everything);
   });
 });
+
+describe('the field away from the faces', () => {
+  /** The displacement the field shader computes at a place, mirrored on the CPU. */
+  function displacement(points: readonly ControlPoint[], at: Point): Point {
+    let sx = 0;
+    let sy = 0;
+    let weight = 0;
+    let peak = 0;
+    for (const p of points) {
+      const t = Math.hypot(at.x - p.centre.x, at.y - p.centre.y) / p.radius;
+      if (t >= 1) continue;
+      const w = 1 - t * t * (3 - 2 * t);
+      sx += p.delta.x * w;
+      sy += p.delta.y * w;
+      weight += w;
+      peak = Math.max(peak, w);
+    }
+    return weight > 0 ? { x: (sx / weight) * peak, y: (sy / weight) * peak } : { x: 0, y: 0 };
+  }
+
+  const everything = warpOf({
+    faceSlim: 1,
+    jawline: 1,
+    chin: 1,
+    eyeEnlarge: 1,
+    eyeTilt: 1,
+    noseNarrow: 1,
+    noseBridge: 1,
+    mouthWidth: 1,
+  });
+
+  it('leaves the border of the frame exactly where it is, for a face anywhere in it', () => {
+    const aspect = 0.75;
+    const border: Point[] = [];
+    for (let i = 0; i <= 200; i++) {
+      const u = i / 200;
+      border.push(
+        { x: u, y: 0 },
+        { x: u, y: aspect },
+        { x: 0, y: u * aspect },
+        { x: 1, y: u * aspect },
+      );
+    }
+    // Centres in the corners and on every edge, so outlines cross the frame.
+    const centres = [0.02, 0.5, 0.98].flatMap((x) => [0.02, 0.375, 0.73].map((y) => ({ x, y })));
+    for (const centre of centres) {
+      for (const width of [0.2, 0.5]) {
+        const regions = face({ centre, width, aspect });
+        expect(regions.aspect).toBeCloseTo(aspect, 9);
+        const { points } = warpControlPoints([regions], everything);
+        for (const at of border) {
+          const d = displacement(points, at);
+          expect(Math.hypot(d.x, d.y), JSON.stringify({ centre, width, at })).toBe(0);
+        }
+      }
+    }
+  });
+
+  it('still moves a face that sits well inside the frame as far as before', () => {
+    const regions = face({ centre: { x: 0.5, y: 0.5 }, width: 0.2 });
+    const { points } = warpControlPoints([regions], everything);
+    expect(points.every((p) => p.radius > 0)).toBe(true);
+    expect(points.some((p) => p.radius >= regions.width * 0.18 - 1e-9)).toBe(true);
+  });
+});
+
+describe('the outline of a crowded frame', () => {
+  it("leaves no stretch of the outline that moves outside every outline point's support", () => {
+    // A vertex of the outline that no support reaches stays put while its
+    // neighbours move, which is a dent. Only the outline sliders are raised, so
+    // every point in the field is an outline point.
+    const warp = warpOf({ faceSlim: 1, jawline: 1 });
+    for (let count = 1; count <= 6; count++) {
+      const faces = Array.from({ length: count }, (_, i) =>
+        face({ centre: { x: 0.1 + i * 0.15, y: 0.5 }, width: 0.06 - i * 0.004 }),
+      );
+      const { points, faces: reshaped } = warpControlPoints(faces, warp);
+      expect(reshaped).toBe(warpBudget(count).faces);
+      for (const regions of faces.slice(0, reshaped)) {
+        for (const vertex of regions.oval) {
+          const offset = { x: vertex.x - regions.centre.x, y: vertex.y - regions.centre.y };
+          const sideways = Math.abs(
+            offset.x * regions.axes.right.x + offset.y * regions.axes.right.y,
+          );
+          // Near the midline the pull is nothing, so there is nothing to carry.
+          if (sideways < 0.1 * regions.width) continue;
+          const reach = Math.min(
+            ...points.map(
+              (p) => Math.hypot(vertex.x - p.centre.x, vertex.y - p.centre.y) / p.radius,
+            ),
+          );
+          expect(reach, `${count} faces`).toBeLessThan(1);
+        }
+      }
+    }
+  });
+});

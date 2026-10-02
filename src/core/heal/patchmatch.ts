@@ -106,6 +106,32 @@ function holeOf(
 }
 
 /**
+ * The hole pixel a pixel of the soft edge borrows its fill from.
+ *
+ * One pixel in from the rim along the line to the centre, so it is always
+ * inside. Only `sqrt` and `floor`, which the language pins down.
+ *
+ * @returns Its index, or -1 when the hole has no pixel there.
+ */
+function nearestInside(
+  hole: Hole,
+  width: number,
+  height: number,
+  cx: number,
+  cy: number,
+  radius: number,
+  index: number,
+): number {
+  const dx = (index % width) + 0.5 - cx;
+  const dy = Math.floor(index / width) + 0.5 - cy;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  const scale = distance > 0 ? Math.max(radius - 1, 0) / distance : 0;
+  const x = Math.min(width - 1, Math.max(0, Math.floor(cx + dx * scale)));
+  const y = Math.min(height - 1, Math.max(0, Math.floor(cy + dy * scale)));
+  return hole.inside[y * width + x] ? y * width + x : -1;
+}
+
+/**
  * Which patch centres the search is allowed to copy from.
  *
  * Two conditions, and both matter. A patch that runs off the edge of the region
@@ -440,7 +466,9 @@ export function inpaint(
 
   // Back into the region, through the soft edge. The pixels outside the hole are
   // moved too, by as much of the fill as their coverage asks for, which is what
-  // keeps the join off the eye.
+  // keeps the join off the eye. A pixel of the edge takes its fill from the
+  // hole pixel one step in from it along the radius, since the fill itself only
+  // exists inside.
   //
   // Rounded and clamped here rather than left to the destination's own clamping:
   // a clamped array rounds halves to even, and the fill is specified to round
@@ -449,11 +477,15 @@ export function inpaint(
   for (let index = 0; index < count; index++) {
     const alpha = hole.coverage[index] as number;
     if (alpha <= 0) continue;
+    const from = hole.inside[index]
+      ? index
+      : nearestInside(hole, width, height, cx, cy, radius, index);
+    if (from < 0) continue;
     touched += 1;
     for (let channel = 0; channel < 3; channel++) {
       const at = index * 4 + channel;
       const was = pixels[at] as number;
-      const now = was + ((work[at] as number) - was) * alpha;
+      const now = was + ((work[from * 4 + channel] as number) - was) * alpha;
       pixels[at] = Math.min(255, Math.max(0, Math.round(now)));
     }
   }
