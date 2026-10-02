@@ -18,7 +18,8 @@ Working after the fact removes the frame-rate budget. Passes can be as expensive
 - Grades: exposure, contrast, highlight and shadow recovery, end points, white balance, vibrance and saturation, with a plot of the tone response those controls produce.
 - Scales saturation as Oklch chroma, with the gain attenuated inside the skin hue band. An HSV saturation multiplier rotates hue and drives skin into clipping ahead of everything else.
 - Adjusts hue, saturation and lightness per colour, across eight bands whose centres are derived from the primaries rather than typed in. Near-neutral pixels are left alone, because a grey sky has a hue only in the arithmetic sense.
-- Effects: split toning, monochrome with channel weights, matte fade, vignette, glow, sharpening, clarity, film grain, highlight rolloff, and dithering on the way down to eight bits.
+- Effects: split toning, monochrome with channel weights, matte fade, vignette, glow, sharpening, clarity and film grain.
+- Every render ends in the same output transform, untouched photos included: a soft highlight rolloff that sets scene white just under full scale rather than clipping it, then dithering on the way down to eight bits.
 - Fills a blemish where you click it. Skin from around the mark is copied in rather than smoothed over, so the pores come with it.
 - Blurs a bystander caught in a reflection — a corneal catchlight, a mirror, metal or glass — inside a circle you place. It is a blur filter run in a selection: the average reads the photograph around the circle so the edge does not show, and nothing outside the ring changes. The strength is a fraction of each circle's own radius, so one setting suits an eye and a mirror at once. One click on a detected iris places the circle at its width.
 - Retouches the person: skin, eyes, lips, teeth, cheeks, hair, the background behind them, one added light, and the shape of the face within a bound it reports (see below).
