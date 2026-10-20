@@ -16,6 +16,8 @@ import {
   apertureIndex,
   bokehRadius,
   bokehSize,
+  CLARITY_EPSILON,
+  CLARITY_RADIUS,
   clampRadius,
   faceFilterSize,
   type GradeUniforms,
@@ -28,10 +30,12 @@ import {
   isWarping,
   lowSize,
   MASK_EPSILON,
+  PROXY_LONG_EDGE,
   packControlPoints,
   partsUniforms,
   regionOf,
   relightUniforms,
+  sharpenSize,
   skinRadius,
   skinUniforms,
   subjectRadius,
@@ -166,12 +170,51 @@ export function drawGrade(
 }
 
 /**
+ * Down to a working size, halving at a time.
+ *
+ * One bilinear tap across a reduction of six is a point sample of six texels
+ * and it aliases; halving is the one ratio at which a bilinear tap is exactly
+ * the average of what it replaced. Doing it in steps is therefore not a
+ * refinement, it is the difference between a smooth average and a shimmering
+ * one — and between a preview and an export that agree, since the two reduce
+ * by different ratios to the same size. All four channels are carried, so a
+ * premultiplied weight survives it.
+ */
+function reduceTo(
+  ctx: PassContext,
+  input: RenderTarget,
+  width: number,
+  height: number,
+): RenderTarget {
+  let current = input;
+  // The first one belongs to the graph; every one after it is ours.
+  let owned = false;
+  while (current.width > width * 2 && current.height > height * 2) {
+    const next = ctx.glctx.pool.acquire(
+      Math.max(width, Math.round(current.width / 2)),
+      Math.max(height, Math.round(current.height / 2)),
+    );
+    ctx.programs.copy.bind().texture('uSource', current.texture);
+    ctx.glctx.draw(next, next.width, next.height);
+    if (owned) ctx.glctx.pool.release(current);
+    current = next;
+    owned = true;
+  }
+  const target = ctx.glctx.pool.acquire(width, height);
+  ctx.programs.copy.bind().texture('uSource', current.texture);
+  ctx.glctx.draw(target, width, height);
+  if (owned) ctx.glctx.pool.release(current);
+  return target;
+}
+
+/**
  * The graph.
  *
- * `low` is the chain that produces the blurred reference clarity and glow work
- * against. It is built at a fixed width so its radius is a constant fraction of
- * the image: the same recipe then means the same amount of local contrast
- * whether it is being previewed at 1024 pixels or exported at twelve megapixels.
+ * `low` is the blurred reference glow spreads, and `clarity` the guided
+ * filter's coefficients for the base clarity works against. Both are built at a
+ * fixed width so their radius is a constant fraction of the image: the same
+ * recipe then means the same amount of local contrast whether it is being
+ * previewed at 1024 pixels or exported at twelve megapixels.
  */
 export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   const ingest: DagNode<PassContext, RenderTarget, Recipe> = {
@@ -766,42 +809,16 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
   };
 
   /**
-   * Down to the size the convolution runs at, halving at a time.
-   *
-   * One bilinear tap across a reduction of six is a point sample of six texels
-   * and it aliases; halving is the one ratio at which a bilinear tap is exactly
-   * the average of what it replaced. Doing it in steps is therefore not a
-   * refinement, it is the difference between a smooth background and a
-   * shimmering one — and it doubles as the prefilter that closes the gaps
-   * between the gather's taps.
+   * Down to the size the convolution runs at, halving at a time — which doubles
+   * as the prefilter that closes the gaps between the gather's taps.
    */
   const bokehReduce: DagNode<PassContext, RenderTarget, Recipe> = {
     id: 'bokehReduce',
     inputs: ['bokehLift'],
     active: isDefocusing,
     signature: (recipe, ctx) => `bokehReduce:${bokehSize(recipe, ctx).join('x')}`,
-    evaluate: (ctx, [input], recipe) => {
-      const [width, height] = bokehSize(recipe, ctx);
-      let current = input as RenderTarget;
-      // The first one belongs to the graph; every one after it is ours.
-      let owned = false;
-      while (current.width > width * 2 && current.height > height * 2) {
-        const next = ctx.glctx.pool.acquire(
-          Math.max(width, Math.round(current.width / 2)),
-          Math.max(height, Math.round(current.height / 2)),
-        );
-        ctx.programs.copy.bind().texture('uSource', current.texture);
-        ctx.glctx.draw(next, next.width, next.height);
-        if (owned) ctx.glctx.pool.release(current);
-        current = next;
-        owned = true;
-      }
-      const target = ctx.glctx.pool.acquire(width, height);
-      ctx.programs.copy.bind().texture('uSource', current.texture);
-      ctx.glctx.draw(target, width, height);
-      if (owned) ctx.glctx.pool.release(current);
-      return target;
-    },
+    evaluate: (ctx, [input], recipe) =>
+      reduceTo(ctx, input as RenderTarget, ...bokehSize(recipe, ctx)),
   };
 
   /** The convolution: an aperture-shaped gather over the premultiplied frame. */
@@ -924,14 +941,7 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     id: 'lowSmall',
     inputs: ['grade'],
     signature: (_recipe, ctx) => `lowSmall:${lowSize(ctx).join('x')}`,
-    evaluate: (ctx, [input]) => {
-      const src = input as RenderTarget;
-      const [width, height] = lowSize(ctx);
-      const target = ctx.glctx.pool.acquire(width, height);
-      ctx.programs.copy.bind().texture('uSource', src.texture);
-      ctx.glctx.draw(target, width, height);
-      return target;
-    },
+    evaluate: (ctx, [input]) => reduceTo(ctx, input as RenderTarget, ...lowSize(ctx)),
   };
 
   const lowH: DagNode<PassContext, RenderTarget, Recipe> = {
@@ -961,6 +971,85 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
         .bind()
         .texture('uSource', src.texture)
         .vec2('uStep', 0, 1 / src.height);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  /** The proxy-sized copy sharpening reads, built only for a render larger than the proxy. */
+  const sharpenRef: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'sharpenRef',
+    inputs: ['grade'],
+    active: (recipe, ctx) =>
+      recipe.global.sharpen > 0 && Math.max(ctx.width, ctx.height) > PROXY_LONG_EDGE,
+    signature: (_recipe, ctx) => `sharpenRef:${sharpenSize(ctx).join('x')}`,
+    evaluate: (ctx, [input]) => reduceTo(ctx, input as RenderTarget, ...sharpenSize(ctx)),
+  };
+
+  const sharpen: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'sharpen',
+    inputs: ['sharpenRef'],
+    active: (recipe) => recipe.global.sharpen > 0,
+    signature: (_recipe, ctx) => `sharpen:${ctx.width}x${ctx.height}`,
+    evaluate: (ctx, [input]) => {
+      const src = input as RenderTarget;
+      // A pixel of the proxy, unrounded: one texel of the reduced copy, and a
+      // fraction of one on a render smaller than the proxy.
+      const scale = Math.max(ctx.width, ctx.height) / PROXY_LONG_EDGE;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.sharpenDetail
+        .bind()
+        .texture('uSource', src.texture)
+        .vec2('uStep', scale / ctx.width, scale / ctx.height);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  const clarityRadius = () => CLARITY_RADIUS;
+
+  /** Clarity's base: the reference's log luminance, through the same guided filter. */
+  const clarityGuide: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'clarityGuide',
+    inputs: ['lowSmall'],
+    signature: (_recipe, ctx) => `clarityGuide:${lowSize(ctx).join('x')}`,
+    evaluate: (ctx, [input]) => {
+      const src = input as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.clarityGuide.bind().texture('uSource', src.texture);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  const clarityDeviation: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'clarityDeviation',
+    inputs: ['clarityGuide', 'clarityMean'],
+    signature: (_recipe, ctx) => `clarityDeviation:${lowSize(ctx).join('x')}`,
+    evaluate: (ctx, [guide, mean]) => {
+      const src = guide as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceMaskDeviation
+        .bind()
+        .texture('uSource', src.texture)
+        .texture('uMean', (mean as RenderTarget).texture);
+      ctx.glctx.draw(target, src.width, src.height);
+      return target;
+    },
+  };
+
+  const clarityCoeff: DagNode<PassContext, RenderTarget, Recipe> = {
+    id: 'clarityCoeff',
+    inputs: ['clarityMean', 'clarityDeviationV'],
+    signature: () => `clarityCoeff:${CLARITY_EPSILON}`,
+    evaluate: (ctx, [mean, deviation]) => {
+      const src = mean as RenderTarget;
+      const target = ctx.glctx.pool.acquire(src.width, src.height);
+      ctx.programs.faceMaskCoeff
+        .bind()
+        .texture('uMean', src.texture)
+        .texture('uDeviation', (deviation as RenderTarget).texture)
+        .float('uEpsilon', CLARITY_EPSILON);
       ctx.glctx.draw(target, src.width, src.height);
       return target;
     },
@@ -1019,5 +1108,16 @@ export function buildNodes(): DagNode<PassContext, RenderTarget, Recipe>[] {
     lowSmall,
     lowH,
     low,
+    sharpenRef,
+    sharpen,
+    clarityGuide,
+    box('clarityMeanH', 'clarityGuide', 'x', clarityRadius),
+    box('clarityMean', 'clarityMeanH', 'y', clarityRadius),
+    clarityDeviation,
+    box('clarityDeviationH', 'clarityDeviation', 'x', clarityRadius),
+    box('clarityDeviationV', 'clarityDeviationH', 'y', clarityRadius),
+    clarityCoeff,
+    box('clarityCoeffH', 'clarityCoeff', 'x', clarityRadius),
+    box('clarity', 'clarityCoeffH', 'y', clarityRadius),
   ];
 }

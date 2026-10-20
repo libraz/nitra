@@ -21,8 +21,40 @@ import {
 } from '../recipe/schema';
 import type { PassContext } from './context';
 
+/** Longest edge of the interactive proxy. */
+export const PROXY_LONG_EDGE = 1024;
+
+/**
+ * Size of the copy sharpening reads its neighbourhood from: the proxy's.
+ *
+ * Sharpening's reach is a pixel of the proxy, and four taps that far apart on a
+ * larger render are a comb, not a blur. Read off a copy the proxy's size, a
+ * render past it is sharpened in exactly the band the preview showed and no
+ * finer.
+ */
+export function sharpenSize(ctx: PassContext): [number, number] {
+  const scale = Math.max(ctx.width, ctx.height) / PROXY_LONG_EDGE;
+  return [Math.max(1, Math.round(ctx.width / scale)), Math.max(1, Math.round(ctx.height / scale))];
+}
+
 /** Width the low-frequency reference is built at, whatever the image size. */
 export const LOW_FREQUENCY_WIDTH = 256;
+
+/**
+ * Window of the guided filter under clarity, in pixels of that reference.
+ *
+ * Two box passes of this reach about as far as the Gaussian glow reads.
+ */
+export const CLARITY_RADIUS = 2;
+
+/**
+ * The guided filter's threshold under clarity, in stops squared.
+ *
+ * On a step edge and a ±0.15-stop texture, 0.1 kept 96% of the texture gain a
+ * Gaussian base gave and left a third of the halo; 0.4 kept the halo's reach,
+ * 0.03 started taking the texture.
+ */
+export const CLARITY_EPSILON = 0.1;
 
 /**
  * Longest edge the guided filter behind the skin stage is computed at.

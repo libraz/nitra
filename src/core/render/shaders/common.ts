@@ -86,9 +86,42 @@ float skinHueWeight(float hue) {
   return 1.0 - smoothstep(0.0, 1.0, t);
 }
 
-// Interleaved gradient noise: one hash, no texture, and no visible tiling.
-float hashNoise(vec2 p) {
-  return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+// pcg2d (Jarzynski & Olano 2020): an integer hash with no structure to see.
+uvec2 pcg2d(uvec2 v) {
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1664525u;
+  v ^= v >> 16u;
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1664525u;
+  v ^= v >> 16u;
+  return v;
+}
+
+vec4 cubicBSpline(float t) {
+  float s = 1.0 - t;
+  return vec4(s * s * s, 4.0 - 6.0 * t * t + 3.0 * t * t * t, 1.0 + 3.0 * t + 3.0 * t * t - 3.0 * t * t * t, t * t * t) / 6.0;
+}
+
+// Band-limited noise: independent lattice values joined by a cubic B-spline,
+// divided by the root of the summed squared weights so the variance is the
+// same between lattice points as on them. Uniform on [-0.5, 0.5]'s spread.
+float latticeNoise(vec2 p, float spacing) {
+  vec2 q = p / spacing - 0.5;
+  vec2 i = floor(q);
+  vec4 wx = cubicBSpline(q.x - i.x);
+  vec4 wy = cubicBSpline(q.y - i.y);
+  float sum = 0.0;
+  float norm = 0.0;
+  for (int y = 0; y < 4; y++) {
+    for (int x = 0; x < 4; x++) {
+      float w = wx[x] * wy[y];
+      uvec2 h = pcg2d(uvec2(ivec2(i) + ivec2(x - 1, y - 1)));
+      sum += w * (float(h.x) / 4294967295.0 - 0.5);
+      norm += w * w;
+    }
+  }
+  return sum / sqrt(norm);
 }
 `;
 

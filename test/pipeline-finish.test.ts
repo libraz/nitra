@@ -6,7 +6,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SourceImage } from '../src/core/io/decode';
 import { neutralRecipe, type Recipe } from '../src/core/recipe/schema';
+import type { PassContext } from '../src/core/render/context';
 import { Pipeline } from '../src/core/render/pipeline';
+import { PROXY_LONG_EDGE, sharpenSize } from '../src/core/render/uniforms';
 import { fakeCanvas, fakeGl } from './gl-fake';
 
 function photo(width: number, height: number): SourceImage {
@@ -18,19 +20,14 @@ function photo(width: number, height: number): SourceImage {
   } as unknown as SourceImage;
 }
 
-/** Grain cell and sharpen step, each as a fraction of the render's long edge. */
-function relative(uniforms: Map<string, unknown[]>): { grain: number; sharpen: [number, number] } {
+/** Grain cell, as a fraction of the render's long edge. */
+function relative(uniforms: Map<string, unknown[]>): { grain: number } {
   const [width, height] = uniforms.get('uResolution') as [number, number];
-  const long = Math.max(width, height);
-  const [sx, sy] = uniforms.get('uSharpenStep') as [number, number];
-  return {
-    grain: (uniforms.get('uGrainSize') as [number])[0] / long,
-    sharpen: [(sx * width) / long, (sy * height) / long],
-  };
+  return { grain: (uniforms.get('uGrainSize') as [number])[0] / Math.max(width, height) };
 }
 
 describe('finish amounts across render sizes', () => {
-  it('keeps the grain cell and the sharpen reach the same fraction of the picture', () => {
+  it('keeps the grain cell the same fraction of the picture', () => {
     const fake = fakeGl();
     const pipeline = new Pipeline(fakeCanvas(fake.gl), () => ({ width: 800, height: 600 }));
     // Portrait, larger than the proxy, so every path below lands on a different size.
@@ -69,8 +66,23 @@ describe('finish amounts across render sizes', () => {
     const [first] = readings as [ReturnType<typeof relative>];
     for (const reading of readings) {
       expect(reading.grain).toBeCloseTo(first.grain, 9);
-      expect(reading.sharpen[0]).toBeCloseTo(first.sharpen[0], 9);
-      expect(reading.sharpen[1]).toBeCloseTo(first.sharpen[1], 9);
+    }
+  });
+
+  it('sharpens against a copy the size of the proxy, whatever the render', () => {
+    // The reach is a pixel of the proxy. Read off a copy that size, a larger
+    // render is sharpened in the band the preview showed: four taps that far
+    // apart on the export itself were a comb that doubled detail the preview
+    // never had.
+    for (const [width, height] of [
+      [4000, 3000],
+      [1500, 2000],
+      [1024, 683],
+      [200, 150],
+    ] as const) {
+      const [w, h] = sharpenSize({ width, height } as PassContext);
+      expect(Math.max(w, h)).toBe(PROXY_LONG_EDGE);
+      expect(w / h).toBeCloseTo(width / height, 2);
     }
   });
 });

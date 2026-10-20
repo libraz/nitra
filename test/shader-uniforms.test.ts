@@ -37,6 +37,8 @@ const PROGRAMS: Record<string, string> = {
   grade: passes.GRADE_FRAGMENT,
   blur: passes.BLUR_FRAGMENT,
   copy: passes.COPY_FRAGMENT,
+  clarityGuide: passes.CLARITY_GUIDE_FRAGMENT,
+  sharpenDetail: passes.SHARPEN_DETAIL_FRAGMENT,
   finish: passes.FINISH_FRAGMENT,
   subjectRaw: bokeh.SUBJECT_RAW_FRAGMENT,
   bokehLift: bokeh.BOKEH_LIFT_FRAGMENT,
@@ -473,6 +475,77 @@ describe('the stage shaders themselves', () => {
     // a rim of light, which is the artefact that gives the whole effect away.
     expect(bokeh.BOKEH_LIFT_FRAGMENT).toMatch(/colour \* lift \* background, background\)/);
     expect(bokeh.BOKEH_GATHER_FRAGMENT).toMatch(/total\.rgb \/ max\(total\.a/);
+    // And the reduction between them carries the weight: a copy that wrote an
+    // alpha of one left the gather dividing by its tap count after all.
+    expect(passes.COPY_FRAGMENT).toMatch(/fragColor = texture\(uSource, vUv\);/);
+  });
+
+  it('halves its way down to every reduced working copy', () => {
+    // One bilinear tap across a large reduction is a point sample: the
+    // low-frequency reference behind clarity and glow aliased a tenth of a
+    // fine pattern's amplitude at a 3000-pixel export and almost none in the
+    // preview, so the two disagreed. Both reductions go through the same steps.
+    expect(graphSource).toMatch(/id: 'bokehReduce'[\s\S]*?reduceTo\(ctx/);
+    expect(graphSource).toMatch(/id: 'lowSmall'[\s\S]*?reduceTo\(ctx/);
+  });
+
+  it('reduces at ingest through a filter laid on the output grid', () => {
+    // A trilinear fetch blends two box reductions and softens every export to a
+    // feed; the kernel follows the framed axes so a straightened frame is
+    // filtered along its own pixels, and a frame at its own size is untouched.
+    expect(passes.INGEST_FRAGMENT).toMatch(/vec2 stepX = dFdx\(uv\);/);
+    expect(passes.INGEST_FRAGMENT).toMatch(
+      /textureLod\(uSource, uv \+ u \* stepX \+ v \* stepY, lod\)/,
+    );
+    expect(passes.INGEST_FRAGMENT).toMatch(
+      /if \(ratio < 1\.05\) \{\s*c = texture\(uSource, uv\)\.rgb;/,
+    );
+  });
+
+  it('measures clarity against an edge-preserving base, not a blur', () => {
+    // An unsharp mask against the blurred reference laid a 1.2-stop dark band
+    // along a 3.6-stop step. The guided filter's coefficients are applied to the
+    // pixel's own luminance, so the base follows the edge the blur smeared.
+    expect(passes.FINISH_FRAGMENT).toMatch(
+      /vec2 ab = texture\(uDetail, uv\)\.rg;\s*float detail = clamp\(high - \(ab\.x \* high \+ ab\.y\)/,
+    );
+    expect(passes.FINISH_FRAGMENT).not.toMatch(/luma\(texture\(uLow/);
+    expect(graphSource).toMatch(/id: 'clarityGuide',\s*inputs: \['lowSmall'\]/);
+    expect(graphSource).toMatch(/id: 'clarityCoeff'[\s\S]*?\.float\('uEpsilon', CLARITY_EPSILON\)/);
+    expect(graphSource).toMatch(/box\('clarity', 'clarityCoeffH', 'y', clarityRadius\)/);
+  });
+
+  it('draws grain from a hash with no structure, joined without squares', () => {
+    // Interleaved gradient noise on square cells came out of an export as a
+    // checkerboard: the hash is built to spread its values evenly, and the cells
+    // were eight pixels wide at four thousand.
+    expect(passes.FINISH_FRAGMENT).toMatch(
+      /float n = latticeNoise\(gl_FragCoord\.xy, max\(uGrainSize, 0\.25\) \* 0\.5\);/,
+    );
+    expect(GLSL_COLOR).toMatch(/uvec2 h = pcg2d\(uvec2\(ivec2\(i\) \+ ivec2\(x - 1, y - 1\)\)\);/);
+    expect(GLSL_COLOR).toMatch(/return sum \/ sqrt\(norm\);/);
+  });
+
+  it('sharpens a larger render from the proxy-sized copy', () => {
+    // Built only past the proxy's size, so the proxy itself is sharpened from
+    // its own pixels, and brought up through an interpolating filter: bilinear
+    // gave back half of the top octave the preview had shown.
+    expect(graphSource).toMatch(
+      /id: 'sharpenRef',[\s\S]*?Math\.max\(ctx\.width, ctx\.height\) > PROXY_LONG_EDGE[\s\S]*?reduceTo\(ctx, input as RenderTarget, \.\.\.sharpenSize\(ctx\)\)/,
+    );
+    expect(graphSource).toMatch(/id: 'sharpen',\s*inputs: \['sharpenRef'\]/);
+    expect(passes.FINISH_FRAGMENT).toMatch(/float detail = catmullRom\(uSharpenDetail, uv\);/);
+    expect(passes.FINISH_FRAGMENT).not.toMatch(/texture\(uSource, uv \+/);
+  });
+
+  it('dithers from two draws that are independent of each other', () => {
+    // Two interleaved-gradient draws at offset positions correlate at 0.68, so
+    // their sum was not triangular and the error's variance swung from 0.25 to
+    // 0.44 of a code with the level. The two halves of one hash do not.
+    expect(passes.FINISH_FRAGMENT).toMatch(
+      /vec2 n = vec2\(pcg2d\(uvec2\(gl_FragCoord\.xy\)\)\) \/ 4294967295\.0;\s*encoded \+= \(n\.x \+ n\.y - 1\.0\) \/ 255\.0;/,
+    );
+    expect(GLSL_COLOR).not.toMatch(/hashNoise/);
   });
 
   it('asks two questions of a grey strand and one of a sheen', () => {

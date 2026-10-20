@@ -18,13 +18,21 @@ import { GLSL_COLOR, GLSL_HEADER, GLSL_HUE_BANDS, GLSL_TONEMAP } from './common'
  * Ingest: source pixels to the linear Display-P3 working space, framed.
  *
  * Flips, rotation, straightening and the crop arrive as one matrix taking the
- * output coordinate back to the source, so the sampler does the whole framing in
- * a single fetch. Resampling here rather than later means it happens in linear
+ * output coordinate back to the source, so the framing is one resample. Resampling here rather than later means it happens in linear
  * light, before anything has been graded — resampling display-encoded pixels
  * darkens every edge it touches.
  *
  * The transfer function is already undone by the texture's sRGB internal format,
  * so all that is left is the change of primaries.
+ *
+ * Reducing, the frame is a Lanczos-2 filter laid on the output grid: 8x8 taps
+ * half an output pixel apart, along whatever direction the framing turned an
+ * output pixel into, each read from the mip level no coarser than that spacing.
+ * A single trilinear fetch blends two box reductions, which on a zone plate
+ * reduced 3.3x kept 80% of the amplitude just under Nyquist and let 56% through
+ * just over it; the filter is what a reduction for a feed should look like.
+ * Within a few per cent of the source size the fetch is left as it was, so a
+ * frame at its own size comes out pixel for pixel.
  */
 export const INGEST_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
@@ -32,15 +40,50 @@ uniform sampler2D uSource;
 uniform mat3 uGeometry;
 uniform int uFromSrgb;
 
+float lanczos2(float x) {
+  x = abs(x);
+  if (x >= 2.0) return 0.0;
+  if (x < 1e-4) return 1.0;
+  float p = 3.14159265 * x;
+  return 2.0 * sin(p) * sin(p * 0.5) / (p * p);
+}
+
 void main() {
   vec2 uv = (uGeometry * vec3(vUv, 1.0)).xy;
-  vec3 c = texture(uSource, uv).rgb;
+  // One output pixel, in source coordinates. The framing is affine, so these
+  // are exact and the same everywhere.
+  vec2 stepX = dFdx(uv);
+  vec2 stepY = dFdy(uv);
+  vec2 size = vec2(textureSize(uSource, 0));
+  float ratio = max(length(stepX * size), length(stepY * size));
+
+  vec3 c;
+  if (ratio < 1.05) {
+    c = texture(uSource, uv).rgb;
+  } else {
+    float lod = max(0.0, floor(log2(ratio * 0.5)));
+    vec3 sum = vec3(0.0);
+    float total = 0.0;
+    for (int i = 0; i < 8; i++) {
+      float u = (float(i) - 3.5) * 0.5;
+      float wu = lanczos2(u);
+      for (int j = 0; j < 8; j++) {
+        float v = (float(j) - 3.5) * 0.5;
+        float w = wu * lanczos2(v);
+        sum += w * textureLod(uSource, uv + u * stepX + v * stepY, lod).rgb;
+        total += w;
+      }
+    }
+    // The negative lobes can take a pixel beside a highlight below zero, and
+    // there is no light below zero.
+    c = max(sum / total, 0.0);
+  }
   if (uFromSrgb == 1) c = SRGB_TO_P3 * c;
   fragColor = vec4(c, 1.0);
 }
 `;
 
-/** Separable Gaussian, used for the low-frequency reference clarity works against. */
+/** Separable Gaussian, used for the low-frequency reference glow spreads. */
 export const BLUR_FRAGMENT = `${GLSL_HEADER}
 uniform sampler2D uSource;
 uniform vec2 uStep;
@@ -61,11 +104,56 @@ void main() {
 }
 `;
 
-/** Plain resample, for building the reduced-resolution copies. */
+/**
+ * The guide clarity's base is filtered by: log luminance, twice.
+ *
+ * Guide and signal are the same thing here, in the two channels the guided
+ * filter's deviation and coefficient passes read them from.
+ */
+export const CLARITY_GUIDE_FRAGMENT = `${GLSL_HEADER}
+${GLSL_COLOR}
+uniform sampler2D uSource;
+
+void main() {
+  float l = log2(max(luma(texture(uSource, vUv).rgb), 1e-4));
+  fragColor = vec4(l, l, 0.0, 1.0);
+}
+`;
+
+/**
+ * Sharpening's detail: log luminance against the four neighbours a proxy pixel
+ * away. Luminance only — sharpening the channels separately pulls them apart at
+ * every edge, which is the coloured fringe that gives away an over-processed
+ * photo.
+ */
+export const SHARPEN_DETAIL_FRAGMENT = `${GLSL_HEADER}
+${GLSL_COLOR}
+uniform sampler2D uSource;
+uniform vec2 uStep;
+
+void main() {
+  vec3 around = (
+    texture(uSource, vUv + vec2(uStep.x, 0.0)).rgb +
+    texture(uSource, vUv - vec2(uStep.x, 0.0)).rgb +
+    texture(uSource, vUv + vec2(0.0, uStep.y)).rgb +
+    texture(uSource, vUv - vec2(0.0, uStep.y)).rgb
+  ) * 0.25;
+  float centre = luma(texture(uSource, vUv).rgb);
+  fragColor = vec4(log2(max(centre, 1e-4)) - log2(max(luma(around), 1e-4)), 0.0, 0.0, 1.0);
+}
+`;
+
+/**
+ * Plain resample, for building the reduced-resolution copies.
+ *
+ * All four channels: the defocus reduces a premultiplied frame whose alpha is
+ * the background weight, and a copy that wrote one there made the gather divide
+ * by the tap count, darkening the background towards every subject edge.
+ */
 export const COPY_FRAGMENT = `${GLSL_HEADER}
 uniform sampler2D uSource;
 void main() {
-  fragColor = vec4(texture(uSource, vUv).rgb, 1.0);
+  fragColor = texture(uSource, vUv);
 }
 `;
 
@@ -266,21 +354,30 @@ void main() {
 /**
  * Finish: sharpening, clarity, glow, grain, rolloff, output transform, text.
  *
- * Clarity is an unsharp mask in log luminance against a heavily reduced copy, so
- * its radius is a fraction of the image rather than a pixel count and survives
- * the move from proxy to full resolution unchanged. Sharpening is the opposite
+ * Clarity is local contrast in log luminance against a base computed on a
+ * heavily reduced copy, so its radius is a fraction of the image rather than a
+ * pixel count and survives the move from proxy to full resolution unchanged.
+ * The base is a guided filter's (He et al. 2013), its coefficients upsampled and
+ * applied against this pixel's own luminance (He & Sun 2015): an unsharp mask
+ * against a blur rings at every strong edge: on a 3.6-stop step at full
+ * clarity a Gaussian base laid a 1.2-stop dark band, this one 0.35 of a stop,
+ * and a third of the halo summed over its width. Sharpening is the opposite
  * by design: it works on adjacent pixels, so its radius is scaled with the
- * render size to keep the preview honest about what the export will look like.
+ * render size to keep the preview honest about what the export will look like,
+ * and read off a copy the proxy's size: four taps a proxy pixel apart on a
+ * larger frame are a comb, and on a 4096-pixel export they doubled detail the
+ * preview could not show.
  */
 export const FINISH_FRAGMENT = `${GLSL_HEADER}
 ${GLSL_COLOR}
 ${GLSL_TONEMAP}
 uniform sampler2D uSource;
 uniform sampler2D uLow;
+uniform sampler2D uDetail;
+uniform sampler2D uSharpenDetail;
 uniform sampler2D uText;
 
 uniform float uSharpen;
-uniform vec2  uSharpenStep;
 uniform float uClarity;
 uniform float uGlow;
 uniform float uGlowThreshold;
@@ -292,33 +389,49 @@ uniform int   uFlipY;
 uniform int   uDither;
 uniform int   uHasText;
 
+// Catmull-Rom over sixteen texels: interpolating, so a frame read at its own
+// texel centres comes back exactly, and it keeps the top octave a bilinear
+// reconstruction halves.
+float catmullRom(sampler2D t, vec2 uv) {
+  ivec2 size = textureSize(t, 0);
+  vec2 p = uv * vec2(size) - 0.5;
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+  vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+  vec2 w3 = f * f * (-0.5 + 0.5 * f);
+  float wx[4] = float[4](w0.x, w1.x, w2.x, w3.x);
+  float wy[4] = float[4](w0.y, w1.y, w2.y, w3.y);
+  float sum = 0.0;
+  for (int y = 0; y < 4; y++) {
+    for (int x = 0; x < 4; x++) {
+      ivec2 at = clamp(ivec2(i) + ivec2(x - 1, y - 1), ivec2(0), size - 1);
+      sum += wx[x] * wy[y] * texelFetch(t, at, 0).r;
+    }
+  }
+  return sum;
+}
+
 void main() {
   vec2 uv = uFlipY == 1 ? vec2(vUv.x, 1.0 - vUv.y) : vUv;
   vec3 c = texture(uSource, uv).rgb;
 
-  // Sharpening acts on luminance only. Sharpening the channels separately pulls
-  // them apart at every edge, which is the coloured fringe that gives away an
-  // over-processed photo.
+  // Sharpening, measured on the proxy-sized copy and brought up to this size.
   if (uSharpen > 1e-4) {
-    vec3 around = (
-      texture(uSource, uv + vec2(uSharpenStep.x, 0.0)).rgb +
-      texture(uSource, uv - vec2(uSharpenStep.x, 0.0)).rgb +
-      texture(uSource, uv + vec2(0.0, uSharpenStep.y)).rgb +
-      texture(uSource, uv - vec2(0.0, uSharpenStep.y)).rgb
-    ) * 0.25;
-    float detail = log2(max(luma(c), 1e-4)) - log2(max(luma(around), 1e-4));
+    float detail = catmullRom(uSharpenDetail, uv);
     c *= exp2(clamp(detail, -1.0, 1.0) * uSharpen * 1.2);
   }
 
   if (abs(uClarity) > 1e-4) {
     float high = log2(max(luma(c), 1e-4));
-    float low = log2(max(luma(texture(uLow, uv).rgb), 1e-4));
-    float detail = clamp(high - low, -1.5, 1.5);
+    vec2 ab = texture(uDetail, uv).rg;
+    float detail = clamp(high - (ab.x * high + ab.y), -1.5, 1.5);
     c *= exp2(detail * uClarity * 0.8);
   }
 
-  // Glow reuses the low-frequency copy clarity works against: the bright parts
-  // of a blurred image are exactly the bloom a diffusion filter spreads.
+  // Glow reads the low-frequency copy: the bright parts of a blurred image are
+  // exactly the bloom a diffusion filter spreads.
   if (uGlow > 1e-4) {
     vec3 bloom = max(texture(uLow, uv).rgb - decodeChannel(uGlowThreshold), 0.0);
     c += bloom * uGlow * 1.3;
@@ -326,10 +439,11 @@ void main() {
 
   // Grain goes on last of the picture operations: added earlier, the smoothing
   // stages downstream would take it straight back out. It is monochrome and
-  // weighted towards the midtones, where real film grain is most visible.
+  // weighted towards the midtones, where real film grain is most visible. The
+  // lattice is half the grain size because a cubic B-spline's spread is twice a
+  // box's: a grain is as wide as the square cell it replaced, without the square.
   if (uGrain > 1e-4) {
-    vec2 cell = gl_FragCoord.xy / max(uGrainSize, 0.25);
-    float n = hashNoise(floor(cell)) - 0.5;
+    float n = latticeNoise(gl_FragCoord.xy, max(uGrainSize, 0.25) * 0.5);
     float y = clamp(luma(c), 0.0, 1.0);
     float weight = 4.0 * y * (1.0 - y);
     c += n * uGrain * 0.12 * weight;
@@ -350,13 +464,15 @@ void main() {
 
   vec3 encoded = encodeTransfer(clamp(c, 0.0, 1.0));
 
-  // Triangular-PDF dither at half a code value. Sixteen bits of processing end
-  // up in eight, and without this the gradients that survived the pipeline band
-  // at the very last step.
+  // Triangular-PDF dither, a code value either way. Sixteen bits of processing
+  // end up in eight, and without this the gradients that survived the pipeline
+  // band at the very last step. The two draws are the hash's two independent
+  // halves: two interleaved-gradient draws at offset positions correlate at
+  // 0.68, and the error's variance then swung from 0.25 to 0.44 of a code with
+  // the level's fraction — noise that comes and goes in stripes down a gradient.
   if (uDither == 1) {
-    float n1 = hashNoise(gl_FragCoord.xy);
-    float n2 = hashNoise(gl_FragCoord.xy + vec2(17.0, 31.0));
-    encoded += (n1 + n2 - 1.0) / 255.0;
+    vec2 n = vec2(pcg2d(uvec2(gl_FragCoord.xy))) / 4294967295.0;
+    encoded += (n.x + n.y - 1.0) / 255.0;
   }
 
   fragColor = vec4(clamp(encoded, 0.0, 1.0), 1.0);

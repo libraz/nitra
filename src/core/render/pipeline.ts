@@ -99,10 +99,12 @@ import { HAIR_FRAGMENT, HAIR_RAW_FRAGMENT } from './shaders/hair';
 import { RELIGHT_FRAGMENT } from './shaders/light';
 import {
   BLUR_FRAGMENT,
+  CLARITY_GUIDE_FRAGMENT,
   COPY_FRAGMENT,
   FINISH_FRAGMENT,
   GRADE_FRAGMENT,
   INGEST_FRAGMENT,
+  SHARPEN_DETAIL_FRAGMENT,
 } from './shaders/passes';
 import {
   clampRadius,
@@ -111,6 +113,7 @@ import {
   gradeUniforms,
   isWarping,
   MASK_EPSILON,
+  PROXY_LONG_EDGE,
   rectOf,
 } from './uniforms';
 
@@ -123,13 +126,9 @@ export type {
   RestoreReport,
 } from './context';
 
-/** Longest edge of the interactive proxy. */
-export const PROXY_LONG_EDGE = 1024;
-
 /** What the finish shader does to the picture ahead of the output transform. */
 interface FinishAmounts {
   sharpen: number;
-  sharpenStep: [number, number];
   clarity: number;
   glow: number;
   glowThreshold: number;
@@ -140,7 +139,6 @@ interface FinishAmounts {
 /** Every finish operation off, for probes that read a level rather than a picture. */
 const FINISH_OFF: FinishAmounts = {
   sharpen: 0,
-  sharpenStep: [0, 0],
   clarity: 0,
   glow: 0,
   glowThreshold: 1,
@@ -284,6 +282,8 @@ export class Pipeline {
       grade: Program.create(this.gl, GRADE_FRAGMENT),
       blur: Program.create(this.gl, BLUR_FRAGMENT),
       copy: Program.create(this.gl, COPY_FRAGMENT),
+      clarityGuide: Program.create(this.gl, CLARITY_GUIDE_FRAGMENT),
+      sharpenDetail: Program.create(this.gl, SHARPEN_DETAIL_FRAGMENT),
       finish: Program.create(this.gl, FINISH_FRAGMENT),
       boxBlur: Program.create(this.gl, BOX_BLUR_FRAGMENT),
       faceMean: Program.create(this.gl, FACE_MEAN_FRAGMENT),
@@ -888,6 +888,8 @@ export class Pipeline {
       ? this.dag.evaluate(ctx, recipe, 'ingest', variant)
       : this.dag.evaluate(ctx, recipe, 'grade', variant);
     const low = original ? graded : this.dag.evaluate(ctx, recipe, 'low', variant);
+    const detail = original ? graded : this.dag.evaluate(ctx, recipe, 'clarity', variant);
+    const sharp = original ? graded : this.dag.evaluate(ctx, recipe, 'sharpen', variant);
 
     const dpr = Math.min(2, globalThis.devicePixelRatio || 1);
     const box = this.measureViewport();
@@ -922,6 +924,8 @@ export class Pipeline {
       recipe,
       graded,
       low,
+      detail,
+      sharp,
       text,
       null,
       bufferWidth,
@@ -946,6 +950,8 @@ export class Pipeline {
     const variant = canvasRole('full', false, false);
     const graded = this.dag.evaluate(ctx, recipe, 'grade', variant);
     const low = this.dag.evaluate(ctx, recipe, 'low', variant);
+    const detail = this.dag.evaluate(ctx, recipe, 'clarity', variant);
+    const sharp = this.dag.evaluate(ctx, recipe, 'sharpen', variant);
     const text = this.syncText(recipe, spec.width, spec.height);
 
     const target = this.acquireByteTarget(spec.width, spec.height);
@@ -953,6 +959,8 @@ export class Pipeline {
       recipe,
       graded,
       low,
+      detail,
+      sharp,
       text,
       target,
       spec.width,
@@ -991,12 +999,16 @@ export class Pipeline {
     const variant = 'thumbnail';
     const graded = this.dag.evaluate(ctx, recipe, 'grade', variant);
     const low = this.dag.evaluate(ctx, recipe, 'low', variant);
+    const detail = this.dag.evaluate(ctx, recipe, 'clarity', variant);
+    const sharp = this.dag.evaluate(ctx, recipe, 'sharpen', variant);
 
     const target = this.acquireByteTarget(width, height);
     const space = this.runFinish(
       recipe,
       graded,
       low,
+      detail,
+      sharp,
       null,
       target,
       width,
@@ -1032,11 +1044,26 @@ export class Pipeline {
     const variant = 'measure';
     const graded = this.dag.evaluate(ctx, recipe, 'grade', variant);
     const low = this.dag.evaluate(ctx, recipe, 'low', variant);
+    const detail = this.dag.evaluate(ctx, recipe, 'clarity', variant);
+    const sharp = this.dag.evaluate(ctx, recipe, 'sharpen', variant);
 
     const target = this.acquireByteTarget(width, height);
     // Undithered: the readings count codes, and noise across a threshold is
     // noise in the count.
-    this.runFinish(recipe, graded, low, null, target, width, height, false, false, false);
+    this.runFinish(
+      recipe,
+      graded,
+      low,
+      detail,
+      sharp,
+      null,
+      target,
+      width,
+      height,
+      false,
+      false,
+      false,
+    );
 
     const pixels = new Uint8Array(width * height * 4);
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
@@ -1259,6 +1286,8 @@ export class Pipeline {
     this.drawFinish(
       graded.texture,
       graded.texture,
+      graded.texture,
+      graded.texture,
       null,
       FINISH_OFF,
       recipe.output.space,
@@ -1291,7 +1320,20 @@ export class Pipeline {
     const width = 256;
     const ramp = this.rampTexture();
     const target = this.acquireByteTarget(width, 1);
-    this.drawFinish(ramp, ramp, null, FINISH_OFF, 'display-p3', target, width, 1, false, false);
+    this.drawFinish(
+      ramp,
+      ramp,
+      ramp,
+      ramp,
+      null,
+      FINISH_OFF,
+      'display-p3',
+      target,
+      width,
+      1,
+      false,
+      false,
+    );
     const pixels = new Uint8Array(width * 4);
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, target.framebuffer);
     this.gl.readPixels(0, 0, width, 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, pixels);
@@ -1467,6 +1509,8 @@ export class Pipeline {
     recipe: Recipe,
     graded: RenderTarget,
     low: RenderTarget,
+    detail: RenderTarget,
+    sharp: RenderTarget,
     text: WebGLTexture | null,
     target: RenderTarget | null,
     width: number,
@@ -1476,13 +1520,12 @@ export class Pipeline {
     dither: boolean,
   ): ColorSpaceName {
     const g = recipe.global;
-    // The sharpening reach and the grain cell are fractions of the long edge —
-    // a pixel of the proxy — at every size, unrounded and unfloored: anything
-    // else makes the preview a promise the file does not keep.
+    // The grain cell is a fraction of the long edge — a pixel of the proxy — at
+    // every size, unrounded and unfloored, as the sharpening reach is in its own
+    // pass: anything else makes the preview a promise the file does not keep.
     const scale = Math.max(width, height) / PROXY_LONG_EDGE;
     const amounts: FinishAmounts = {
       sharpen: original ? 0 : g.sharpen,
-      sharpenStep: [scale / width, scale / height],
       clarity: original ? 0 : g.clarity,
       glow: original ? 0 : g.glow.amount,
       glowThreshold: g.glow.threshold,
@@ -1492,6 +1535,8 @@ export class Pipeline {
     return this.drawFinish(
       graded.texture,
       low.texture,
+      detail.texture,
+      sharp.texture,
       text,
       amounts,
       recipe.output.space,
@@ -1512,6 +1557,8 @@ export class Pipeline {
   private drawFinish(
     source: WebGLTexture,
     low: WebGLTexture,
+    detail: WebGLTexture,
+    sharp: WebGLTexture,
     text: WebGLTexture | null,
     amounts: FinishAmounts,
     output: ColorSpaceName,
@@ -1526,9 +1573,10 @@ export class Pipeline {
       .bind()
       .texture('uSource', source)
       .texture('uLow', low)
+      .texture('uDetail', detail)
+      .texture('uSharpenDetail', sharp)
       .texture('uText', text ?? source)
       .float('uSharpen', amounts.sharpen)
-      .vec2('uSharpenStep', amounts.sharpenStep[0], amounts.sharpenStep[1])
       .float('uClarity', amounts.clarity)
       .float('uGlow', amounts.glow)
       .float('uGlowThreshold', amounts.glowThreshold)

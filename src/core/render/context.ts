@@ -190,6 +190,8 @@ export interface Programs {
   grade: Program;
   blur: Program;
   copy: Program;
+  clarityGuide: Program;
+  sharpenDetail: Program;
   finish: Program;
   boxBlur: Program;
   faceMean: Program;
