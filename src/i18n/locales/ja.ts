@@ -454,6 +454,8 @@ export const ja: Messages = {
   'output.quality': '画質',
   'output.longEdge': '長辺の上限',
   'output.longEdgeFree': '元のサイズ',
+  'output.deviceLimited':
+    'このブラウザはこれより大きいファイルを書き出せないため、書き出せる最大の大きさに縮小しています。',
   'output.longEdgeNote':
     '1 ファイルあたりの長辺の上限です。これより小さい写真はそのままのサイズで書き出し、引き伸ばしません。',
   'output.result': '1 ファイルあたり',
@@ -534,6 +536,8 @@ export const ja: Messages = {
 
   'toast.loaded': '{name} を読み込みました — {width}×{height}',
   'toast.loadedRotated': '{name} を読み込みました — {width}×{height}（EXIF の回転を適用）',
+  'toast.loadedReduced':
+    '{name} を {width}×{height} で読み込みました — {fromWidth}×{fromHeight} はこの端末で編集できる大きさを超えるため縮小しています',
   'toast.loadFailed': 'この写真は読み込めませんでした',
   'toast.lookApplied': '{name} を適用しました',
   'toast.autoApplied': '自動解析 — {notes}',

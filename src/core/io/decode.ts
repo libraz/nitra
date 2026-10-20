@@ -17,6 +17,7 @@ import {
   readImageOrientation,
   type SourceExif,
 } from './exif';
+import { shrinkToFit } from './shrink';
 import { detectFormat } from './strip-metadata';
 
 export interface SourceImage {
@@ -37,6 +38,8 @@ export interface SourceImage {
   exif: SourceExif;
   fileName: string;
   byteSize: number;
+  /** The decoded size when it was over the size the GPU holds and was brought down to it. */
+  reducedFrom: { width: number; height: number } | null;
 }
 
 type Canvas2D = OffscreenCanvas | HTMLCanvasElement;
@@ -256,8 +259,16 @@ async function decodeHeif(
 }
 
 /**
- * Draw a decoded source into a canvas of the working encoding, applying the
- * orientation transform on the way in.
+ * Pixels a single readback canvas may cover.
+ *
+ * Mobile Safari refuses a 2D canvas past about sixteen million pixels, which a
+ * phone's own photographs exceed, so the upright image is read out in bands.
+ */
+const DECODE_BAND_PIXELS = 4_000_000;
+
+/**
+ * Draw a decoded source into the working encoding, applying the orientation
+ * transform on the way in.
  */
 function drawUpright(
   source: CanvasImageSource,
@@ -265,21 +276,30 @@ function drawUpright(
   sourceHeight: number,
   orientation: Orientation,
   space: ColorSpaceName,
-): ImageData {
+): { data: Uint8ClampedArray; width: number; height: number } {
   const swap = orientationSwapsAxes(orientation);
   const width = swap ? sourceHeight : sourceWidth;
   const height = swap ? sourceWidth : sourceHeight;
 
-  const canvas = makeCanvas(width, height);
+  const band = Math.max(1, Math.min(height, Math.floor(DECODE_BAND_PIXELS / width)));
+  const canvas = makeCanvas(width, band);
   const ctx = context2d(canvas, space);
   if (!ctx) throw new Error('2D canvas unavailable');
 
   // The matrix maps stored pixels onto upright ones; its translation is a
   // fraction of the output size.
   const [a, b, c, d, tx, ty] = orientationMatrix(orientation);
-  ctx.transform(a, b, c, d, tx * width, ty * height);
-  ctx.drawImage(source, 0, 0);
-  return ctx.getImageData(0, 0, width, height, { colorSpace: space });
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let top = 0; top < height; top += band) {
+    const rows = Math.min(band, height - top);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, width, band);
+    ctx.translate(0, -top);
+    ctx.transform(a, b, c, d, tx * width, ty * height);
+    ctx.drawImage(source, 0, 0);
+    data.set(ctx.getImageData(0, 0, width, rows, { colorSpace: space }).data, top * width * 4);
+  }
+  return { data, width, height };
 }
 
 /**
@@ -287,8 +307,15 @@ function drawUpright(
  *
  * Format is decided by the magic bytes rather than the name, because a photo
  * copied off a phone routinely arrives as `.jpg` holding HEIF.
+ *
+ * @param maxEdge Longest edge the result may have; a larger photo is reduced to
+ *   it. The photo's caller passes the GPU's texture limit.
  */
-export async function decodeSourceFile(file: File | Blob, fileName: string): Promise<SourceImage> {
+export async function decodeSourceFile(
+  file: File | Blob,
+  fileName: string,
+  maxEdge = Number.POSITIVE_INFINITY,
+): Promise<SourceImage> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const space: ColorSpaceName = canvasSupportsP3() ? 'display-p3' : 'srgb';
 
@@ -326,7 +353,7 @@ export async function decodeSourceFile(file: File | Blob, fileName: string): Pro
     // are carried as the space the file names and converted at ingest.
     const decoded = await decodeHeif(bytes);
     return {
-      ...decoded,
+      ...withinEdge(decoded, maxEdge),
       space: heifColorSpace(bytes),
       orientation: 1,
       exif,
@@ -335,17 +362,28 @@ export async function decodeSourceFile(file: File | Blob, fileName: string): Pro
     };
   }
 
-  const imageData = drawUpright(source, width, height, orientation, space);
+  const upright = drawUpright(source, width, height, orientation, space);
   if ('close' in source && typeof source.close === 'function') source.close();
 
   return {
-    width: imageData.width,
-    height: imageData.height,
-    data: imageData.data,
+    ...withinEdge(upright, maxEdge),
     space,
     orientation,
     exif,
     fileName,
     byteSize: bytes.length,
+  };
+}
+
+function withinEdge(
+  decoded: { data: Uint8ClampedArray; width: number; height: number },
+  maxEdge: number,
+): Pick<SourceImage, 'data' | 'width' | 'height' | 'reducedFrom'> {
+  const reduced = shrinkToFit(decoded, maxEdge);
+  return {
+    data: reduced.data,
+    width: reduced.width,
+    height: reduced.height,
+    reducedFrom: reduced === decoded ? null : { width: decoded.width, height: decoded.height },
   };
 }

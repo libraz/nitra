@@ -67,6 +67,8 @@ export interface ExportPlan {
   width: number;
   height: number;
   tiles: TileRect[];
+  /** True when the browser's own ceiling, not the recipe's, set the size. */
+  deviceLimited: boolean;
 }
 
 function tileCount(tiles: TileParams): number {
@@ -112,27 +114,50 @@ export function tileRects(width: number, height: number, tiles: TileParams): Til
  * that wants 1080 pixels wants it per post, and a nine-tile grid capped at 1080
  * overall would arrive at a third of the resolution the photo could have given.
  */
-export function planExport(sourceWidth: number, sourceHeight: number, recipe: Recipe): ExportPlan {
+export function planExport(
+  sourceWidth: number,
+  sourceHeight: number,
+  recipe: Recipe,
+  maxFilePixels = Number.POSITIVE_INFINITY,
+): ExportPlan {
   const [cropW, cropH] = croppedSize(sourceWidth, sourceHeight, recipe.geometry);
   const tiles = recipe.tiles;
-  const limit = recipe.output.longEdge;
 
   const width = Math.max(tiles.cols, Math.round(cropW));
   const height = Math.max(tiles.rows, Math.round(cropH));
-  if (limit > 0) {
-    const gap = tiles.gap * Math.min(cropW, cropH);
-    const cellW = (cropW - gap * (tiles.cols - 1)) / tiles.cols;
-    const cellH = (cropH - gap * (tiles.rows - 1)) / tiles.rows;
-    // Never enlarged: a photo that cannot reach the ceiling is exported at the
-    // size it has, and the panel reports that size rather than the one asked for.
-    if (Math.max(cellW, cellH) > limit) {
-      const shrunk = sizeForCell(cellW, cellH, limit, tiles);
-      if (shrunk[0] <= width && shrunk[1] <= height) {
-        return { width: shrunk[0], height: shrunk[1], tiles: tileRects(...shrunk, tiles) };
-      }
+  const gap = tiles.gap * Math.min(cropW, cropH);
+  const cellW = (cropW - gap * (tiles.cols - 1)) / tiles.cols;
+  const cellH = (cropH - gap * (tiles.rows - 1)) / tiles.rows;
+  const asked = recipe.output.longEdge > 0 ? recipe.output.longEdge : Number.POSITIVE_INFINITY;
+  const device = edgeForArea(cellW, cellH, maxFilePixels);
+  const limit = Math.min(asked, device);
+  // Never enlarged: a photo that cannot reach the ceiling is exported at the
+  // size it has, and the panel reports that size rather than the one asked for.
+  if (Math.max(cellW, cellH) > limit) {
+    const shrunk = sizeForCell(cellW, cellH, limit, tiles);
+    if (shrunk[0] <= width && shrunk[1] <= height) {
+      return {
+        width: shrunk[0],
+        height: shrunk[1],
+        tiles: tileRects(...shrunk, tiles),
+        deviceLimited: device < asked,
+      };
     }
   }
-  return { width, height, tiles: tileRects(width, height, tiles) };
+  return { width, height, tiles: tileRects(width, height, tiles), deviceLimited: false };
+}
+
+/**
+ * The longest edge a file of this shape can have within `area` pixels.
+ *
+ * A pixel is held back on each side for the rounding the tiles go through.
+ */
+function edgeForArea(cellW: number, cellH: number, area: number): number {
+  if (!Number.isFinite(area)) return Number.POSITIVE_INFINITY;
+  const ratio = Math.min(cellW, cellH) / Math.max(cellW, cellH);
+  let edge = Math.floor(Math.sqrt(area / ratio));
+  while (edge > 1 && (edge + 1) * (Math.round(edge * ratio) + 1) > area) edge -= 1;
+  return edge;
 }
 
 /**

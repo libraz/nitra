@@ -267,3 +267,54 @@ describe('shaping a crop for a grid', () => {
     expect(plan.height).toBe(900);
   });
 });
+
+describe('a browser that cannot hold a large canvas', () => {
+  const AREA = 4096 * 4096;
+  // Pairwise over photo shape, grid, ceiling and gutter.
+  const cases: [string, string, number, number][] = [
+    ['4284x5712', '1x3', 0, 0],
+    ['5712x4284', '3x3', 4096, 0],
+    ['16384x1638', '1x1', 1080, 0],
+    ['16384x1638', '3x3', 0, 0.01],
+    ['8064x6048', '3x1', 4096, 0],
+    ['4284x5712', '3x3', 1080, 0.01],
+    ['16384x1638', '1x3', 4096, 0.01],
+    ['5712x4284', '1x1', 0, 0.01],
+    ['8064x6048', '1x1', 4096, 0.01],
+    ['5712x4284', '3x1', 1080, 0.01],
+    ['8064x6048', '1x3', 1080, 0],
+    ['8064x6048', '1x1', 0, 0],
+    ['16384x1638', '3x1', 1080, 0.01],
+    ['4284x5712', '3x1', 0, 0],
+    ['5712x4284', '1x3', 1080, 0],
+    ['8064x6048', '3x3', 0, 0],
+    ['4284x5712', '3x3', 4096, 0],
+    ['4284x5712', '1x1', 0, 0.01],
+  ];
+
+  it.each(cases)(
+    '%s in %s at %d with gutter %d keeps every file inside it',
+    (photo, grid, longEdge, gap) => {
+      const [w, h] = photo.split('x').map(Number) as [number, number];
+      const [cols, rows] = grid.split('x').map(Number) as [number, number];
+      const r = recipe({ cols, rows, gap, longEdge });
+      const free = planExport(w, h, r);
+      const held = planExport(w, h, r, AREA);
+      const freeTile = free.tiles[0] as { width: number; height: number };
+      const fitsAnyway = free.tiles.every((t) => t.width * t.height <= AREA);
+
+      for (const tile of held.tiles) expect(tile.width * tile.height).toBeLessThanOrEqual(AREA);
+      if (fitsAnyway) {
+        // The ceiling changes nothing it does not have to.
+        expect(held).toEqual(free);
+        expect(held.deviceLimited).toBe(false);
+      } else {
+        expect(held.deviceLimited).toBe(true);
+        // Reduced only as far as the ceiling demands: within a percent of it.
+        const tile = held.tiles[0] as { width: number; height: number };
+        expect(tile.width * tile.height).toBeGreaterThan(AREA * 0.99);
+        expect(tile.width / tile.height).toBeCloseTo(freeTile.width / freeTile.height, 2);
+      }
+    },
+  );
+});

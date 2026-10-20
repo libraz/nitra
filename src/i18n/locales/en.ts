@@ -458,6 +458,8 @@ export const en = {
   'output.quality': 'Quality',
   'output.longEdge': 'Size limit',
   'output.longEdgeFree': 'As captured',
+  'output.deviceLimited':
+    'This browser cannot write a larger file, so the size is reduced to the largest it can.',
   'output.longEdgeNote':
     'A ceiling on the long edge of each file. Photos smaller than it are exported at the size they are, never enlarged.',
   'output.result': 'Each file',
@@ -538,6 +540,8 @@ export const en = {
 
   'toast.loaded': 'Opened {name} — {width}×{height}',
   'toast.loadedRotated': 'Opened {name} — {width}×{height} (EXIF rotation applied)',
+  'toast.loadedReduced':
+    'Opened {name} at {width}×{height} — reduced from {fromWidth}×{fromHeight}, the largest this device can edit',
   'toast.loadFailed': 'Could not open that photo',
   'toast.lookApplied': 'Applied {name}',
   'toast.autoApplied': 'Auto — {notes}',

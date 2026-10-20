@@ -22,6 +22,7 @@ import {
   outputToSource,
 } from '../core/geometry/transform';
 import { healSpotTooSmall } from '../core/heal/inpaint';
+import { canvasPixelLimit } from '../core/io/canvas-limit';
 import { decodeSourceFile, type SourceImage } from '../core/io/decode';
 import { exportImage } from '../core/io/export';
 import {
@@ -1048,9 +1049,11 @@ export function useEditor(): Editor {
       const file = files[0];
       if (!file) return;
       const ticket = openSeq.current.issue('photo');
+      const maxEdge = pipelineRef.current?.maxSourceEdge;
+      if (maxEdge === undefined) return;
       void (async () => {
         try {
-          const image = await decodeSourceFile(file, file.name);
+          const image = await decodeSourceFile(file, file.name, maxEdge);
           if (!isCurrent('photo', ticket)) return;
           const pipeline = pipelineRef.current;
           if (!pipeline) return;
@@ -1085,11 +1088,19 @@ export function useEditor(): Editor {
           schedulerRef.current?.markDirty();
           runFaceAnalysis(image);
           notify(
-            t(image.orientation === 1 ? 'toast.loaded' : 'toast.loadedRotated', {
-              name: image.fileName,
-              width: image.width,
-              height: image.height,
-            }),
+            image.reducedFrom
+              ? t('toast.loadedReduced', {
+                  name: image.fileName,
+                  width: image.width,
+                  height: image.height,
+                  fromWidth: image.reducedFrom.width,
+                  fromHeight: image.reducedFrom.height,
+                })
+              : t(image.orientation === 1 ? 'toast.loaded' : 'toast.loadedRotated', {
+                  name: image.fileName,
+                  width: image.width,
+                  height: image.height,
+                }),
           );
         } catch (err) {
           if (!isCurrent('photo', ticket)) return;
@@ -1133,7 +1144,7 @@ export function useEditor(): Editor {
     void (async () => {
       try {
         const current = recipeRef.current;
-        const plan = planExport(image.width, image.height, current);
+        const plan = planExport(image.width, image.height, current, canvasPixelLimit());
         // The export is not allowed to be behind the preview. The restore and
         // the fills the preview is showing were made on the way to a settled
         // render, and an export taken before one has happened would write the
@@ -1235,7 +1246,7 @@ export function useEditor(): Editor {
   );
 
   const plan = useMemo(
-    () => (source ? planExport(source.width, source.height, recipe) : null),
+    () => (source ? planExport(source.width, source.height, recipe, canvasPixelLimit()) : null),
     [source, recipe],
   );
 

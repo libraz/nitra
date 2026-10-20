@@ -106,6 +106,7 @@ export function ExportPanel({
               </b>
             </div>
           )}
+          {plan?.deviceLimited && <p className="mini">{t('output.deviceLimited')}</p>}
           {tiles > 1 && <p className="mini">{t('output.bundle')}</p>}
 
           <MetadataRow

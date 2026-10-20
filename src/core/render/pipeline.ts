@@ -26,6 +26,7 @@ import {
   outputToSource,
 } from '../geometry/transform';
 import { Dag } from '../graph/dag';
+import { canvasPixelLimit } from '../io/canvas-limit';
 import type { SourceImage } from '../io/decode';
 import { SourcePlate } from '../plate/plate';
 import { cutOut } from '../plate/region';
@@ -314,6 +315,11 @@ export class Pipeline {
   /** True when the drawing buffer can actually hold Display-P3. */
   get wideGamut(): boolean {
     return this.glctx.wideGamut;
+  }
+
+  /** Longest edge a source texture may have on this GPU. */
+  get maxSourceEdge(): number {
+    return this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number;
   }
 
   /** True once a photo has been uploaded and there is something to draw. */
@@ -1336,7 +1342,7 @@ export class Pipeline {
       width = Math.max(1, Math.round(baseW));
       height = Math.max(1, Math.round(baseH));
     } else {
-      const plan = planExport(source.width, source.height, recipe);
+      const plan = planExport(source.width, source.height, recipe, canvasPixelLimit());
       width = plan.width;
       height = plan.height;
     }

@@ -177,22 +177,21 @@ function makeCanvas(width: number, height: number): Canvas2D {
 }
 
 /**
- * The photo on a canvas, at its own size, once.
+ * The photo as a bitmap, at its own size, once.
  *
  * Every pass below draws out of this one rather than putting the pixels up
  * again: a twelve-megapixel `putImageData` per tile would cost more than the
- * inference it is feeding.
+ * inference it is feeding. A bitmap rather than a canvas, because mobile Safari
+ * refuses a canvas past about sixteen million pixels and a phone's own
+ * photographs are larger.
  *
- * Held as sRGB rather than the working space on purpose. The models were
- * trained on ordinary photographs, and handing one wide-gamut values it reads
- * as sRGB would shift every colour it keys on, skin above all.
+ * Each excerpt is drawn into an sRGB canvas rather than the working space on
+ * purpose. The models were trained on ordinary photographs, and handing one
+ * wide-gamut values it reads as sRGB would shift every colour it keys on, skin
+ * above all.
  */
-function toCanvas(source: ImageData): Canvas2D {
-  const full = makeCanvas(source.width, source.height);
-  const ctx = full.getContext('2d', { colorSpace: 'srgb' }) as CanvasRenderingContext2D | null;
-  if (!ctx) throw new FaceAnalysisError('a 2D canvas is not available');
-  ctx.putImageData(source, 0, 0);
-  return full;
+function toBitmap(source: ImageData): Promise<ImageBitmap> {
+  return createImageBitmap(source, { colorSpaceConversion: 'default' });
 }
 
 /** A rectangle of the photo, in source pixels. */
@@ -204,24 +203,14 @@ interface Region {
 }
 
 /** Draw one region of the photo into a canvas no larger than `longEdge`. */
-function excerpt(full: Canvas2D, region: Region, longEdge: number): Canvas2D {
+function excerpt(full: ImageBitmap, region: Region, longEdge: number): Canvas2D {
   const [width, height] = fitLongEdge(region.width, region.height, longEdge);
   const canvas = makeCanvas(width, height);
   const ctx = canvas.getContext('2d', { colorSpace: 'srgb' }) as CanvasRenderingContext2D | null;
   if (!ctx) throw new FaceAnalysisError('a 2D canvas is not available');
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(
-    full as CanvasImageSource,
-    region.x,
-    region.y,
-    region.width,
-    region.height,
-    0,
-    0,
-    width,
-    height,
-  );
+  ctx.drawImage(full, region.x, region.y, region.width, region.height, 0, 0, width, height);
   return canvas;
 }
 
@@ -312,7 +301,7 @@ export async function analyzeFace(image: ImageData): Promise<FaceAnalysis> {
   const { landmarker, segmenter } = await loadModels();
   const aspect = image.height / image.width;
 
-  const full = toCanvas(image);
+  const full = await toBitmap(image);
   const found: Detection[] = [];
   for (const [index, region] of regionsOf(image.width, image.height).entries()) {
     const whole = index === 0;
@@ -346,6 +335,7 @@ export async function analyzeFace(image: ImageData): Promise<FaceAnalysis> {
     { x: 0, y: 0, width: image.width, height: image.height },
     SEGMENT_EDGE,
   );
+  full.close();
   const result = segmenter.segment(segmentInput as HTMLCanvasElement);
   const confidence = result.confidenceMasks;
   const faceSkin = confidence?.[CLASS_FACE_SKIN];
