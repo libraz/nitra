@@ -21,6 +21,7 @@
 
 import { type ConcealSpot, concealRegion, concealSpot } from '../conceal/conceal';
 import { type HealSpot, healSpot, regionFor } from '../heal/inpaint';
+import { noiseLevel } from './noise';
 import type { Region } from './region';
 
 /** What changed in the plate, for whoever has to get it onto the GPU. */
@@ -64,6 +65,8 @@ export class SourcePlate {
   private appliedConceal: ConcealSpot[] = [];
   /** The amount the applied circles were blurred by. Meaningless while the list is empty. */
   private appliedAmount = 0;
+  /** The source's noise level, measured on the first circle: it never changes under this plate. */
+  private noise: number | null = null;
 
   /**
    * @param pristine The pixels the stage under this one left, held rather than
@@ -172,9 +175,12 @@ export class SourcePlate {
 
     if (appended) return { rebuilt: false, rects: filled };
 
+    if (conceal.length > 0 && this.noise === null) {
+      this.noise = noiseLevel(this.pristine, this.width, this.height);
+    }
     for (const spot of conceal) {
       this.appliedConceal.push(spot);
-      concealSpot(plate, this.pristine, this.width, this.height, spot, amount);
+      concealSpot(plate, this.pristine, this.width, this.height, spot, amount, this.noise ?? 0);
     }
     return { rebuilt: true, rects: filled };
   }

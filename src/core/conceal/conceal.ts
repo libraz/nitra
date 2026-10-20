@@ -29,6 +29,13 @@
  * the list cannot change a pixel and a circle can be re-applied as often as the
  * stages under it are rebuilt.
  *
+ * The blur takes the photograph's own noise out along with the reflection, and a
+ * noiseless disc in a photograph that has some is a smudge however soft its
+ * edge. So noise of the photograph's measured level ({@link ./../plate/noise}) is
+ * put back over the blurred part, scaled with the mask so the sum of what is
+ * kept and what is added holds the level constant across the feather. It is
+ * generated, not copied, so nothing the blur removed comes back with it.
+ *
  * The average itself is taken on a decimated grid, which matters at the top of
  * the amount: the field being built varies over a span of about the reach, so
  * carrying it at one sample per pixel is carrying nothing, and three
@@ -40,6 +47,7 @@
 
 import { transferFromLinear } from '../color/spaces';
 import { BLUR_PASSES, boxBlur, clampIndex, linearTable } from '../plate/blur';
+import { grainAt } from '../plate/noise';
 import type { Region } from '../plate/region';
 
 /**
@@ -190,6 +198,8 @@ export function concealRegion(
  * pulled towards the source in that proportion, over a narrow band just inside
  * the ring.
  *
+ * @param noise The photograph's noise as a standard deviation in code values,
+ *   which is how much is put back where the blur took it out.
  * @returns The rectangle that was written, which is what the caller re-uploads.
  */
 export function concealSpot(
@@ -199,6 +209,7 @@ export function concealSpot(
   imageHeight: number,
   spot: ConcealSpot,
   amount: number,
+  noise: number,
 ): Region {
   const { region, written, centre, radius } = concealRegion(spot, imageWidth, imageHeight, amount);
   const [cx, cy] = centre;
@@ -285,13 +296,18 @@ export function concealSpot(
       const highColumn = highColumns[column] as number;
       const fx = columnFractions[column] as number;
       const i = (row + x) * 4;
+      // What the source keeps carries (1−m) of its noise, so m(2−m) more in
+      // variance brings the sum back to the photograph's own. One draw for all
+      // three channels: the noise a camera file shows is mostly in its luma.
+      const grain = noise > 0 ? Math.sqrt(m * (2 - m)) * noise * grainAt(row + x) : 0;
       for (let c = 0; c < 3; c++) {
         const mean = bilinear(carried, c * cells, lowRow, highRow, lowColumn, highColumn, fx, fy);
         const source = toLinear[pristine[i + c] as number] as number;
         // Composited at full resolution and in linear light: the decimation is
         // an economy in how the average was reached, not in where it is laid.
         const mixed = m * mean + (1 - m) * source;
-        plate[i + c] = Math.round(Math.min(1, Math.max(0, transferFromLinear(mixed))) * 255);
+        const code = Math.min(1, Math.max(0, transferFromLinear(mixed))) * 255 + grain;
+        plate[i + c] = Math.round(Math.min(255, Math.max(0, code)));
       }
     }
   }

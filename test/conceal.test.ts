@@ -27,6 +27,7 @@ import {
   concealSpot,
 } from '../src/core/conceal/conceal';
 import { boxBlur } from '../src/core/plate/blur';
+import { grainAt, noiseLevel } from '../src/core/plate/noise';
 import { cutOut } from '../src/core/plate/region';
 import { paramDef } from '../src/core/recipe/schema';
 
@@ -37,6 +38,11 @@ import { paramDef } from '../src/core/recipe/schema';
  * grating is the worst case a real reflection is bounded by.
  */
 const GONE = 2;
+
+/**
+ * Every circle above the last block is concealed with no noise put back: what
+ * those measure is the blur, and the noise is measured on its own at the end.
+ */
 
 /** The two ends of the slider, read from the schema rather than repeated here. */
 const DEFAULT_AMOUNT = paramDef('conceal.amount').neutral;
@@ -247,7 +253,7 @@ describe('what a circle takes out at each end of the slider', () => {
   function left(ratio: number, amount: number, spot = SPOT, w = WIDTH, h = HEIGHT): number {
     const pristine = frame(w, h, grating(spot.r * w * ratio));
     const plate = new Uint8ClampedArray(pristine);
-    concealSpot(plate, pristine, w, h, spot, amount);
+    concealSpot(plate, pristine, w, h, spot, amount, 0);
     return Math.max(...residual(plate, w, h, spot));
   }
 
@@ -331,7 +337,7 @@ describe('what a circle takes out at each end of the slider', () => {
       expect(lambda).toBeLessThanOrEqual(radius / 2);
       const pristine = frame(WIDTH, HEIGHT, grating(lambda));
       const plate = new Uint8ClampedArray(pristine);
-      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
+      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, 0);
       for (const seen of residual(plate, WIDTH, HEIGHT, SPOT)) {
         expect.soft(seen, `lambda = ${multiple} steps`).toBeLessThanOrEqual(GONE);
       }
@@ -391,7 +397,7 @@ describe('the average the decimated grid stands in for', () => {
         expect(concealDecimation(spot.r * WIDTH, FULL_AMOUNT)).toBeGreaterThan(1);
         const pristine = frame(WIDTH, HEIGHT, paint);
         const plate = new Uint8ClampedArray(pristine);
-        concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
+        concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT, 0);
         const perPixel = concealPerPixel(pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
         const gap = widestGap(plate, perPixel, WIDTH, HEIGHT, spot);
         const bound = spot.x * WIDTH < spot.r * WIDTH ? CLIPPED_LIMIT : GRID_LIMIT;
@@ -438,7 +444,7 @@ describe('the edge of the circle, where a plate of colour would show', () => {
     // That is what makes the join invisible without a wide feather.
     const pristine = eye();
     const plate = new Uint8ClampedArray(pristine);
-    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, 0.3);
+    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, 0.3, 0);
     const rim = band(plate, 0.65, 0.85);
     expect(rim).toBeGreaterThan(IRIS + 20);
     expect(rim).toBeLessThan(SCLERA);
@@ -468,7 +474,7 @@ describe('the edge of the circle, where a plate of colour would show', () => {
     const radius = SPOT.r * WIDTH;
     for (const amount of [DEFAULT_AMOUNT, 0.5, FULL_AMOUNT]) {
       const plate = new Uint8ClampedArray(pristine);
-      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, amount);
+      concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, amount, 0);
       for (let y = 0; y < HEIGHT; y++) {
         for (let x = 0; x < WIDTH; x++) {
           if (Math.hypot(x + 0.5 - WIDTH / 2, y + 0.5 - HEIGHT / 2) < radius) continue;
@@ -497,7 +503,7 @@ describe('what the average is taken in', () => {
   it('holds the linear-light mean that a gamma-space average would sink', () => {
     const pristine = frame(WIDTH, HEIGHT, (x) => stripes(x));
     const plate = new Uint8ClampedArray(pristine);
-    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
+    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, 0);
 
     const before = linearMean(pristine, WIDTH, HEIGHT, SPOT);
     const after = linearMean(plate, WIDTH, HEIGHT, SPOT);
@@ -536,7 +542,7 @@ describe('the catchlight a circle at the top of the slider loses', () => {
       return bright[c] as number;
     });
     const plate = new Uint8ClampedArray(pristine);
-    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
+    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, 0);
 
     let measured = 0;
     for (let c = 0; c < 3; c++) {
@@ -587,19 +593,25 @@ describe('a circle at the edge of the frame', () => {
 
       const pristine = frame(WIDTH, HEIGHT, grating(spot.r * WIDTH));
       const plate = new Uint8ClampedArray(pristine);
-      const written = concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
+      const written = concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT, 0);
+      // Counted rather than asserted per pixel: an expect per pixel of three
+      // frames is what this test spent its time on.
+      let opacityLost = 0;
+      let movedOutside = 0;
       for (let y = 0; y < HEIGHT; y++) {
         for (let x = 0; x < WIDTH; x++) {
           const i = (y * WIDTH + x) * 4;
-          expect(plate[i + 3]).toBe(255);
+          if (plate[i + 3] !== 255) opacityLost++;
           const inside =
             x >= written.x &&
             x < written.x + written.width &&
             y >= written.y &&
             y < written.y + written.height;
-          if (!inside) expect(plate[i]).toBe(pristine[i]);
+          if (!inside && plate[i] !== pristine[i]) movedOutside++;
         }
       }
+      expect(opacityLost).toBe(0);
+      expect(movedOutside).toBe(0);
     }
   });
 
@@ -615,7 +627,7 @@ describe('a circle at the edge of the frame', () => {
       for (const ratio of [0.2, 0.35, 0.5]) {
         const pristine = frame(WIDTH, HEIGHT, grating(radius * ratio));
         const plate = new Uint8ClampedArray(pristine);
-        concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT);
+        concealSpot(plate, pristine, WIDTH, HEIGHT, spot, FULL_AMOUNT, 0);
         for (const seen of residual(plate, WIDTH, HEIGHT, spot)) {
           const where = `corner circle at ${spot.x}, lambda = ${ratio}r`;
           expect.soft(seen, where).toBeLessThanOrEqual(GONE);
@@ -647,7 +659,7 @@ describe('the part of the plate a circle writes', () => {
     const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * 0.5));
     const plate = dirtied(pristine);
     const before = plate.slice();
-    const written = concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
+    const written = concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, 0);
 
     const cx = SPOT.x * WIDTH;
     const cy = SPOT.y * HEIGHT;
@@ -677,7 +689,7 @@ describe('the part of the plate a circle writes', () => {
 
   it('reports the mask around the circle rather than the region the blur needed', () => {
     const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * 0.5));
-    const written = concealSpot(dirtied(pristine), pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT);
+    const written = concealSpot(dirtied(pristine), pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, 0);
     const { region } = concealRegion(SPOT, WIDTH, HEIGHT, FULL_AMOUNT);
 
     // The region has to hold what the blur reads; the rectangle only has to hold
@@ -699,19 +711,110 @@ describe('a circle that has been concealed', () => {
     const pristine = frame(WIDTH, HEIGHT, grating(SPOT.r * WIDTH * 0.5));
 
     const once = new Uint8ClampedArray(pristine);
-    concealSpot(once, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT);
+    concealSpot(once, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT, 0);
 
     // Applied again over its own result, which is what a rebuilt plate does, and
     // over a plate somebody else has already written on. Neither can change the
     // answer, because the circle never reads what is under it.
     const twice = new Uint8ClampedArray(once);
-    concealSpot(twice, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT);
+    concealSpot(twice, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT, 0);
     expect(twice).toEqual(once);
 
     const dirty = new Uint8ClampedArray(pristine.length).fill(200);
-    concealSpot(dirty, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT);
+    concealSpot(dirty, pristine, WIDTH, HEIGHT, SPOT, DEFAULT_AMOUNT, 0);
     insideDisc(WIDTH, HEIGHT, SPOT.x * WIDTH, SPOT.y * HEIGHT, SPOT.r * WIDTH, (i) => {
       expect(dirty[i]).toBe(once[i]);
     });
+  });
+});
+
+describe('the noise a blurred circle gives back', () => {
+  const WIDTH = 192;
+  const HEIGHT = 192;
+  const SIGMA = 4;
+  const SPOT: ConcealSpot = { x: 0.7, y: 0.7, r: 0.12 };
+
+  // A flat grey carrying noise of a known level, with texture over the top half
+  // — a strong grating along one axis and a diagonal one — so the estimate has
+  // something to be fooled by.
+  const pristine = frame(WIDTH, HEIGHT, (x, y) => {
+    const n = SIGMA * grainAt(y * WIDTH + x + 7_654_321);
+    if (y >= HEIGHT / 2) return 128 + n;
+    const texture =
+      x < WIDTH / 2 ? 60 * Math.sin((2 * Math.PI * x) / 9) : 40 * Math.sin((x + y) / 2.3);
+    return 128 + texture + n;
+  });
+
+  /** Spread of the green channel over the part of the circle the mask fully covers. */
+  function spread(pixels: Uint8ClampedArray): number {
+    const values: number[] = [];
+    const covered = SPOT.r * WIDTH * (1 - CONCEAL_FEATHER);
+    insideDisc(WIDTH, HEIGHT, SPOT.x * WIDTH, SPOT.y * HEIGHT, covered, (i) => {
+      values.push(pixels[i + 1] as number);
+    });
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    return Math.sqrt(values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length);
+  }
+
+  it('measures the level the photograph carries, not its texture', () => {
+    const level = noiseLevel(pristine, WIDTH, HEIGHT);
+    // Under rather than over: a percentile of block estimates sits a little
+    // below their centre, and inventing grain is the worse direction.
+    expect(level).toBeGreaterThan(SIGMA * 0.8);
+    expect(level).toBeLessThan(SIGMA * 1.05);
+  });
+
+  it('leaves the circle as noisy as the photograph around it', () => {
+    const level = noiseLevel(pristine, WIDTH, HEIGHT);
+    const plate = new Uint8ClampedArray(pristine);
+    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, level);
+    const before = spread(pristine);
+    expect(spread(plate) / before).toBeGreaterThan(0.8);
+    expect(spread(plate) / before).toBeLessThan(1.15);
+
+    // The smudge it replaces: blurred with nothing put back, the same disc
+    // holds almost none of the photograph's grain.
+    const bare = new Uint8ClampedArray(pristine);
+    concealSpot(bare, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, 0);
+    expect(spread(bare) / before).toBeLessThan(0.25);
+  });
+
+  it('puts none of it outside the ring', () => {
+    const plate = new Uint8ClampedArray(pristine);
+    concealSpot(plate, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, 3 * SIGMA);
+    const radius = SPOT.r * WIDTH;
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        const dx = x + 0.5 - SPOT.x * WIDTH;
+        const dy = y + 0.5 - SPOT.y * HEIGHT;
+        if (dx * dx + dy * dy < radius * radius) continue;
+        const i = (y * WIDTH + x) * 4;
+        for (let c = 0; c < 3; c++) expect(plate[i + c]).toBe(pristine[i + c]);
+      }
+    }
+  });
+
+  it('is the same noise every time the circle is applied', () => {
+    const level = noiseLevel(pristine, WIDTH, HEIGHT);
+    const once = new Uint8ClampedArray(pristine);
+    const twice = new Uint8ClampedArray(pristine);
+    concealSpot(once, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, level);
+    concealSpot(twice, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, level);
+    concealSpot(twice, pristine, WIDTH, HEIGHT, SPOT, FULL_AMOUNT, level);
+    expect(twice).toEqual(once);
+  });
+
+  it('draws unit-variance noise from a position', () => {
+    let total = 0;
+    let square = 0;
+    const count = 200_000;
+    for (let i = 0; i < count; i++) {
+      const g = grainAt(i);
+      total += g;
+      square += g * g;
+    }
+    expect(Math.abs(total / count)).toBeLessThan(0.01);
+    expect(square / count).toBeGreaterThan(0.98);
+    expect(square / count).toBeLessThan(1.02);
   });
 });

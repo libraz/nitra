@@ -78,6 +78,32 @@ function meanAt(pixels: Uint8ClampedArray, spot: HealSpot): number {
   return total / Math.max(count, 1);
 }
 
+/** Correlation of the red channel between two images over a disc. */
+function correlationAt(a: Uint8ClampedArray, b: Uint8ClampedArray, spot: HealSpot): number {
+  const cx = spot.x * SIZE;
+  const cy = spot.y * SIZE;
+  const r = spot.r * SIZE;
+  const pairs: [number, number][] = [];
+  for (let y = Math.max(0, Math.floor(cy - r)); y < Math.min(SIZE, Math.ceil(cy + r)); y++) {
+    for (let x = Math.max(0, Math.floor(cx - r)); x < Math.min(SIZE, Math.ceil(cx + r)); x++) {
+      if (Math.hypot(x - cx, y - cy) > r) continue;
+      const i = (y * SIZE + x) * 4;
+      pairs.push([a[i] as number, b[i] as number]);
+    }
+  }
+  const ma = pairs.reduce((t, [u]) => t + u, 0) / pairs.length;
+  const mb = pairs.reduce((t, [, v]) => t + v, 0) / pairs.length;
+  let ab = 0;
+  let aa = 0;
+  let bb = 0;
+  for (const [u, v] of pairs) {
+    ab += (u - ma) * (v - mb);
+    aa += (u - ma) ** 2;
+    bb += (v - mb) ** 2;
+  }
+  return ab / Math.sqrt(aa * bb);
+}
+
 // The largest radius the recipe will hold, so the arithmetic under test is the
 // arithmetic a real spot goes through.
 const LEFT: HealSpot = { x: 0.3, y: 0.4, r: 0.03 };
@@ -280,7 +306,7 @@ describe('the plate and the circles over it', () => {
     expect(Math.abs(meanAt(pixels, CIRCLE) - meanAt(RESTORED, CIRCLE))).toBeLessThan(3);
   });
 
-  it('flattens what is inside the circle and leaves the frame around it alone', () => {
+  it('blurs what is inside the circle and leaves the frame around it alone', () => {
     const plate = new SourcePlate(RESTORED, SIZE, SIZE);
     const update = plate.apply([CIRCLE], AMOUNT, []);
     // A circle is applied over the pristine source, so there is nothing to undo
@@ -290,9 +316,15 @@ describe('the plate and the circles over it', () => {
 
     // Over the part the mask fully covers: the outer band is where it feathers
     // back to the photograph, and its own detail survives there by design.
+    // The photograph's grain is all there is to blur here, and the plate puts
+    // grain of the photograph's level back over the blur — so what says the
+    // blur happened is that the grain inside no longer follows the original's.
     const pixels = plate.pixels as Uint8ClampedArray;
     const covered = { ...CIRCLE, r: CIRCLE.r * (1 - CONCEAL_FEATHER) };
-    expect(spreadAt(pixels, covered)).toBeLessThan(spreadAt(RESTORED, covered) / 4);
+    expect(Math.abs(correlationAt(pixels, RESTORED, covered))).toBeLessThan(0.3);
+    const kept = spreadAt(pixels, covered) / spreadAt(RESTORED, covered);
+    expect(kept).toBeGreaterThan(0.6);
+    expect(kept).toBeLessThan(1.3);
     expect(meanAt(pixels, BESIDE)).toBeCloseTo(meanAt(RESTORED, BESIDE), 5);
   });
 

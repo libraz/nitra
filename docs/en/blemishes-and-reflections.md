@@ -8,7 +8,7 @@ A blemish is filled where it is clicked. Skin from around the mark is copied in 
 
 ## Blurring a reflection
 
-A bystander caught in a reflection (a corneal catchlight, a mirror, metal or glass) is blurred inside a circle that is placed on the picture. It is a blur filter run in a selection: the average reads the photograph around the circle so that the edge does not show, and nothing outside the ring changes.
+A bystander caught in a reflection (a corneal catchlight, a mirror, metal or glass) is blurred inside a circle that is placed on the picture. It is a blur filter run in a selection: the average reads the photograph around the circle so that the edge does not show, and nothing outside the ring changes. Grain at the photograph's own level is put back over the blur, so the circle does not stand out as a smooth patch; it is generated noise, so nothing that was blurred comes back with it.
 
 The strength is a fraction of each circle's own radius, so one setting suits an eye and a mirror at once. One click on a detected iris places the circle at its width.
 
