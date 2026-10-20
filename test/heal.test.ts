@@ -341,6 +341,63 @@ describe('the soft edge of a fill', () => {
   });
 });
 
+describe('the soft edge of a large fill', () => {
+  const SIZE = 200;
+  const CENTRE = 100;
+  const RADIUS = 40;
+  const FEATHER = 14;
+
+  /**
+   * Gradient energy along the line to the centre over gradient energy across
+   * it, in the red channel, over a ring. Grain has no direction, so on skin it
+   * is about one; streaks running out from the centre drive it towards zero.
+   */
+  function radialShare(pixels: Uint8ClampedArray, from: number, to: number): number {
+    let radial = 0;
+    let across = 0;
+    for (let y = 1; y < SIZE - 1; y++) {
+      for (let x = 1; x < SIZE - 1; x++) {
+        const dx = x + 0.5 - CENTRE;
+        const dy = y + 0.5 - CENTRE;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d <= from || d >= to) continue;
+        const i = (y * SIZE + x) * 4;
+        const gx = ((pixels[i + 4] as number) - (pixels[i - 4] as number)) / 2;
+        const gy = ((pixels[i + SIZE * 4] as number) - (pixels[i - SIZE * 4] as number)) / 2;
+        const along = (gx * dx + gy * dy) / d;
+        const side = (gy * dx - gx * dy) / d;
+        radial += along * along;
+        across += side * side;
+      }
+    }
+    return radial / across;
+  }
+
+  it('keeps the pores in the middle of a hole far wider than a patch', () => {
+    const before = skin(SIZE, { cx: CENTRE, cy: CENTRE, r: 30 });
+    const after = new Uint8ClampedArray(before);
+    inpaint(after, SIZE, SIZE, CENTRE, CENTRE, RADIUS, FEATHER);
+    const within = (r: number) => (x: number, y: number) =>
+      Math.hypot(x + 0.5 - CENTRE, y + 0.5 - CENTRE) < r;
+    const middle = detail(after, SIZE, within(RADIUS / 2));
+    const around = detail(before, SIZE, (x, y) => {
+      const d = Math.hypot(x + 0.5 - CENTRE, y + 0.5 - CENTRE);
+      return d > RADIUS + FEATHER && d < RADIUS + 3 * FEATHER;
+    });
+    expect(middle / around).toBeGreaterThan(0.8);
+  });
+
+  it('carries the fill texture into the edge rather than streaks', () => {
+    const before = skin(SIZE, { cx: CENTRE, cy: CENTRE, r: 30 });
+    const after = new Uint8ClampedArray(before);
+    expect(inpaint(after, SIZE, SIZE, CENTRE, CENTRE, RADIUS, FEATHER)).toBeGreaterThan(0);
+    // The inner half of the band, where the fill is most of what is there.
+    const edge = radialShare(after, RADIUS, RADIUS + FEATHER / 2);
+    const around = radialShare(before, RADIUS + FEATHER, RADIUS + 2 * FEATHER);
+    expect(edge / around).toBeGreaterThan(0.6);
+  });
+});
+
 describe('the smallest spot the editor accepts', () => {
   it('is exactly the smallest spot the fill acts on, wherever the centre falls', () => {
     const width = 200;
