@@ -5,3 +5,6 @@
 # resolution. Anything held back below a published minor is pinned exactly in
 # package.json.
 reject: []
+
+# Bun repo: ncu has to query through the right client.
+packageManager: bun
