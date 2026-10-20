@@ -21,6 +21,14 @@
  * argument the relighting makes, and it has the same consequence: a sum flattens
  * the texture this whole stage exists to bring back.
  *
+ * The gain is a field rather than one number: seamless cloning's membrane
+ * (Pérez et al. 2003; Farbman et al. 2009), taken over ratios instead of
+ * differences. It is measured only along the join, where the two images show the
+ * same cheek, and carried inwards as a harmonic interpolation, so a frame the
+ * generator lit from one side meets the patch at its own level on both sides,
+ * and the eyes and the mouth — which the generator drew differently — never
+ * enter the measurement.
+ *
  * The gain is taken in the frame's own primaries, which is not where the patch
  * is read. A photograph carried in Display-P3 dropped into a frame written in
  * sRGB is the ordinary case rather than an exotic one, and a ratio taken between
@@ -28,9 +36,7 @@
  * anything: a scale and a primaries matrix do not commute, so the patch lands
  * somewhere neither space asked for. Measured on a coloured frame that way, the
  * three channels came out +18.9%, -19.5% and -32.0% from the level they were
- * being matched to. The conversion therefore happens before the ratio, and the
- * gain is then folded back into the same matrix — one multiply-add per channel
- * per pixel either way.
+ * being matched to. The conversion therefore happens before the ratio.
  *
  * **What the blend happens in.** Linear light, because a crossfade between two
  * exposures of the same face is a mixture of light.
@@ -81,6 +87,25 @@ const MAX_GAIN = 4;
 
 /** Pixels between samples when the two means are measured. */
 const MEAN_STRIDE = 3;
+
+/**
+ * Cells of the gain field across one face width.
+ *
+ * Coarse enough that a cell on the join averages over the skin's texture and
+ * measures its light: at two cells per band, a textured reference had its
+ * texture cancelled along the join and landed 3.2% off the frame's level. Fine
+ * enough to follow a generator's relight from one side of a face to the other.
+ */
+const CELLS_PER_FACE = 8;
+
+/**
+ * How much of the ramp a cell has to hold before it is measured rather than
+ * interpolated, as a fraction of the most a cell could hold.
+ *
+ * A cell that only grazes the join holds a handful of pixels, and a ratio taken
+ * over a handful is the noise of the photograph rather than its light.
+ */
+const RING_SUPPORT = 1 / 8;
 
 /** Enough of the region to be worth writing anything for. */
 const MIN_COVERAGE = 1 / 255;
@@ -191,6 +216,125 @@ function boundsFor(face: GraftFace, band: number, scale: number, image: GraftIma
   return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
 }
 
+/** A gain per channel on a coarse grid over one face's region. */
+interface GainField {
+  /** Three planes, one per channel, each `columns·rows` long. */
+  values: Float32Array;
+  columns: number;
+  rows: number;
+  /** Destination pixels per cell. */
+  step: number;
+}
+
+/**
+ * The gain field for one face: measured along the join, relaxed everywhere else.
+ *
+ * Each cell the ramp passes through takes the ratio of the two images' means
+ * over the part of the ramp inside it, weighted by `w·(1−w)` so the middle of
+ * the ramp counts most and neither the solid patch nor the untouched frame
+ * counts at all. The other cells solve Laplace's equation with those as fixed
+ * values, by successive over-relaxation for a fixed number of sweeps, which
+ * makes the field the smoothest one that agrees with the join.
+ *
+ * @param initial The single gain the whole-region means gave, which is where the
+ *   relaxation starts and what the field stays when the join was never measured.
+ * @param read The reference in the frame's primaries and the frame beneath it, at
+ *   one pixel of the region, both linear; null outside the reference.
+ */
+function gainField(
+  bounds: GraftRegion,
+  coverage: Float32Array,
+  facePixels: number,
+  bandPixels: number,
+  initial: readonly number[],
+  match: number,
+  read: (x: number, y: number) => { from: Vec3; under: Vec3 } | null,
+): GainField {
+  const step = Math.max(1, Math.round(facePixels / CELLS_PER_FACE));
+  const columns = Math.ceil(bounds.width / step);
+  const rows = Math.ceil(bounds.height / step);
+  const cells = columns * rows;
+  const fromSum = new Float64Array(cells * 3);
+  const underSum = new Float64Array(cells * 3);
+  const support = new Float64Array(cells);
+
+  // On the same stride as the whole-region means, for the same reason.
+  for (let y = 0; y < bounds.height; y += MEAN_STRIDE) {
+    const cellRow = Math.floor(y / step) * columns;
+    for (let x = 0; x < bounds.width; x += MEAN_STRIDE) {
+      const w = coverage[y * bounds.width + x] as number;
+      if (w < MIN_COVERAGE || w > 1 - MIN_COVERAGE) continue;
+      const taken = read(x, y);
+      if (!taken) continue;
+      const q = w * (1 - w);
+      const cell = cellRow + Math.floor(x / step);
+      for (let c = 0; c < 3; c++) {
+        fromSum[c * cells + cell] =
+          (fromSum[c * cells + cell] as number) + (taken.from[c] as number) * q;
+        underSum[c * cells + cell] =
+          (underSum[c * cells + cell] as number) + (taken.under[c] as number) * q;
+      }
+      support[cell] = (support[cell] as number) + q;
+    }
+  }
+
+  // The most a cell can hold is the ramp crossing it at its middle: a band wide
+  // at a weight of a quarter, or the whole cell when the band is wider.
+  const needed =
+    (RING_SUPPORT * 0.25 * step * Math.min(step, Math.max(1, bandPixels))) /
+    (MEAN_STRIDE * MEAN_STRIDE);
+  const fixed = new Uint8Array(cells);
+  const values = new Float32Array(cells * 3);
+  for (let cell = 0; cell < cells; cell++) {
+    const measured = (support[cell] as number) >= needed;
+    fixed[cell] = measured ? 1 : 0;
+    for (let c = 0; c < 3; c++) {
+      let gain = initial[c] as number;
+      if (measured) {
+        const level = fromSum[c * cells + cell] as number;
+        const ratio = level > 1e-9 ? (underSum[c * cells + cell] as number) / level : 1;
+        const wanted = 1 + (ratio - 1) * match;
+        gain = Math.min(MAX_GAIN, Math.max(1 / MAX_GAIN, wanted));
+      }
+      values[c * cells + cell] = gain;
+    }
+  }
+
+  // Over-relaxation at the factor that is optimal for a square grid this wide,
+  // for long enough that the slowest mode has decayed by about e^-12. The grid
+  // edge reflects, so cells outside the face carry the nearest join outwards
+  // rather than pulling the field towards anything.
+  const span = Math.max(columns, rows);
+  const omega = 2 / (1 + Math.PI / span);
+  const sweeps = 2 * span;
+  for (let sweep = 0; sweep < sweeps; sweep++) {
+    for (let gy = 0; gy < rows; gy++) {
+      for (let gx = 0; gx < columns; gx++) {
+        const cell = gy * columns + gx;
+        if (fixed[cell]) continue;
+        let count = 0;
+        if (gx > 0) count++;
+        if (gx < columns - 1) count++;
+        if (gy > 0) count++;
+        if (gy < rows - 1) count++;
+        if (count === 0) continue;
+        for (let c = 0; c < 3; c++) {
+          const plane = c * cells;
+          let sum = 0;
+          if (gx > 0) sum += values[plane + cell - 1] as number;
+          if (gx < columns - 1) sum += values[plane + cell + 1] as number;
+          if (gy > 0) sum += values[plane + cell - columns] as number;
+          if (gy < rows - 1) sum += values[plane + cell + columns] as number;
+          const old = values[plane + cell] as number;
+          values[plane + cell] = old + omega * (sum / count - old);
+        }
+      }
+    }
+  }
+
+  return { values, columns, rows, step };
+}
+
 /**
  * Put the photographed faces back into the generated frame.
  *
@@ -297,7 +441,9 @@ export function graft(
     const refLevel = [0, 1, 2].map((c) => (refMean[c] as number) / weight) as unknown as Vec3;
     const from = convert ? mat3Apply(convert, refLevel) : refLevel;
 
-    // One gain per channel, taken as far towards a full match as asked.
+    // One gain per channel over the whole region, taken as far towards a full
+    // match as asked. It is where the field starts, and what it stays when no
+    // part of the join could be measured.
     const gain: [number, number, number] = [1, 1, 1];
     for (let c = 0; c < 3; c++) {
       const level = from[c] as number;
@@ -307,17 +453,46 @@ export function graft(
       gain[c] = Math.min(MAX_GAIN, Math.max(1 / MAX_GAIN, wanted));
     }
 
-    // Folded: the gain is diagonal, so scaling each row of the conversion is
-    // the same as applying it afterwards, and the inner loop keeps the one
-    // multiply-add per channel it had when the gain was applied on its own.
-    const lift: Mat3 | null = convert
-      ? (convert.map((v, i) => v * (gain[(i / 3) | 0] as number)) as unknown as Mat3)
-      : null;
+    /** The reference in the frame's primaries, linear. */
+    const carried = (taken: [number, number, number]): Vec3 =>
+      convert ? mat3Apply(convert, taken) : taken;
+
+    const field = gainField(
+      bounds,
+      coverage,
+      face.width * scale,
+      band * scale,
+      gain,
+      match,
+      (x, y) => {
+        const px = bounds.x + x;
+        const py = bounds.y + y;
+        const source = at(px, py);
+        const taken = sample(source.x, source.y);
+        if (!taken) return null;
+        const index = (py * destination.width + px) * 4;
+        return {
+          from: carried(taken),
+          under: [
+            toLinear[beneath[index] as number] as number,
+            toLinear[beneath[index + 1] as number] as number,
+            toLinear[beneath[index + 2] as number] as number,
+          ],
+        };
+      },
+    );
+    const cells = field.columns * field.rows;
 
     if (!out) out = new Uint8ClampedArray(destination.data);
     const target = out;
 
     for (let y = 0; y < bounds.height; y++) {
+      // A cell's value stands for its centre, half a step in from its corner.
+      const v = (y + 0.5) / field.step - 0.5;
+      const rowBase = Math.floor(v);
+      const fy = v - rowBase;
+      const lowRow = clampIndex(rowBase, field.rows - 1) * field.columns;
+      const highRow = clampIndex(rowBase + 1, field.rows - 1) * field.columns;
       for (let x = 0; x < bounds.width; x++) {
         const w = coverage[y * bounds.width + x] as number;
         if (w < MIN_COVERAGE) continue;
@@ -327,18 +502,25 @@ export function graft(
         const taken = sample(source.x, source.y);
         if (!taken) continue;
 
-        const lit: [number, number, number] = lift
-          ? (mat3Apply(lift, taken) as [number, number, number])
-          : [
-              (taken[0] as number) * (gain[0] as number),
-              (taken[1] as number) * (gain[1] as number),
-              (taken[2] as number) * (gain[2] as number),
-            ];
+        const u = (x + 0.5) / field.step - 0.5;
+        const columnBase = Math.floor(u);
+        const fx = u - columnBase;
+        const lowColumn = clampIndex(columnBase, field.columns - 1);
+        const highColumn = clampIndex(columnBase + 1, field.columns - 1);
 
+        const lit = carried(taken);
         const index = (py * destination.width + px) * 4;
         for (let c = 0; c < 3; c++) {
+          const plane = c * cells;
+          const above =
+            (1 - fx) * (field.values[plane + lowRow + lowColumn] as number) +
+            fx * (field.values[plane + lowRow + highColumn] as number);
+          const below =
+            (1 - fx) * (field.values[plane + highRow + lowColumn] as number) +
+            fx * (field.values[plane + highRow + highColumn] as number);
+          const g = (1 - fy) * above + fy * below;
           const under = toLinear[beneath[index + c] as number] as number;
-          const mixed = under + ((lit[c] as number) - under) * w;
+          const mixed = under + ((lit[c] as number) * g - under) * w;
           target[index + c] = Math.round(Math.min(1, Math.max(0, transferFromLinear(mixed))) * 255);
         }
         landed = true;

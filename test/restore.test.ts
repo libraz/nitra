@@ -24,6 +24,7 @@ import {
   applySimilarity,
   fitResidual,
   fitSimilarity,
+  fitSimilarityRobust,
   invertSimilarity,
   pairFaces,
   type Similarity,
@@ -160,6 +161,51 @@ describe('fitting one face onto the other', () => {
 
     // Against the same measurement on an exact similarity, which is zero.
     expect(residual).toBeGreaterThan(0.01);
+  });
+
+  it('registers the part of the face the generator kept', () => {
+    // Moved, turned and resized as a whole, and on top of that the mouth and
+    // the jaw opened: everything below the nose went down by a twentieth of the
+    // face. What should be in register is the rest of it.
+    const known: Similarity = {
+      c: 1.05 * Math.cos(0.08),
+      s: 1.05 * Math.sin(0.08),
+      tx: 0.03,
+      ty: -0.02,
+    };
+    const opened = surface.map((p) => {
+      const q = applySimilarity(known, p);
+      return p.y > 0.55 ? { x: q.x, y: q.y + 0.015 } : q;
+    });
+    const kept = surface.map((p, i) => (p.y > 0.55 ? -1 : i)).filter((i) => i >= 0);
+    expect(kept.length).toBeGreaterThan(surface.length / 2);
+    expect(kept.length).toBeLessThan(surface.length);
+
+    /** Worst misregistration over the points that did not change, in face widths. */
+    const worst = (m: Similarity) =>
+      Math.max(
+        ...kept.map((i) => {
+          const p = applySimilarity(m, surface[i] as Point);
+          const q = opened[i] as Point;
+          return Math.hypot(p.x - q.x, p.y - q.y) / 0.3;
+        }),
+      );
+
+    const robust = fitSimilarityRobust(surface, opened) as Similarity;
+    const plain = fitSimilarity(surface, opened) as Similarity;
+    expect(worst(robust)).toBeLessThan(1e-4);
+    // Plain least squares splits the difference, and the eyes pay for the mouth.
+    expect(worst(plain)).toBeGreaterThan(5e-3);
+  });
+
+  it('fits an exact similarity exactly however it is weighted', () => {
+    const known: Similarity = { c: 0.9, s: -0.2, tx: 0.1, ty: 0.05 };
+    const moved = surface.map((p) => applySimilarity(known, p));
+    const m = fitSimilarityRobust(surface, moved) as Similarity;
+    expect(m.c).toBeCloseTo(known.c, 10);
+    expect(m.s).toBeCloseTo(known.s, 10);
+    expect(m.tx).toBeCloseTo(known.tx, 10);
+    expect(m.ty).toBeCloseTo(known.ty, 10);
   });
 
   it('survives every point landing in one place', () => {
@@ -318,14 +364,24 @@ describe('the patch', () => {
     expect(flat.data).toEqual(before);
   });
 
+  /**
+   * Darker, with texture at the scale of skin rather than of a face. Shading
+   * that varies over half a face is light as far as the gain field is concerned,
+   * and it is matched away; this is the detail that has to come through.
+   */
+  const pored = image(SIZE, (x, y) => {
+    const base = 95 + 18 * Math.sin(x * 1.9) * Math.cos(y * 1.3);
+    return [base, base, base];
+  });
+
   it('matches the light by a gain, so the texture comes through it', () => {
-    const matched = graft(flat, textured, [face], 0.08, 1);
+    const matched = graft(flat, pored, [face], 0.08, 1);
     const out = matched as Uint8ClampedArray;
     // Well inside the ramp, which ends two bands in: what is measured here is
     // the patch itself rather than the crossfade at its edge.
     const inner = 0.07;
 
-    const before = statsIn(textured.data, SIZE, CENTRE, inner);
+    const before = statsIn(pored.data, SIZE, CENTRE, inner);
     const after = statsIn(out, SIZE, CENTRE, inner);
     const target = statsIn(flat.data, SIZE, CENTRE, inner);
 
@@ -365,6 +421,52 @@ describe('the patch', () => {
     expect(ratio).toBeGreaterThan(3.8);
     expect(ratio).toBeLessThan(4.05);
     expect(lifted).toBeLessThan(transferToLinear(230 / 255));
+  });
+
+  it('meets a frame lit from one side at its own level on both sides', () => {
+    // The generator relit the frame so the light falls off steeply across the
+    // face, and the original was shot under even light. One gain for
+    // the whole face is right in the middle and wrong at both cheeks, which is
+    // where the join is; the field is measured at the join.
+    const linearByte = (v: number) =>
+      Math.round(255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055));
+    const level = (x: number) => 0.01 + (0.22 * x) / SIZE;
+    const sided = image(SIZE, (x) => {
+      const v = linearByte(level(x));
+      return [v, v, v];
+    });
+    const even = image(SIZE, (x, y) => {
+      const v = 110 + 10 * Math.sin(x * 1.9) * Math.cos(y * 1.3);
+      return [v, v, v];
+    });
+    const out = graft(sided, even, [face], 0.08, 1) as Uint8ClampedArray;
+
+    // Just inside where the patch is whole, on either side of the face, averaged
+    // over a few pixels of the reference's texture.
+    const half = SIZE / 2;
+    const reach = Math.round(0.1 * SIZE);
+    const near = (x: number) => {
+      let total = 0;
+      let count = 0;
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -3; dx <= 3; dx++) {
+          total += linearAt(out, SIZE, x + dx, half + dy);
+          count++;
+        }
+      }
+      return total / count;
+    };
+    for (const x of [half - reach, half + reach]) {
+      const ratio = near(x) / level(x);
+      expect(ratio, `x ${x}`).toBeGreaterThan(0.93);
+      expect(ratio, `x ${x}`).toBeLessThan(1.07);
+    }
+
+    // The counterfactual: the one gain the whole-face means give lands the two
+    // cheeks this far apart from the frame they sit in.
+    const single = level(half);
+    expect(level(half - reach) / single).toBeLessThan(0.85);
+    expect(level(half + reach) / single).toBeGreaterThan(1.15);
   });
 
   it('takes the patch from where the transform says', () => {

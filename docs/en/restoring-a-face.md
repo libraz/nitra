@@ -8,13 +8,13 @@ A generative edit (a new background, a different outfit, a caption burnt in) red
 
 ## Alignment
 
-Nothing is placed by hand and nothing is invented. Both images are the same photograph, so the alignment is a fit between the same 468 landmarks on each face. It is limited to moving, turning and scaling: stretching the original onto the generated face's proportions would hand back the very face it is meant to replace.
+Nothing is placed by hand and nothing is invented. Both images are the same photograph, so the alignment is a fit between the same 468 landmarks on each face. It is limited to moving, turning and scaling: stretching the original onto the generated face's proportions would hand back the very face it is meant to replace. The fit is robust, so when the edit opened a mouth or moved a jaw, the eyes and nose stay in register instead of everything being pulled half way.
 
 When the edit also changed the pose or the expression, the fit cannot absorb it. The panel reports how far off the fit is rather than refusing.
 
 ## The join
 
-The join sits a band inside the skin, never on the outline, so it crosses cheek rather than the hairline, the jaw and the ears. The light is matched as a gain in the frame's own colour space. The face goes in before the grade and the grain, so both run over the join.
+The join sits a band inside the skin, never on the outline, so it crosses cheek rather than the hairline, the jaw and the ears. The light is matched as a gain in the frame's own colour space. The gain is measured along the join and carried smoothly across the face, so a frame the edit lit from one side meets the original face at its own brightness on both cheeks. The face goes in before the grade and the grain, so both run over the join.
 
 ## Limits
 

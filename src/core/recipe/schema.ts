@@ -316,7 +316,9 @@ const restoreSchema = z
     /**
      * How far the patch is taken towards the light in the picture.
      *
-     * A gain per channel, matched on the mean of the same region in both images.
+     * A gain per channel, measured along the join in both images and carried
+     * smoothly across the face, so a frame relit from one side still meets the
+     * patch at its own level on both cheeks.
      * Full by default: a face that was photographed under one light and dropped
      * into a frame that has been relit under another does not belong to the
      * picture, and that reads long before the boundary does.

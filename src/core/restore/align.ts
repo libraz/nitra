@@ -9,7 +9,8 @@
  *
  * The correspondence is free. The mesh is the same 468 points in the same order
  * on both, so point i of one is point i of the other, and the transform between
- * them is a least-squares fit rather than a search.
+ * them is a least-squares fit rather than a search — a robust one, so the parts
+ * of the face a generator changed do not pull the parts it kept out of register.
  *
  * It is fitted as a similarity — a turn, a scale and a shift — and deliberately
  * as nothing more general. An affine fit would shear the photographed face onto
@@ -102,10 +103,12 @@ export function similarityScale(m: Similarity): number {
  *
  * @param from Points in the source image's own width units.
  * @param to The matching points, in the destination's.
+ * @param weights How much each pair counts; every pair equally when absent.
  */
 export function fitSimilarity(
   from: readonly { x: number; y: number }[],
   to: readonly { x: number; y: number }[],
+  weights?: Float64Array,
 ): Similarity | null {
   const n = Math.min(from.length, to.length);
   if (n < 2) return null;
@@ -114,28 +117,33 @@ export function fitSimilarity(
   let fy = 0;
   let tx = 0;
   let ty = 0;
+  let total = 0;
   for (let i = 0; i < n; i++) {
-    fx += (from[i] as Point).x;
-    fy += (from[i] as Point).y;
-    tx += (to[i] as Point).x;
-    ty += (to[i] as Point).y;
+    const w = weights ? (weights[i] as number) : 1;
+    fx += (from[i] as Point).x * w;
+    fy += (from[i] as Point).y * w;
+    tx += (to[i] as Point).x * w;
+    ty += (to[i] as Point).y * w;
+    total += w;
   }
-  fx /= n;
-  fy /= n;
-  tx /= n;
-  ty /= n;
+  if (total <= 0) return null;
+  fx /= total;
+  fy /= total;
+  tx /= total;
+  ty /= total;
 
   let dot = 0;
   let cross = 0;
   let square = 0;
   for (let i = 0; i < n; i++) {
+    const w = weights ? (weights[i] as number) : 1;
     const px = (from[i] as Point).x - fx;
     const py = (from[i] as Point).y - fy;
     const qx = (to[i] as Point).x - tx;
     const qy = (to[i] as Point).y - ty;
-    dot += px * qx + py * qy;
-    cross += px * qy - py * qx;
-    square += px * px + py * py;
+    dot += (px * qx + py * qy) * w;
+    cross += (px * qy - py * qx) * w;
+    square += (px * px + py * py) * w;
   }
   // Every point in one place. There is no scale to recover and no turn either,
   // and returning a shift is better than returning a transform full of
@@ -145,6 +153,83 @@ export function fitSimilarity(
   const c = dot / square;
   const s = cross / square;
   return { c, s, tx: tx - (c * fx - s * fy), ty: ty - (s * fx + c * fy) };
+}
+
+/**
+ * Tukey's biweight cut-off, in multiples of the residuals' own scale.
+ *
+ * Past it a point stops counting at all, so a mouth the generator opened cannot
+ * drag the eyes out of register however far it moved. A loss whose pull merely
+ * stops growing, Huber's, is not enough: its pull shrinks only as fast as the
+ * scale does, so the fit stalls a fixed fraction of the way there. 4.685 is the
+ * usual constant, at which a normal sample keeps 95% efficiency.
+ */
+const TUKEY_C = 4.685;
+
+/** Median of a two-dimensional normal's length, in units of its σ: sqrt(2 ln 2). */
+const RAYLEIGH_MEDIAN = 1.1774100225154747;
+
+/** Concentration rounds, then reweighting rounds. Fixed, so the same meshes always give the same fit. */
+const TRIM_ROUNDS = 10;
+const REWEIGHT_ROUNDS = 5;
+
+/** The median of a list of distances, which it sorts in place. */
+function median(values: Float64Array): number {
+  values.sort();
+  const n = values.length;
+  return n % 2 === 1
+    ? (values[(n - 1) / 2] as number)
+    : ((values[n / 2 - 1] as number) + (values[n / 2] as number)) / 2;
+}
+
+/**
+ * The similarity that takes the parts of `from` that did not change onto `to`.
+ *
+ * A generator that changed the expression moved the mouth and the jaw and left
+ * the eyes and the nose where they were. A plain least-squares fit splits the
+ * difference — on a synthetic face with the lower two fifths moved it inflated
+ * the scale by 3.5% and put every part out of register — where this registers
+ * the face that is still the same and leaves the change to the residual.
+ *
+ * Two stages. Least trimmed squares by concentration steps (Rousseeuw and Van
+ * Driessen 2006): refit on the half of the points the last fit explained best,
+ * which tolerates anything short of half the face having changed. Then Tukey's
+ * biweight with the scale taken from the median residual, which brings back the
+ * points the trim dropped only for being in the worse half. Sorting and
+ * arithmetic only, for the same reason {@link fitSimilarity} takes no angle.
+ */
+export function fitSimilarityRobust(
+  from: readonly { x: number; y: number }[],
+  to: readonly { x: number; y: number }[],
+): Similarity | null {
+  let m = fitSimilarity(from, to);
+  if (!m) return null;
+  const n = Math.min(from.length, to.length);
+  const distances = new Float64Array(n);
+  const weights = new Float64Array(n);
+  for (let round = 0; round < TRIM_ROUNDS + REWEIGHT_ROUNDS; round++) {
+    for (let i = 0; i < n; i++) {
+      const p = applySimilarity(m, from[i] as Point);
+      const dx = p.x - (to[i] as Point).x;
+      const dy = p.y - (to[i] as Point).y;
+      distances[i] = Math.sqrt(dx * dx + dy * dy);
+    }
+    const middle = median(distances.slice());
+    // Half the points or more fit exactly: the rest are the change, and the fit
+    // that ignores them entirely is already the one in hand.
+    if (middle < 1e-12) break;
+    const trimming = round < TRIM_ROUNDS;
+    const k = trimming ? middle : (TUKEY_C * middle) / RAYLEIGH_MEDIAN;
+    for (let i = 0; i < n; i++) {
+      const d = distances[i] as number;
+      const u = d / k;
+      weights[i] = trimming ? (d <= k ? 1 : 0) : u < 1 ? (1 - u * u) * (1 - u * u) : 0;
+    }
+    const next = fitSimilarity(from, to, weights);
+    if (!next) break;
+    m = next;
+  }
+  return m;
 }
 
 /** Root-mean-square of what the fit left over, in the destination's units. */
@@ -245,7 +330,7 @@ export function pairFaces(
     if (takenReference.has(candidate.reference)) continue;
     const target = destination[candidate.destination] as FaceRegions;
     const other = reference[candidate.reference] as FaceRegions;
-    const transform = fitSimilarity(other.surface, target.surface);
+    const transform = fitSimilarityRobust(other.surface, target.surface);
     if (!transform) continue;
 
     takenDestination.add(candidate.destination);
