@@ -56,38 +56,40 @@ afterEach(() => {
   mount.remove();
 });
 
+/** A stage with one child, recording every pointer event that reaches the child. */
+function Probe({ onPanStart, seen }: { onPanStart: () => void; seen: string[] }): ReactElement {
+  const host = useRef<HTMLDivElement | null>(null);
+  const frame = useRef<HTMLDivElement | null>(null);
+  useStageGestures({
+    host,
+    frame,
+    view: ZOOMED,
+    fitScale: 1,
+    enabled: true,
+    panOnDrag: true,
+    onView: () => {},
+    onPanStart,
+  });
+  const record = (e: { type: string; pointerId?: number }) => {
+    seen.push(`${e.type}:${e.pointerId}`);
+  };
+  return createElement(
+    'div',
+    { ref: host, id: 'stage' },
+    createElement('div', {
+      ref: frame,
+      id: 'child',
+      onPointerDown: record,
+      onPointerMove: record,
+      onPointerUp: record,
+    }),
+  );
+}
+
 function render(): Harness {
   const onPanStart = vi.fn();
   const seen: string[] = [];
-  function Probe(): ReactElement {
-    const host = useRef<HTMLDivElement | null>(null);
-    const frame = useRef<HTMLDivElement | null>(null);
-    useStageGestures({
-      host,
-      frame,
-      view: ZOOMED,
-      fitScale: 1,
-      enabled: true,
-      panOnDrag: true,
-      onView: () => {},
-      onPanStart,
-    });
-    const record = (e: { type: string; pointerId?: number }) => {
-      seen.push(`${e.type}:${e.pointerId}`);
-    };
-    return createElement(
-      'div',
-      { ref: host, id: 'stage' },
-      createElement('div', {
-        ref: frame,
-        id: 'child',
-        onPointerDown: record,
-        onPointerMove: record,
-        onPointerUp: record,
-      }),
-    );
-  }
-  act(() => root.render(createElement(Probe)));
+  act(() => root.render(createElement(Probe, { onPanStart, seen })));
   return {
     stage: mount.querySelector('#stage') as HTMLElement,
     child: mount.querySelector('#child') as HTMLElement,

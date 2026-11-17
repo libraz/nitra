@@ -54,12 +54,7 @@ const MODELS: readonly Artefact[] = [
  * hands a checkout straight to the build command would otherwise get as far as
  * a working model and no runtime to read it with.
  */
-const RUNTIME = [
-  'vision_wasm_internal.js',
-  'vision_wasm_internal.wasm',
-  'vision_wasm_nosimd_internal.js',
-  'vision_wasm_nosimd_internal.wasm',
-] as const;
+const RUNTIME = ['vision_wasm_internal.js', 'vision_wasm_internal.wasm'] as const;
 
 function digest(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');

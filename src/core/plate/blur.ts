@@ -6,7 +6,7 @@ import { transferToLinear } from '../color/spaces';
 export const BLUR_PASSES = 3;
 
 export function clampIndex(value: number, limit: number): number {
-  return value < 0 ? 0 : value > limit ? limit : value;
+  return value < 0 ? 0 : Math.min(value, limit);
 }
 
 /**

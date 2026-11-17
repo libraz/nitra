@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "scripts": {
     "dev": "bun run assets && vite",
     "build": "bun install --frozen-lockfile && bun run assets && tsc --noEmit && vite build",
@@ -21,21 +21,21 @@
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
-    "@mediapipe/tasks-vision": "1.1.1",
+    "@mediapipe/tasks-vision": "1.2.3",
     "libheif-js": "1.23.5",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
+    "@biomejs/biome": "2.6.8",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "@vitejs/plugin-react": "6.1.2",
-    "happy-dom": "21.0.3",
+    "@vitejs/plugin-react": "6.3.0",
+    "happy-dom": "21.0.4",
     "typescript": "7.0.2",
-    "vite": "8.3.4",
-    "vitest": "5.0.5"
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
   },
   "engines": {
     "npm": "please-use-bun",
