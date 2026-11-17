@@ -18,13 +18,20 @@ export interface ConcealSeedResult {
   overflow: number;
 }
 
+/** Slack on the covering test, in image widths: the round trip of `y` through the aspect is not exact. */
+const COVER_SLACK = 1e-9;
+
 /**
  * Turn detected irises into conceal circles.
  *
- * An eye already covered by an existing circle is skipped, so a second click
- * does not duplicate it. Circles beyond {@link CONCEAL_LIMIT} are not placed;
- * how many were skipped for that reason comes back in `overflow` rather than
- * being placed anyway and silently exceeding the schema's range.
+ * An eye is skipped only when an existing circle already holds the whole of
+ * what would be placed, so a second click does not duplicate it. A smaller
+ * circle somebody drew inside the iris does not count: the reflection can be
+ * anywhere on the cornea, and the circle that covers it is laid over the small
+ * one — crossing circles blur their union. Circles beyond {@link CONCEAL_LIMIT}
+ * are not placed; how many were skipped for that reason comes back in
+ * `overflow` rather than being placed anyway and silently exceeding the
+ * schema's range.
  *
  * @param irises Iris discs from face analysis, in image-width units.
  * @param aspect Image height divided by its width — the conversion `Disc`'s
@@ -41,13 +48,15 @@ export function seedConcealFromIrises(
   let overflow = 0;
 
   for (const iris of irises) {
-    // Rule 4: compare in the isotropic space irises already live in, not the
-    // schema's mixed one — an existing spot's y is converted back to width
-    // units rather than the iris's y converted to a height fraction twice.
+    // The iris's own width, held to what the recipe can carry.
+    const r = Math.min(max, Math.max(min, iris.radius));
+    // Compared in the isotropic space the irises live in: an existing circle's
+    // y goes back to width units rather than the iris's going to a height
+    // fraction.
     const covered = [...existing, ...added].some((spot) => {
       const dx = spot.x - iris.centre.x;
       const dy = spot.y * aspect - iris.centre.y;
-      return Math.hypot(dx, dy) <= iris.radius;
+      return Math.hypot(dx, dy) + r <= spot.r + COVER_SLACK;
     });
     if (covered) continue;
 
@@ -56,11 +65,8 @@ export function seedConcealFromIrises(
       continue;
     }
 
-    added.push({
-      x: iris.centre.x, // rule 1: x is already a width fraction, unchanged
-      y: iris.centre.y / aspect, // rule 1: width units back to a height fraction
-      r: Math.min(max, Math.max(min, iris.radius)), // rules 2-3: iris width, clamped safe-side
-    });
+    // x is a width fraction already; y goes from width units to a height fraction.
+    added.push({ x: iris.centre.x, y: iris.centre.y / aspect, r });
   }
 
   return { added, overflow };

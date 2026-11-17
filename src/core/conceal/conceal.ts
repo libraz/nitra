@@ -25,9 +25,10 @@
  * It is narrow because free reading has already made the join continuous — the
  * feather is only there so the change in sharpness does not land on one line.
  *
- * Each circle reads the pristine source rather than the plate, so the order of
- * the list cannot change a pixel and a circle can be re-applied as often as the
- * stages under it are rebuilt.
+ * Each circle reads the pristine source rather than the plate, so a circle can
+ * be re-applied as often as the stages under it are rebuilt. Circles that cross
+ * are laid down together, so the order of the list cannot change a pixel and
+ * one circle's feather cannot put back what another blurred.
  *
  * The blur takes the photograph's own noise out along with the reflection, and a
  * noiseless disc in a photograph that has some is a smudge however soft its
@@ -183,50 +184,39 @@ export function concealRegion(
   };
 }
 
-/**
- * Blur one circle: read the pristine source, write the plate.
- *
- * Only the pixels inside the ring are written. The region is as wide as three
- * box passes read, which at the top of the amount is twenty times the circle's
- * own area, and laying the source back over all of it would take out every fill
- * the stage under this one left around the circle.
- *
- * The `(1−m)` term reads the pristine source rather than the plate, which is
- * what keeps a circle idempotent — the plate applies one again whenever a fill
- * lands under it, and a feather reading its own output would eat into the band
- * a little more on every pass. The cost is that a fill inside the feather is
- * pulled towards the source in that proportion, over a narrow band just inside
- * the ring.
- *
- * @param noise The photograph's noise as a standard deviation in code values,
- *   which is how much is put back where the blur took it out.
- * @returns The rectangle that was written, which is what the caller re-uploads.
- */
-export function concealSpot(
-  plate: Uint8ClampedArray,
+/** One circle's blurred field, held until every circle sharing pixels with it is laid down. */
+interface ConcealField {
+  region: Region;
+  written: Region;
+  /** The centre, relative to the region's corner. */
+  cx: number;
+  cy: number;
+  radius: number;
+  inner: number;
+  /** Source pixels per sample of {@link carried}. */
+  step: number;
+  gridWidth: number;
+  gridHeight: number;
+  /** Three planes of linear light, one per channel, each `gridWidth·gridHeight` long. */
+  carried: Float32Array;
+}
+
+/** The blur of the photograph around one circle, on the grid its reach allows. */
+function blurField(
   pristine: Uint8ClampedArray,
   imageWidth: number,
   imageHeight: number,
   spot: ConcealSpot,
   amount: number,
-  noise: number,
-): Region {
+  toLinear: Float32Array,
+): ConcealField {
   const { region, written, centre, radius } = concealRegion(spot, imageWidth, imageHeight, amount);
-  const [cx, cy] = centre;
-  const inner = radius * (1 - CONCEAL_FEATHER);
-
-  const left = written.x - region.x;
-  const right = left + written.width;
-  const top = written.y - region.y;
-  const bottom = top + written.height;
-
   const step = concealDecimation(radius, amount);
   const box = Math.max(1, Math.round(boxRadiusFor(radius, amount) / step));
   const gridWidth = Math.ceil(region.width / step);
   const gridHeight = Math.ceil(region.height / step);
   const cells = gridWidth * gridHeight;
   const carried = new Float32Array(cells * 3);
-  const toLinear = linearTable();
 
   // The whole region, not only the circle: the blur is over the photograph and
   // the mask is only applied when the result is laid down. Decimated by the mean
@@ -264,6 +254,48 @@ export function concealSpot(
     boxBlur(carried.subarray(c * cells, (c + 1) * cells), gridWidth, gridHeight, box, scratch);
   }
 
+  return {
+    region,
+    written,
+    cx: centre[0],
+    cy: centre[1],
+    radius,
+    inner: radius * (1 - CONCEAL_FEATHER),
+    step,
+    gridWidth,
+    gridHeight,
+    carried,
+  };
+}
+
+/**
+ * Lay one circle of a group down: read the pristine source, write the plate.
+ *
+ * Where no other circle of the group reaches, the pixel is the circle's own
+ * blur mixed with the source by its mask. Where several do, the blurs are
+ * averaged by their masks and the source keeps only the share no circle covers,
+ * `Π(1−m)`: a feather mixing with the source on its own would put the
+ * photograph back inside a neighbour that had blurred it. Such a pixel is
+ * written by the first circle of the group that covers it, with the sums taken
+ * in the group's order.
+ */
+function layDown(
+  plate: Uint8ClampedArray,
+  pristine: Uint8ClampedArray,
+  imageWidth: number,
+  group: readonly ConcealField[],
+  own: number,
+  noise: number,
+  toLinear: Float32Array,
+): void {
+  const field = group[own] as ConcealField;
+  const { region, written, cx, cy, radius, inner, step, gridWidth, gridHeight } = field;
+  const cells = gridWidth * gridHeight;
+  const left = written.x - region.x;
+  const right = left + written.width;
+  const top = written.y - region.y;
+  const bottom = top + written.height;
+
   // Which two columns each pixel falls between is the same on every row. A cell
   // stands for the pixels from `gx·step` on, so its own centre sits half a step
   // in, which is what the half pixel on either side of this is settling.
@@ -279,6 +311,7 @@ export function concealSpot(
     columnFractions[x - left] = u - base;
   }
 
+  const sum = [0, 0, 0];
   for (let y = top; y < bottom; y++) {
     const v = (y + 0.5) / step - 0.5;
     const base = Math.floor(v);
@@ -287,7 +320,7 @@ export function concealSpot(
     const highRow = clampIndex(base + 1, gridHeight - 1) * gridWidth;
     const dy = y + 0.5 - cy;
     const row = (region.y + y) * imageWidth + region.x;
-    for (let x = left; x < right; x++) {
+    pixel: for (let x = left; x < right; x++) {
       const dx = x + 0.5 - cx;
       const m = maskAt(Math.sqrt(dx * dx + dy * dy), radius, inner);
       if (m <= 0) continue;
@@ -295,22 +328,165 @@ export function concealSpot(
       const lowColumn = lowColumns[column] as number;
       const highColumn = highColumns[column] as number;
       const fx = columnFractions[column] as number;
+      for (let c = 0; c < 3; c++) {
+        sum[c] = bilinear(field.carried, c * cells, lowRow, highRow, lowColumn, highColumn, fx, fy);
+      }
+
+      // `covered` is everything the masks take between them, `weight` what the
+      // blurs are averaged by. Alone, they are both the circle's own mask.
+      let covered = m;
+      let weight = 0;
+      let kept = 1 - m;
+      for (let j = 0; j < group.length; j++) {
+        if (j === own) continue;
+        const other = group[j] as ConcealField;
+        const ox = region.x + x - other.region.x;
+        const oy = region.y + y - other.region.y;
+        const odx = ox + 0.5 - other.cx;
+        const ody = oy + 0.5 - other.cy;
+        const om = maskAt(Math.sqrt(odx * odx + ody * ody), other.radius, other.inner);
+        if (om <= 0) continue;
+        if (j < own) continue pixel;
+        if (weight === 0) {
+          weight = m;
+          for (let c = 0; c < 3; c++) sum[c] = (sum[c] as number) * m;
+        }
+        const ou = (ox + 0.5) / other.step - 0.5;
+        const ov = (oy + 0.5) / other.step - 0.5;
+        const columnBase = Math.floor(ou);
+        const rowBase = Math.floor(ov);
+        const otherCells = other.gridWidth * other.gridHeight;
+        for (let c = 0; c < 3; c++) {
+          sum[c] =
+            (sum[c] as number) +
+            om *
+              bilinear(
+                other.carried,
+                c * otherCells,
+                clampIndex(rowBase, other.gridHeight - 1) * other.gridWidth,
+                clampIndex(rowBase + 1, other.gridHeight - 1) * other.gridWidth,
+                clampIndex(columnBase, other.gridWidth - 1),
+                clampIndex(columnBase + 1, other.gridWidth - 1),
+                ou - columnBase,
+                ov - rowBase,
+              );
+        }
+        weight += om;
+        kept *= 1 - om;
+        covered = 1 - kept;
+      }
+
       const i = (row + x) * 4;
       // What the source keeps carries (1−m) of its noise, so m(2−m) more in
       // variance brings the sum back to the photograph's own. One draw for all
       // three channels: the noise a camera file shows is mostly in its luma.
-      const grain = noise > 0 ? Math.sqrt(m * (2 - m)) * noise * grainAt(row + x) : 0;
+      const grain = noise > 0 ? Math.sqrt(covered * (2 - covered)) * noise * grainAt(row + x) : 0;
       for (let c = 0; c < 3; c++) {
-        const mean = bilinear(carried, c * cells, lowRow, highRow, lowColumn, highColumn, fx, fy);
+        const mean = weight > 0 ? (sum[c] as number) / weight : (sum[c] as number);
         const source = toLinear[pristine[i + c] as number] as number;
         // Composited at full resolution and in linear light: the decimation is
         // an economy in how the average was reached, not in where it is laid.
-        const mixed = m * mean + (1 - m) * source;
+        const mixed = covered * mean + (1 - covered) * source;
         const code = Math.min(1, Math.max(0, transferFromLinear(mixed))) * 255 + grain;
         plate[i + c] = Math.round(Math.min(255, Math.max(0, code)));
       }
     }
   }
+}
 
-  return written;
+/**
+ * Blur one circle: read the pristine source, write the plate.
+ *
+ * Only the pixels inside the ring are written. The region is as wide as three
+ * box passes read, which at the top of the amount is twenty times the circle's
+ * own area, and laying the source back over all of it would take out every fill
+ * the stage under this one left around the circle.
+ *
+ * The `(1−m)` term reads the pristine source rather than the plate, which is
+ * what keeps a circle idempotent — the plate applies one again whenever a fill
+ * lands under it, and a feather reading its own output would eat into the band
+ * a little more on every pass. The cost is that a fill inside the feather is
+ * pulled towards the source in that proportion, over a narrow band just inside
+ * the ring.
+ *
+ * A circle on its own: one that shares pixels with another has to be laid down
+ * with it, by {@link concealSpots}.
+ *
+ * @param noise The photograph's noise as a standard deviation in code values,
+ *   which is how much is put back where the blur took it out.
+ * @returns The rectangle that was written, which is what the caller re-uploads.
+ */
+export function concealSpot(
+  plate: Uint8ClampedArray,
+  pristine: Uint8ClampedArray,
+  imageWidth: number,
+  imageHeight: number,
+  spot: ConcealSpot,
+  amount: number,
+  noise: number,
+): Region {
+  const toLinear = linearTable();
+  const field = blurField(pristine, imageWidth, imageHeight, spot, amount, toLinear);
+  layDown(plate, pristine, imageWidth, [field], 0, noise, toLinear);
+  return field.written;
+}
+
+/**
+ * Blur every circle of a list, whatever order the list is in.
+ *
+ * Circles whose rings cross are laid down as one group, so the result is the
+ * union of what each was drawn to blur. The list is worked in a fixed order of
+ * its own — by position, then radius — which is what keeps the sums in a
+ * crossing identical to the last bit when the recipe lists the same circles
+ * differently.
+ */
+export function concealSpots(
+  plate: Uint8ClampedArray,
+  pristine: Uint8ClampedArray,
+  imageWidth: number,
+  imageHeight: number,
+  spots: readonly ConcealSpot[],
+  amount: number,
+  noise: number,
+): void {
+  const ordered = [...spots].sort((a, b) => a.x - b.x || a.y - b.y || a.r - b.r);
+  const toLinear = linearTable();
+
+  // Groups are whatever crossing rings connect, found by merging labels.
+  const label = ordered.map((_, i) => i);
+  const find = (i: number): number => {
+    let root = i;
+    while (label[root] !== root) root = label[root] as number;
+    return root;
+  };
+  for (let i = 0; i < ordered.length; i++) {
+    const a = ordered[i] as ConcealSpot;
+    for (let j = i + 1; j < ordered.length; j++) {
+      const b = ordered[j] as ConcealSpot;
+      const dx = (a.x - b.x) * imageWidth;
+      const dy = (a.y - b.y) * imageHeight;
+      const reach = (a.r + b.r) * imageWidth;
+      // The larger label joins the smaller, so a group's root is its first circle.
+      if (dx * dx + dy * dy < reach * reach) {
+        const ra = find(i);
+        const rb = find(j);
+        label[Math.max(ra, rb)] = Math.min(ra, rb);
+      }
+    }
+  }
+
+  for (let root = 0; root < ordered.length; root++) {
+    if (find(root) !== root) continue;
+    // A group's fields are held together and let go together: only circles that
+    // cross need each other's blur.
+    const group: ConcealField[] = [];
+    for (let i = root; i < ordered.length; i++) {
+      if (find(i) !== root) continue;
+      const spot = ordered[i] as ConcealSpot;
+      group.push(blurField(pristine, imageWidth, imageHeight, spot, amount, toLinear));
+    }
+    for (let own = 0; own < group.length; own++) {
+      layDown(plate, pristine, imageWidth, group, own, noise, toLinear);
+    }
+  }
 }

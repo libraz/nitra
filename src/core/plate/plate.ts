@@ -19,7 +19,7 @@
  * megapixels: the plate is as large as the decoded image.
  */
 
-import { type ConcealSpot, concealRegion, concealSpot } from '../conceal/conceal';
+import { type ConcealSpot, concealRegion, concealSpots } from '../conceal/conceal';
 import { type HealSpot, healSpot, regionFor } from '../heal/inpaint';
 import { noiseLevel } from './noise';
 import type { Region } from './region';
@@ -112,17 +112,22 @@ export class SourcePlate {
    * Returns null when it already was, so the answer is the same whether or not
    * the caller asked {@link matches} first.
    *
-   * Appending a fill is the fast path and the one that happens while working —
-   * the new spots are filled into the plate as it stands, and their own
-   * rectangles are most of what has to be uploaded. Anything else is a rebuild,
-   * including every change to the circles and to the amount they were blurred
-   * by: a circle is applied over the pristine source, so there is nothing to
-   * undo it with short of starting again.
+   * What is in the plate is kept whenever nothing has to be taken out of it:
+   * the fills are still the head of the list, and every circle laid down is
+   * still asked for. New fills are then filled into the plate as it stands, and
+   * the circles are laid down again if their list or their amount moved — a
+   * circle writes every pixel inside its ring from the pristine source, so
+   * laying it down again is all that changing it takes, and the fills are not
+   * replayed for it.
    *
-   * A fill whose region reaches a circle is a rebuild as well. The search copies
-   * from the plate as it stands, and in a rebuild that is the photograph before
-   * the circle, so appending would copy from blurred pixels and the same recipe
-   * would come out differently after a reload.
+   * Anything else starts the plate again: there is no inverse of a fill, and a
+   * circle that is gone leaves behind pixels only a replay can put back.
+   *
+   * A new fill whose region reaches a circle already in the plate starts it
+   * again as well. The search copies from the plate as it stands, and from the
+   * start that is the photograph before the circle, so appending would copy
+   * from blurred pixels and the same recipe would come out differently after a
+   * reload.
    */
   apply(
     conceal: readonly ConcealSpot[],
@@ -136,53 +141,56 @@ export class SourcePlate {
       return { rebuilt: true, rects: [] };
     }
 
-    let appended =
-      conceal.length === this.appliedConceal.length &&
-      // Same reason {@link matches} skips it: with no circle in the list there
-      // is nothing the amount has applied to, so moving it is not a change.
-      (conceal.length === 0 || amount === this.appliedAmount) &&
-      prefixOf(this.appliedConceal, conceal) &&
-      heal.length > this.appliedHeal.length &&
-      prefixOf(this.appliedHeal, heal);
-    if (appended && this.appliedConceal.length > 0) {
-      const writes = this.appliedConceal.map(
-        (spot) => concealRegion(spot, this.width, this.height, amount).written,
-      );
-      appended = !heal
+    const written = (spot: ConcealSpot): Region =>
+      concealRegion(spot, this.width, this.height, amount).written;
+
+    let kept =
+      prefixOf(this.appliedHeal, heal) &&
+      this.appliedConceal.every((applied) => conceal.some((spot) => same(applied, spot)));
+    if (kept && this.appliedConceal.length > 0) {
+      const writes = this.appliedConceal.map(written);
+      kept = !heal
         .slice(this.appliedHeal.length)
         .some((spot) =>
-          writes.some((written) =>
-            overlaps(regionFor(spot, this.width, this.height).region, written),
-          ),
+          writes.some((write) => overlaps(regionFor(spot, this.width, this.height).region, write)),
         );
     }
-    if (!appended) this.drop();
+    if (!kept) this.drop();
+
+    // With no circle in the list there is nothing the amount applies to, which
+    // is the reason {@link matches} skips it too.
+    const relaid =
+      conceal.length > 0 &&
+      !(
+        conceal.length === this.appliedConceal.length &&
+        amount === this.appliedAmount &&
+        prefixOf(this.appliedConceal, conceal)
+      );
     this.appliedAmount = amount;
 
     const from = this.appliedHeal.length;
     if (!this.plate) this.plate = new Uint8ClampedArray(this.pristine);
     const plate = this.plate;
 
-    const filled: Region[] = [];
+    const rects: Region[] = [];
     for (let i = from; i < heal.length; i++) {
       const spot = heal[i] as HealSpot;
       this.appliedHeal.push(spot);
       // A spot too small to have a pixel in it fills nothing, and reporting a
       // rectangle for it would upload bytes that did not change.
       if (healSpot(plate, this.width, this.height, spot) === 0) continue;
-      filled.push(regionFor(spot, this.width, this.height).region);
+      rects.push(regionFor(spot, this.width, this.height).region);
     }
 
-    if (appended) return { rebuilt: false, rects: filled };
-
-    if (conceal.length > 0 && this.noise === null) {
-      this.noise = noiseLevel(this.pristine, this.width, this.height);
+    if (relaid) {
+      if (this.noise === null) this.noise = noiseLevel(this.pristine, this.width, this.height);
+      this.appliedConceal = [...conceal];
+      concealSpots(plate, this.pristine, this.width, this.height, conceal, amount, this.noise);
+      // The rectangles of a plate that started again say nothing a caller can
+      // use; of one that was kept, the rings are what changed.
+      if (kept) rects.push(...conceal.map(written));
     }
-    for (const spot of conceal) {
-      this.appliedConceal.push(spot);
-      concealSpot(plate, this.pristine, this.width, this.height, spot, amount, this.noise ?? 0);
-    }
-    return { rebuilt: true, rects: filled };
+    return { rebuilt: !kept, rects };
   }
 
   /** Back to the photograph, and back to costing nothing. */

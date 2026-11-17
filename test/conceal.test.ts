@@ -25,6 +25,7 @@ import {
   concealDecimation,
   concealRegion,
   concealSpot,
+  concealSpots,
 } from '../src/core/conceal/conceal';
 import { boxBlur } from '../src/core/plate/blur';
 import { grainAt, noiseLevel } from '../src/core/plate/noise';
@@ -725,6 +726,78 @@ describe('a circle that has been concealed', () => {
     insideDisc(WIDTH, HEIGHT, SPOT.x * WIDTH, SPOT.y * HEIGHT, SPOT.r * WIDTH, (i) => {
       expect(dirty[i]).toBe(once[i]);
     });
+  });
+});
+
+describe('circles whose rings cross', () => {
+  const WIDTH = 300;
+  const HEIGHT = 200;
+  const A: ConcealSpot = { x: 100 / WIDTH, y: 0.5, r: 40 / WIDTH };
+  const B: ConcealSpot = { x: 150 / WIDTH, y: 0.5, r: 40 / WIDTH };
+  // Single-pixel squares: the finest detail there is, so any of it left inside
+  // a circle is the photograph showing through.
+  const pristine = frame(WIDTH, HEIGHT, (x, y) => ((x + y) % 2 ? 200 : 60));
+
+  /** Widest gap between two values the masks of either circle fully cover. */
+  function leftOver(pixels: Uint8ClampedArray): number {
+    let low = 255;
+    let high = 0;
+    for (const spot of [A, B]) {
+      const covered = spot.r * WIDTH * (1 - CONCEAL_FEATHER);
+      insideDisc(WIDTH, HEIGHT, spot.x * WIDTH, spot.y * HEIGHT, covered, (i) => {
+        low = Math.min(low, pixels[i] as number);
+        high = Math.max(high, pixels[i] as number);
+      });
+    }
+    return high - low;
+  }
+
+  it('leave nothing of the photograph where either one covers it', () => {
+    const plate = new Uint8ClampedArray(pristine);
+    concealSpots(plate, pristine, WIDTH, HEIGHT, [A, B], DEFAULT_AMOUNT, 0);
+    expect(leftOver(plate)).toBeLessThanOrEqual(GONE);
+
+    // What laying them down one at a time does: the second circle's feather
+    // mixes with the source, inside the part the first had blurred.
+    const apart = new Uint8ClampedArray(pristine);
+    concealSpot(apart, pristine, WIDTH, HEIGHT, A, DEFAULT_AMOUNT, 0);
+    concealSpot(apart, pristine, WIDTH, HEIGHT, B, DEFAULT_AMOUNT, 0);
+    expect(leftOver(apart)).toBeGreaterThan(50);
+  });
+
+  it('come out the same whichever is listed first', () => {
+    const forward = new Uint8ClampedArray(pristine);
+    const backward = new Uint8ClampedArray(pristine);
+    concealSpots(forward, pristine, WIDTH, HEIGHT, [A, B], DEFAULT_AMOUNT, 3);
+    concealSpots(backward, pristine, WIDTH, HEIGHT, [B, A], DEFAULT_AMOUNT, 3);
+    expect(backward).toEqual(forward);
+  });
+
+  it('move nothing outside the two rings', () => {
+    const plate = new Uint8ClampedArray(pristine);
+    concealSpots(plate, pristine, WIDTH, HEIGHT, [A, B], DEFAULT_AMOUNT, 3);
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        const inside = [A, B].some((spot) => {
+          const dx = x + 0.5 - spot.x * WIDTH;
+          const dy = y + 0.5 - spot.y * HEIGHT;
+          return dx * dx + dy * dy < (spot.r * WIDTH) ** 2;
+        });
+        if (inside) continue;
+        const i = (y * WIDTH + x) * 4;
+        for (let c = 0; c < 3; c++) expect(plate[i + c]).toBe(pristine[i + c]);
+      }
+    }
+  });
+
+  it('are each the circle they would be alone when they do not cross', () => {
+    const far: ConcealSpot = { x: 250 / WIDTH, y: 0.5, r: 30 / WIDTH };
+    const together = new Uint8ClampedArray(pristine);
+    concealSpots(together, pristine, WIDTH, HEIGHT, [far, A], DEFAULT_AMOUNT, 3);
+    const alone = new Uint8ClampedArray(pristine);
+    concealSpot(alone, pristine, WIDTH, HEIGHT, A, DEFAULT_AMOUNT, 3);
+    concealSpot(alone, pristine, WIDTH, HEIGHT, far, DEFAULT_AMOUNT, 3);
+    expect(together).toEqual(alone);
   });
 });
 

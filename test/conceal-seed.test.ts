@@ -1,10 +1,9 @@
 /**
  * Seeding conceal circles from irises.
  *
- * The one thing worth failing loudly on is the axis mix-up `7b0c20f` and
- * `Disc`'s own doc comment warn about: irises are isotropic in image-width
- * units, a conceal circle's `y` is a height fraction, and a landscape frame is
- * the only shape that tells the two apart.
+ * The one thing worth failing loudly on is an axis mix-up: irises are isotropic
+ * in image-width units, a conceal circle's `y` is a height fraction, and a
+ * landscape frame is the only shape that tells the two apart.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -67,21 +66,35 @@ describe('seedConcealFromIrises', () => {
     expect(first(result).r).toBe(max);
   });
 
-  it('skips an eye whose centre is exactly at the iris radius from an existing circle', () => {
-    // aspect = 1, so schema space and iris space coincide and the distance is
-    // plain Euclidean. 0.5 and 0.5625 are both exact dyadic fractions, so the
-    // distance lands on exactly 0.0625 rather than drifting either side of it.
-    const existing: ConcealSpot[] = [{ x: 0.5625, y: 0.4, r: 0.0625 }];
+  it('skips an eye an existing circle already holds the whole of', () => {
+    // Off-centre and larger, with the iris's far edge exactly on the ring: all
+    // three numbers are dyadic, so the comparison lands on equality.
+    const existing: ConcealSpot[] = [{ x: 0.5 + 2 ** -6, y: 0.4, r: 0.0625 + 2 ** -6 }];
     const result = seedConcealFromIrises([iris(0.5, 0.4, 0.0625)], 1, existing);
     expect(result.added).toEqual([]);
   });
 
-  it("places a circle for an eye just outside an existing circle's reach", () => {
-    // 2**-10 pushes the distance comfortably past 0.0625 without touching
-    // floating-point rounding noise.
-    const existing: ConcealSpot[] = [{ x: 0.5 + 0.0625 + 2 ** -10, y: 0.4, r: 0.0625 }];
+  it('covers an eye whose only circle is a smaller one inside the iris', () => {
+    // A circle drawn over a catchlight is not the eye covered: the reflection
+    // can be anywhere on the cornea.
+    const existing: ConcealSpot[] = [{ x: 0.51, y: 0.4, r: 0.02 }];
+    const result = seedConcealFromIrises([iris(0.5, 0.4, 0.0625)], 1, existing);
+    expect(result.added).toEqual([{ x: 0.5, y: 0.4, r: 0.0625 }]);
+  });
+
+  it('covers an eye an existing circle of its own size only half holds', () => {
+    const existing: ConcealSpot[] = [{ x: 0.5625, y: 0.4, r: 0.0625 }];
     const result = seedConcealFromIrises([iris(0.5, 0.4, 0.0625)], 1, existing);
     expect(result.added).toHaveLength(1);
+  });
+
+  it('does not stack on an iris wider than a circle can be', () => {
+    // The circle placed is the widest the recipe carries, and that is what the
+    // second press has to recognise as already there.
+    const { max } = paramDef('conceal.r');
+    const wide = [iris(0.5, 0.4, max * 2)];
+    const placed = seedConcealFromIrises(wide, 0.75, []);
+    expect(seedConcealFromIrises(wide, 0.75, placed.added).added).toEqual([]);
   });
 
   it('is idempotent: seeding again against its own output places nothing', () => {

@@ -12,8 +12,10 @@
  * the stage under the plate left rather than the plate itself, and a fill that
  * reaches one starts the plate again — otherwise the fill would copy from
  * pixels the circle had already blurred, and the same recipe would come out
- * differently after a reload. The amount is bookkeeping here too: changing it
- * cannot be appended to what is already in the plate.
+ * differently after a reload. A circle is added, or the amount moved, by laying
+ * the circles down again over the fills already there; only taking one away
+ * starts the plate again, and every such move has to come out byte for byte as
+ * a plate built from nothing would.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -309,10 +311,12 @@ describe('the plate and the circles over it', () => {
   it('blurs what is inside the circle and leaves the frame around it alone', () => {
     const plate = new SourcePlate(RESTORED, SIZE, SIZE);
     const update = plate.apply([CIRCLE], AMOUNT, []);
-    // A circle is applied over the pristine source, so there is nothing to undo
-    // it with: every change to the list is a rebuild, and the rectangles of a
-    // rebuild say nothing the caller can use.
-    expect(update).toEqual({ rebuilt: true, rects: [] });
+    // Nothing had to be taken out of the plate to add it, so what comes back
+    // is the box the ring was written in.
+    expect(update).toEqual({
+      rebuilt: false,
+      rects: [concealRegion(CIRCLE, SIZE, SIZE, AMOUNT).written],
+    });
 
     // Over the part the mask fully covers: the outer band is where it feathers
     // back to the photograph, and its own detail survives there by design.
@@ -468,14 +472,14 @@ const TRANSITIONS: readonly {
     name: 'nothing to a circle',
     start: [],
     next: [[CIRCLE], []],
-    update: { rebuilt: true, rects: 0 },
+    update: { rebuilt: false, rects: 1 },
     copied: true,
   },
   {
     name: 'nothing to both at once',
     start: [],
     next: [[CIRCLE], [UNDER]],
-    update: { rebuilt: true, rects: 1 },
+    update: { rebuilt: false, rects: 2 },
     copied: true,
   },
   { name: 'nothing to nothing', start: [], next: [[], []], update: null, copied: false },
@@ -499,7 +503,7 @@ const TRANSITIONS: readonly {
     name: 'a fill to a circle beside it',
     start: [[[], [BESIDE]]],
     next: [[CIRCLE], [BESIDE]],
-    update: { rebuilt: true, rects: 1 },
+    update: { rebuilt: false, rects: 1 },
     copied: true,
   },
   {
@@ -536,7 +540,7 @@ const TRANSITIONS: readonly {
     name: 'a circle to a second circle',
     start: [[[CIRCLE], []]],
     next: [[CIRCLE, OTHER_CIRCLE], []],
-    update: { rebuilt: true, rects: 0 },
+    update: { rebuilt: false, rects: 2 },
     copied: true,
   },
   {
@@ -597,7 +601,7 @@ const TRANSITIONS: readonly {
  * there runs at one amount, and these are about moving it.
  */
 describe('moving the amount the circles are blurred at', () => {
-  it('rebuilds rather than appending, and the fills survive it', () => {
+  it('lays the circles down again without replaying the fills', () => {
     // A circle large enough that two amounts do not round to the same box.
     const wide: ConcealSpot = { ...CIRCLE, r: 0.12 };
     const plate = new SourcePlate(DECODED, SIZE, SIZE);
@@ -606,10 +610,12 @@ describe('moving the amount the circles are blurred at', () => {
 
     expect(plate.matches([wide], WIDE_AMOUNT, [BESIDE])).toBe(false);
     const update = plate.apply([wide], WIDE_AMOUNT, [BESIDE]);
-    expect(update?.rebuilt).toBe(true);
+    expect(update).toEqual({
+      rebuilt: false,
+      rects: [concealRegion(wide, SIZE, SIZE, WIDE_AMOUNT).written],
+    });
 
-    // The circle came out differently and the fill beside it did not: a rebuild
-    // replays the whole list rather than dropping what the amount does not move.
+    // The circle came out differently and the fill beside it did not.
     // Read over the whole disc rather than at its centre, where two amounts both
     // wide enough to cross the mask agree on the same mean.
     const pixels = plate.pixels as Uint8ClampedArray;
@@ -634,6 +640,89 @@ describe('moving the amount the circles are blurred at', () => {
     expect(plate.matches([], AMOUNT + 0.1, [BESIDE])).toBe(true);
     expect(plate.apply([], AMOUNT + 0.1, [BESIDE])).toBeNull();
   });
+});
+
+/**
+ * Every move, against the plate a reload would build.
+ *
+ * Whether a move kept the plate or started it again is bookkeeping; what a
+ * photograph depends on is that the two cannot be told apart afterwards. The
+ * rows are a pairwise covering of the five things a move is made of and the
+ * frame underneath, since the cases worth catching are two of them at once — a
+ * circle added in the same step as a fill under it, an amount moved while a
+ * circle is taken away.
+ */
+const CROSSING: ConcealSpot = { x: 0.34, y: 0.4, r: 0.03 };
+const NEAR: ConcealSpot = { x: 0.27, y: 0.43, r: 0.03 };
+const CLEAR: HealSpot = { x: 0.2, y: 0.8, r: 0.03 };
+const UNDER_TOO: HealSpot = { x: 0.31, y: 0.41, r: 0.02 };
+
+const CIRCLES_BEFORE = { none: [], one: [CIRCLE], crossing: [CIRCLE, CROSSING] } as const;
+const FILLS_BEFORE = { none: [], beside: [BESIDE], under: [UNDER] } as const;
+const CIRCLE_MOVES = {
+  same: (list: readonly ConcealSpot[]) => [...list],
+  addApart: (list: readonly ConcealSpot[]) => [...list, OTHER_CIRCLE],
+  addCrossing: (list: readonly ConcealSpot[]) => [...list, NEAR],
+  remove: (list: readonly ConcealSpot[]) => list.slice(0, -1),
+  reorder: (list: readonly ConcealSpot[]) => [...list].reverse(),
+} as const;
+const FILL_MOVES = {
+  same: (list: readonly HealSpot[]) => [...list],
+  appendClear: (list: readonly HealSpot[]) => [...list, CLEAR],
+  appendUnder: (list: readonly HealSpot[]) => [...list, UNDER_TOO],
+  remove: (list: readonly HealSpot[]) => list.slice(0, -1),
+} as const;
+
+const MOVES: readonly (readonly [
+  'decoded' | 'restored',
+  keyof typeof CIRCLES_BEFORE,
+  keyof typeof FILLS_BEFORE,
+  keyof typeof CIRCLE_MOVES,
+  'same' | 'moved',
+  keyof typeof FILL_MOVES,
+])[] = [
+  ['decoded', 'crossing', 'under', 'addCrossing', 'same', 'appendClear'],
+  ['restored', 'crossing', 'none', 'addApart', 'moved', 'same'],
+  ['decoded', 'none', 'beside', 'same', 'moved', 'appendUnder'],
+  ['restored', 'none', 'none', 'addCrossing', 'same', 'appendUnder'],
+  ['restored', 'one', 'beside', 'remove', 'moved', 'appendClear'],
+  ['restored', 'crossing', 'under', 'same', 'same', 'remove'],
+  ['decoded', 'one', 'none', 'same', 'moved', 'appendClear'],
+  ['decoded', 'none', 'under', 'addApart', 'same', 'same'],
+  ['decoded', 'one', 'under', 'remove', 'moved', 'remove'],
+  ['decoded', 'none', 'beside', 'addApart', 'same', 'remove'],
+  ['restored', 'one', 'under', 'addApart', 'same', 'appendUnder'],
+  ['decoded', 'none', 'beside', 'addCrossing', 'moved', 'same'],
+  ['decoded', 'crossing', 'under', 'reorder', 'same', 'remove'],
+  ['restored', 'crossing', 'under', 'remove', 'same', 'appendUnder'],
+  ['decoded', 'one', 'under', 'addCrossing', 'moved', 'same'],
+  ['decoded', 'none', 'none', 'addApart', 'same', 'appendClear'],
+  ['decoded', 'one', 'under', 'same', 'same', 'same'],
+  ['restored', 'one', 'none', 'remove', 'moved', 'same'],
+  ['restored', 'none', 'beside', 'addCrossing', 'same', 'remove'],
+  ['restored', 'crossing', 'beside', 'reorder', 'moved', 'appendUnder'],
+  ['decoded', 'crossing', 'none', 'reorder', 'same', 'appendClear'],
+  ['decoded', 'crossing', 'beside', 'reorder', 'moved', 'same'],
+];
+
+describe('a plate that was moved, against one built from nothing', () => {
+  for (const [frame, circles, fills, circleMove, amountMove, fillMove] of MOVES) {
+    it(`${frame}: ${circles} circles ${circleMove}, ${fills} fills ${fillMove}, amount ${amountMove}`, () => {
+      const base = frame === 'restored' ? RESTORED : DECODED;
+      const conceal = CIRCLE_MOVES[circleMove](CIRCLES_BEFORE[circles]);
+      const heal = FILL_MOVES[fillMove](FILLS_BEFORE[fills]);
+      const amount = amountMove === 'moved' ? WIDE_AMOUNT : AMOUNT;
+
+      const moved = new SourcePlate(base, SIZE, SIZE);
+      moved.apply(CIRCLES_BEFORE[circles], AMOUNT, FILLS_BEFORE[fills]);
+      moved.apply(conceal, amount, heal);
+
+      const fresh = new SourcePlate(base, SIZE, SIZE);
+      fresh.apply(conceal, amount, heal);
+
+      expect(moved.pixels).toEqual(fresh.pixels);
+    });
+  }
 });
 
 for (const restored of [false, true]) {

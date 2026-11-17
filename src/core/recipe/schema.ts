@@ -269,7 +269,7 @@ const concealSchema = z
      * circle and a reach that wide leaves nothing but its mean.
      */
     amount: num('conceal.amount', 0.02, 1, 0.15),
-    /** Order does not matter: each circle reads the same pristine source. */
+    /** Order does not matter: circles read the pristine source, and crossing ones are laid down together. */
     spots: z.array(concealSpotSchema).max(CONCEAL_LIMIT).default([]),
   })
   .prefault({});
